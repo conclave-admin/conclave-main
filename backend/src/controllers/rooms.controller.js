@@ -3,8 +3,30 @@ const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
 
-// Valid room types matching the DB CHECK / schema comment
-const VALID_TYPES = ["dm", "group"];
+// The five types named in the rooms.type schema comment. `public` and
+// `private` were previously rejected even though RoomList.jsx draws a Hash and
+// a Lock for them, so those icons could never appear with real data
+// (BACKEND_TASKS.md Bug 3). The comment is still not enforced by a CHECK
+// constraint — worth adding once there is a database to validate against.
+const VALID_TYPES = ["dm", "group", "public", "private", "department"];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Find an existing 2-member DM between two users, so repeated calls return
+// the same conversation instead of minting a new one every time.
+async function findExistingDm(userA, userB) {
+  const { rows } = await query(
+    `SELECT r.id
+       FROM rooms r
+       INNER JOIN room_members a ON a.room_id = r.id AND a.user_id = $1
+       INNER JOIN room_members b ON b.room_id = r.id AND b.user_id = $2
+      WHERE r.type = 'dm'
+        AND (SELECT COUNT(*) FROM room_members c WHERE c.room_id = r.id) = 2
+      LIMIT 1`,
+    [userA, userB],
+  );
+  return rows[0]?.id || null;
+}
 
 // ---------- createRoom ----------
 // Creates a room and inserts the creator as an admin member in one transaction.
@@ -22,9 +44,19 @@ const createRoom = asyncHandler(async (req, res) => {
     );
   }
 
+  if (memberIds !== undefined && !Array.isArray(memberIds)) {
+    throw new ApiError(400, "memberIds must be an array of user ids");
+  }
+  const requested = (memberIds || []).filter((id) => id !== req.user.id);
+
+  const malformed = requested.filter((id) => typeof id !== "string" || !UUID_RE.test(id));
+  if (malformed.length > 0) {
+    throw new ApiError(400, `memberIds must all be UUIDs (${malformed.length} invalid)`);
+  }
+
   // For DM rooms, ensure exactly 1 other member is provided
   if (roomType === "dm") {
-    if (!Array.isArray(memberIds) || memberIds.length !== 1) {
+    if (requested.length !== 1) {
       throw new ApiError(
         400,
         "DM rooms must have exactly one other member (memberIds: [userId])",
@@ -36,7 +68,36 @@ const createRoom = asyncHandler(async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // 1. Insert the room
+    // 1. Resolve the invitees before touching rooms. Previously an unknown id
+    //    reached the INSERT and came back as a foreign-key error surfaced as a
+    //    500; soft-deleted users are rejected here too.
+    if (requested.length > 0) {
+      const { rows: found } = await client.query(
+        `SELECT id FROM users WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
+        [requested],
+      );
+      const foundIds = new Set(found.map((u) => u.id));
+      const missing = requested.filter((id) => !foundIds.has(id));
+      if (missing.length > 0) {
+        throw new ApiError(400, `Unknown or deleted user(s): ${missing.join(", ")}`);
+      }
+    }
+
+    // 2. DMs are unique per pair — return the existing room rather than
+    //    creating another one.
+    if (roomType === "dm") {
+      const existingId = await findExistingDm(req.user.id, requested[0]);
+      if (existingId) {
+        await client.query("COMMIT");
+        const { rows } = await query(
+          "SELECT id, name, type, created_by, created_at FROM rooms WHERE id = $1",
+          [existingId],
+        );
+        return ok(res, { ...rows[0], existing: true });
+      }
+    }
+
+    // 3. Insert the room
     const roomResult = await client.query(
       `INSERT INTO rooms (name, type, created_by)
        VALUES ($1, $2, $3)
@@ -45,34 +106,38 @@ const createRoom = asyncHandler(async (req, res) => {
     );
     const room = roomResult.rows[0];
 
-    // 2. Insert creator as admin member
+    // 4. Insert creator as admin member
     await client.query(
       `INSERT INTO room_members (room_id, user_id, role)
        VALUES ($1, $2, 'admin')`,
       [room.id, req.user.id],
     );
 
-    // 3. If memberIds provided, add them as regular members
-    if (Array.isArray(memberIds) && memberIds.length > 0) {
-      for (const memberId of memberIds) {
-        // Skip the creator (already added as admin above)
-        if (memberId === req.user.id) continue;
-        await client.query(
-          `INSERT INTO room_members (room_id, user_id, role)
-           VALUES ($1, $2, 'member')
-           ON CONFLICT (room_id, user_id) DO NOTHING`,
-          [room.id, memberId],
-        );
-      }
+    // 5. Add the invitees in one statement rather than a query per member.
+    if (requested.length > 0) {
+      await client.query(
+        `INSERT INTO room_members (room_id, user_id, role)
+         SELECT $1, u, 'member'
+         FROM unnest($2::uuid[]) AS u
+         ON CONFLICT (room_id, user_id) DO NOTHING`,
+        [room.id, requested],
+      );
     }
+
+    // 6. Read the real membership back. The response used to be built from the
+    //    request body, so it could advertise members that ON CONFLICT skipped.
+    const { rows: members } = await client.query(
+      `SELECT u.id, u.display_name, u.avatar_url, rm.role, rm.joined_at
+         FROM room_members rm
+         INNER JOIN users u ON u.id = rm.user_id
+        WHERE rm.room_id = $1
+        ORDER BY rm.role = 'admin' DESC, rm.joined_at ASC, rm.user_id ASC`,
+      [room.id],
+    );
 
     await client.query("COMMIT");
 
-    return ok(
-      res,
-      { ...room, members: [req.user.id, ...(memberIds || [])] },
-      201,
-    );
+    return ok(res, { ...room, members }, 201);
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -188,11 +253,12 @@ const addMember = asyncHandler(async (req, res) => {
     throw new ApiError(400, "userId is required");
   }
 
-  // 1. Validate room exists, target user exists, caller is an admin.
+  // 1. Validate room exists, target user exists and is not soft-deleted,
+  //    and the caller is an admin.
   const check = await query(
     `SELECT
        (SELECT type FROM rooms WHERE id = $1) AS room_type,
-       (SELECT display_name FROM users WHERE id = $2) AS display_name,
+       (SELECT display_name FROM users WHERE id = $2 AND deleted_at IS NULL) AS display_name,
        (SELECT role FROM room_members WHERE room_id = $1 AND user_id = $3) AS caller_role`,
     [roomId, userId, req.user.id],
   );
@@ -200,7 +266,9 @@ const addMember = asyncHandler(async (req, res) => {
   const { room_type, display_name, caller_role } = check.rows[0];
 
   if (!room_type) throw new ApiError(404, "Room not found");
-  if (!display_name) throw new ApiError(404, "User not found");
+  // A soft-deleted user still has a row, so without the deleted_at check they
+  // could be added to rooms and show up as "Deleted user" members.
+  if (!display_name) throw new ApiError(404, "User not found or has been deleted");
   if (!caller_role) throw new ApiError(403, "You are not a member of this room");
   if (caller_role !== "admin") throw new ApiError(403, "Only room admins can add members");
 
