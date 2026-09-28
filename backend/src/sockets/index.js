@@ -82,6 +82,12 @@ function registerSocketHandlers(io) {
       if (!roomId) return;
 
       socket.leave(roomId);
+      // Stamp last_seen_at before leaving so the digest window closes when
+      // the user actually goes away (BACKEND_TASKS.md Bug 2).
+      await query(
+        `UPDATE room_members SET last_seen_at = NOW() WHERE room_id = $1 AND user_id = $2`,
+        [roomId, userId],
+      );
       await presence.userLeftRoom(userId, roomId);
       const roomOnlineUsers = await presence.getRoomOnlineUsers(roomId);
       io.to(roomId).emit('room-presence', {

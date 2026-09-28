@@ -247,4 +247,27 @@ const addMember = asyncHandler(async (req, res) => {
   );
 });
 
-module.exports = { createRoom, listRooms, getRoom, addMember };
+// ---------- markRoomSeen ----------
+// Stamps room_members.last_seen_at for the caller. This is the only writer of
+// that column, and the digest depends on it: until it moves, every digest
+// reports everything since the user joined the room (BACKEND_TASKS.md Bug 2).
+// Called by the client when a room is opened, and by the socket on leave-room.
+const markRoomSeen = asyncHandler(async (req, res) => {
+  const { roomId } = req.params;
+
+  const result = await query(
+    `UPDATE room_members
+        SET last_seen_at = NOW()
+      WHERE room_id = $1 AND user_id = $2
+      RETURNING last_seen_at`,
+    [roomId, req.user.id],
+  );
+
+  if (result.rows.length === 0) {
+    throw new ApiError(403, "You are not a member of this room");
+  }
+
+  return ok(res, { roomId, lastSeenAt: result.rows[0].last_seen_at });
+});
+
+module.exports = { createRoom, listRooms, getRoom, addMember, markRoomSeen };
