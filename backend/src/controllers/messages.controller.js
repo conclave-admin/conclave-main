@@ -83,24 +83,34 @@ const listMessages = asyncHandler(async (req, res) => {
   const params = [roomId];
 
   if (before) {
-    params.push(before);
-    sql += ` AND m.created_at < $${params.length}`;
+    // Compound cursor "<created_at>|<id>". A bare created_at comparison skips
+    // rows when two messages share a timestamp, because `created_at < cursor`
+    // drops every row equal to the cursor — including the one we just returned
+    // and any that followed it (BACKEND_TASKS.md Bug 15). The id breaks the tie.
+    // A cursor without the separator is still accepted for older clients.
+    const sep = before.indexOf('|');
+    if (sep === -1) {
+      params.push(before);
+      sql += ` AND m.created_at < $${params.length}`;
+    } else {
+      params.push(before.slice(0, sep), before.slice(sep + 1));
+      sql += ` AND (m.created_at, m.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+    }
   }
 
   sql += `
     GROUP BY m.id, m.room_id, m.sender_id, u.display_name, u.avatar_url,
              m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
-    ORDER BY m.created_at DESC LIMIT $${params.length + 1}`;
+    ORDER BY m.created_at DESC, m.id DESC LIMIT $${params.length + 1}`;
   params.push(PAGE_SIZE);
 
   const result = await query(sql, params);
 
   // 3. Return with cursor for the next page
   const messages = result.rows;
+  const last = messages[messages.length - 1];
   const nextCursor =
-    messages.length === PAGE_SIZE
-      ? messages[messages.length - 1].created_at
-      : null;
+    messages.length === PAGE_SIZE && last ? `${last.created_at}|${last.id}` : null;
 
   return ok(res, { messages, nextCursor });
 });

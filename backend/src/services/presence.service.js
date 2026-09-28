@@ -3,6 +3,9 @@ const { redisClient } = require('../config/redis');
 // Redis key schema:
 //   online_users                    SET   — all connected user IDs
 //   room:{roomId}:online            SET   — user IDs currently in this Socket.IO room
+//   user:{userId}:rooms             SET   — room IDs this user is in, so a
+//                                               disconnect can clean up without
+//                                               scanning the whole keyspace
 //   typing:{roomId}:{userId}        STRING with TTL — typing indicator
 //   presence:{userId}:heartbeat     STRING with TTL — last heartbeat timestamp
 //
@@ -10,10 +13,30 @@ const { redisClient } = require('../config/redis');
 // Server sets `presence:{userId}:heartbeat` with a 45s TTL.
 // A periodic sweep removes users from `online_users` whose
 // heartbeat key has expired (network drop without clean disconnect).
+//
+// Note: nothing here uses KEYS. KEYS is O(N) over the entire keyspace and
+// blocks the single-threaded server for the duration, so on a busy instance a
+// disconnect could stall every other client. Pattern lookups use SCAN, and
+// per-user room membership is tracked explicitly (BACKEND_TASKS.md Bug 13).
 
 const HEARTBEAT_TTL_SECONDS = 45;
 const HEARTBEAT_SWEEP_INTERVAL_MS = 30_000; // check every 30s
 const TYPING_TTL_SECONDS = 5;
+const SCAN_COUNT = 100;
+
+const userRoomsKey = (userId) => `user:${userId}:rooms`;
+
+// SCAN a pattern without blocking. Returns every matching key.
+async function scanKeys(pattern) {
+  const found = [];
+  for await (const keys of redisClient.scanIterator({
+    MATCH: pattern,
+    COUNT: SCAN_COUNT,
+  })) {
+    found.push(...keys);
+  }
+  return found;
+}
 
 // ---------- Presence ----------
 
@@ -50,14 +73,23 @@ async function sweepStaleUsers() {
   if (!redisClient.isOpen) return [];
 
   const onlineUserIds = await redisClient.sMembers('online_users');
-  const stale = [];
+  if (onlineUserIds.length === 0) return [];
 
+  // Pipeline the heartbeat lookups. This used to await one EXISTS at a time,
+  // which is a full round trip per online user every 30 seconds.
+  const pipeline = redisClient.multi();
   for (const uid of onlineUserIds) {
-    const exists = await redisClient.exists(`presence:${uid}:heartbeat`);
-    if (!exists) {
-      stale.push(uid);
-      await redisClient.sRem('online_users', uid);
-    }
+    pipeline.exists(`presence:${uid}:heartbeat`);
+  }
+  const results = await pipeline.exec();
+
+  const stale = [];
+  onlineUserIds.forEach((uid, index) => {
+    if (results[index] === 0) stale.push(uid);
+  });
+
+  if (stale.length > 0) {
+    await redisClient.sRem('online_users', stale);
   }
 
   return stale;
@@ -73,16 +105,44 @@ async function getOnlineUsers() {
   return redisClient.sMembers('online_users');
 }
 
+// ---------- Socket connection counting ----------
+//
+// Presence is tracked per user, but a user can hold several sockets (two
+// tabs). Counting sockets prevents "closing one tab" from broadcasting
+// user-offline while the other tab is still connected
+// (BACKEND_TASKS.md Bug 13).
+
+// Returns the number of sockets this user now has open.
+async function socketConnected(userId, socketId) {
+  if (!redisClient.isOpen) return 1;
+  const key = `user:${userId}:sockets`;
+  await redisClient.sAdd(key, socketId);
+  return redisClient.sCard(key);
+}
+
+// Removes a socket and returns how many the user still has open.
+async function socketDisconnected(userId, socketId) {
+  if (!redisClient.isOpen) return 0;
+  const key = `user:${userId}:sockets`;
+  await redisClient.sRem(key, socketId);
+  const remaining = await redisClient.sCard(key);
+  if (remaining === 0) await redisClient.del(key);
+  return remaining;
+}
+
 // ---------- Per-room presence ----------
 
 async function userJoinedRoom(userId, roomId) {
   if (!redisClient.isOpen) return;
   await redisClient.sAdd(`room:${roomId}:online`, userId);
+  // Track the reverse index so cleanupUserFromRooms does not have to scan.
+  await redisClient.sAdd(userRoomsKey(userId), roomId);
 }
 
 async function userLeftRoom(userId, roomId) {
   if (!redisClient.isOpen) return;
   await redisClient.sRem(`room:${roomId}:online`, userId);
+  await redisClient.sRem(userRoomsKey(userId), roomId);
 }
 
 async function getRoomOnlineUsers(roomId) {
@@ -98,21 +158,19 @@ async function getRoomOnlineUsers(roomId) {
 async function cleanupUserFromRooms(userId) {
   if (!redisClient.isOpen) return [];
 
-  // Find all room:*:online sets that contain this user
-  const roomKeys = await redisClient.keys('room:*:online');
-  const leftRooms = [];
+  // Read the reverse index we maintain rather than scanning room:*:online.
+  const roomIds = await redisClient.sMembers(userRoomsKey(userId));
+  if (roomIds.length === 0) return [];
 
-  for (const key of roomKeys) {
-    const wasMember = await redisClient.sIsMember(key, userId);
-    if (wasMember) {
-      await redisClient.sRem(key, userId);
-      // Extract roomId from key format "room:{roomId}:online"
-      const roomId = key.split(':')[1];
-      leftRooms.push(roomId);
-    }
+  await redisClient.del(userRoomsKey(userId));
+
+  const pipeline = redisClient.multi();
+  for (const roomId of roomIds) {
+    pipeline.sRem(`room:${roomId}:online`, userId);
   }
+  await pipeline.exec();
 
-  return leftRooms;
+  return roomIds;
 }
 
 // ---------- Typing indicators ----------
@@ -137,7 +195,7 @@ async function clearTyping(roomId, userId) {
  */
 async function getTypingUsers(roomId) {
   if (!redisClient.isOpen) return [];
-  const keys = await redisClient.keys(`typing:${roomId}:*`);
+  const keys = await scanKeys(`typing:${roomId}:*`);
   // Extract userId from key format "typing:{roomId}:{userId}"
   return keys.map((k) => k.split(':')[2]);
 }
@@ -147,7 +205,7 @@ async function getTypingUsers(roomId) {
  */
 async function cleanupUserTyping(userId) {
   if (!redisClient.isOpen) return;
-  const keys = await redisClient.keys(`typing:*:${userId}`);
+  const keys = await scanKeys(`typing:*:${userId}`);
   if (keys.length > 0) {
     await redisClient.del(keys);
   }
@@ -188,6 +246,9 @@ module.exports = {
   getOnlineUsers,
   startHeartbeatSweep,
   stopHeartbeatSweep,
+  // Socket counting
+  socketConnected,
+  socketDisconnected,
   // Per-room presence
   userJoinedRoom,
   userLeftRoom,
