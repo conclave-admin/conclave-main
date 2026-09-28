@@ -54,7 +54,11 @@ const listMessages = asyncHandler(async (req, res) => {
       m.sender_id,
       u.display_name AS sender_name,
       u.avatar_url   AS sender_avatar,
-      m.content,
+      -- Deleted messages stay in the timeline (so replies and ordering hold)
+      -- but their body is withheld. is_deleted lets the client render a
+      -- tombstone — see BACKEND_TASKS.md Bug 7.
+      CASE WHEN m.deleted_at IS NOT NULL THEN NULL ELSE m.content END AS content,
+      m.deleted_at IS NOT NULL AS is_deleted,
       m.reply_to_id,
       m.edited_at,
       m.deleted_at,
@@ -121,7 +125,12 @@ const searchMessages = asyncHandler(async (req, res) => {
     throw new ApiError(403, "You are not a member of this room");
   }
 
-  // 2. Full-text search with ts_rank for relevance ordering
+  // 2. Full-text search with ts_rank for relevance ordering.
+  //    Deleted messages are excluded outright: a search should never be able
+  //    to surface content the author has retracted. The attachments agg
+  //    mirrors listMessages so a hit on a file message still renders its
+  //    file card (BACKEND_TASKS.md Bug 7 and the listMessages/searchMessages
+  //    shape gap).
   const result = await query(
     `SELECT
        m.id,
@@ -132,14 +141,30 @@ const searchMessages = asyncHandler(async (req, res) => {
        m.content,
        m.reply_to_id,
        m.created_at,
+       COALESCE(
+         json_agg(
+           json_build_object(
+             'id',        a.id,
+             'filename',  a.filename,
+             'size',      a.size_bytes,
+             'mime_type', a.file_type,
+             'url',       a.file_url
+           )
+         ) FILTER (WHERE a.id IS NOT NULL),
+         '[]'
+       ) AS attachments,
        ts_rank(
          to_tsvector('english', m.content),
          plainto_tsquery('english', $2)
        ) AS rank
      FROM messages m
      INNER JOIN users u ON u.id = m.sender_id
+     LEFT JOIN attachments a ON a.message_id = m.id
      WHERE m.room_id = $1
+       AND m.deleted_at IS NULL
        AND to_tsvector('english', m.content) @@ plainto_tsquery('english', $2)
+     GROUP BY m.id, m.room_id, m.sender_id, u.display_name, u.avatar_url,
+              m.content, m.reply_to_id, m.created_at
      ORDER BY rank DESC, m.created_at DESC
      LIMIT 50`,
     [roomId, q.trim()],
