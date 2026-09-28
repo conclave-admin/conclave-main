@@ -12,7 +12,8 @@ const router = Router();
 router.use(requireAuth);
 router.use(validateUuidParams);
 router.post('/', promoteToDecision);
-router.get('/', listDecisions);                           // cross-room (optional ?roomId= filter)
+router.get('/', listDecisions);                           // cross-room (optional ?roomId=, ?before=)
+router.get('/search', searchDecisions);                  // cross-room search
 router.get('/room/:roomId', (req, res, next) => {         // backward-compatible room-scoped
   req.query.roomId = req.params.roomId;
   return listDecisions(req, res, next);
