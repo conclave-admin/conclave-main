@@ -1,14 +1,14 @@
 const asyncHandler = require('../utils/asyncHandler');
-const { ok } = require('../utils/apiResponse');
+const ApiError = require('../utils/ApiError');
 
 // TODO: list notifications for req.user.id, newest first, seen/unseen flag
 const listNotifications = asyncHandler(async (req, res) => {
-  return ok(res, { message: 'TODO: implement notification listing' });
+  throw new ApiError(501, 'Not implemented');
 });
 
 // TODO: mark one or all notifications as seen
 const markSeen = asyncHandler(async (req, res) => {
-  return ok(res, { message: 'TODO: implement mark-as-seen' });
+  throw new ApiError(501, 'Not implemented');
 });
 
 module.exports = { listNotifications, markSeen };

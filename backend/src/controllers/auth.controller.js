@@ -2,7 +2,7 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const { query } = require('../config/db');
 const asyncHandler = require('../utils/asyncHandler');
-const { ok, fail } = require('../utils/apiResponse');
+const { ok } = require('../utils/apiResponse');
 const ApiError = require('../utils/ApiError');
 const {
   signAccessToken,

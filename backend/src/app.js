@@ -12,7 +12,9 @@ const app = express();
 app.use(helmet());
 app.use(cors({ origin: env.clientOrigin, credentials: true }));
 app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'));
-app.use(express.json());
+// Cap JSON bodies. Attachments are uploaded as multipart to /upload, so
+// message payloads stay small (BACKEND_TASKS.md Bug 14).
+app.use(express.json({ limit: '1mb' }));
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 

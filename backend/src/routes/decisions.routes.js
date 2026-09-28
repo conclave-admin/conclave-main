@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const requireAuth = require('../middlewares/auth.middleware');
+const validateUuidParams = require('../middlewares/validateParams');
 const {
   promoteToDecision,
   listDecisions,
@@ -9,6 +10,7 @@ const {
 const router = Router();
 
 router.use(requireAuth);
+router.use(validateUuidParams);
 router.post('/', promoteToDecision);
 router.get('/', listDecisions);                           // cross-room (optional ?roomId= filter)
 router.get('/room/:roomId', (req, res, next) => {         // backward-compatible room-scoped
