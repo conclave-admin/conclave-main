@@ -1,0 +1,22 @@
+# Keep the build context small and prevent host artefacts from leaking in.
+#
+# .env must never reach an image layer — secrets stay readable in image
+# history by anyone who can pull it. Pass config via compose environment or
+# --env-file instead.
+.env
+.env.*
+!.env.example
+
+# Local node_modules must not overwrite the ones built inside the image. On
+# Alpine those are built against musl; copying host (glibc) modules over them
+# produces an image that builds cleanly and then crashes on startup.
+node_modules
+
+.git
+.gitignore
+*.log
+npm-debug.log*
+dist
+coverage
+Dockerfile
+.dockerignore
