@@ -106,12 +106,17 @@ const listDecisions = asyncHandler(async (req, res) => {
 // room-scoped route and the cross-room one, since the Decisions page is
 // top-level and needs to search every room the caller is in.
 //
-// The tsvector expression must stay identical to the one in migration
-// 007_decisions_search_includes_tags.sql or the GIN index is not used.
-const DECISIONS_TSVECTOR = `to_tsvector(
-      'english',
-      d.title || ' ' || d.body || ' ' || COALESCE(array_to_string(d.tags, ' '), '')
-    )`;
+// This tsvector must stay identical to the one in
+// 007_decisions_search_includes_tags.sql or the GIN index is not used. It
+// covers title + body only: array_to_string is STABLE rather than IMMUTABLE,
+// so tags cannot be folded into an index expression and are matched separately
+// below. That means a tag-only hit matches but does not contribute to rank —
+// see the migration for the upgrade path.
+const DECISIONS_TSVECTOR = `to_tsvector('english', d.title || ' ' || d.body)`;
+
+// Escape LIKE/ILIKE wildcards in the caller's term. Without this, searching
+// for "50%" or "a_b" matches far more than intended.
+const ILIKE_ESCAPED_TERM = `replace(replace($TERM, '\\', '\\\\'), '%', '\\%')`;
 
 const searchDecisions = asyncHandler(async (req, res) => {
   const { q } = req.query;
@@ -140,14 +145,22 @@ const searchDecisions = asyncHandler(async (req, res) => {
   }
 
   params.push(q.trim());
+  const termParam = `$${params.length}`;
   const result = await query(
     `SELECT d.*, r.name AS room_name, r.slug AS room_slug, u.display_name AS author_name,
-       ts_rank(${DECISIONS_TSVECTOR}, plainto_tsquery('english', $${params.length})) AS rank
+       ts_rank(${DECISIONS_TSVECTOR}, plainto_tsquery('english', ${termParam})) AS rank
      FROM decisions d
      INNER JOIN rooms r ON r.id = d.room_id
      INNER JOIN users u ON u.id = d.created_by
      WHERE ${scope}
-       AND ${DECISIONS_TSVECTOR} @@ plainto_tsquery('english', $${params.length})
+       AND (
+         ${DECISIONS_TSVECTOR} @@ plainto_tsquery('english', ${termParam})
+         OR d.tags @> ARRAY[lower(${termParam})]::text[]
+         OR EXISTS (
+           SELECT 1 FROM unnest(d.tags) AS tag
+           WHERE tag ILIKE '%' || ${ILIKE_ESCAPED_TERM.replace('$TERM', termParam)} || '%'
+         )
+       )
      ORDER BY rank DESC, d.created_at DESC
      LIMIT 50`,
     params,
