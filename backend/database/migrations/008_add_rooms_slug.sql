@@ -15,41 +15,67 @@
 --
 -- Names that slugify to nothing (non-Latin script, or a name of only symbols)
 -- fall back to 'room' and then resolve through the same collision ranking.
+--
+-- Re-runnable by design. The migration runner in database/migrate.js tracks
+-- applied files in schema_migrations and will not apply this twice, but the
+-- ledger is per-database and an operator applying files by hand — or
+-- `--baselining` an older database and then running this — would otherwise hit
+-- a duplicate-column error. That matters more than usual here: the backfill is
+-- destructive if re-run, because it recomputes slugs from rooms.name. A room
+-- created since the first run would be re-ranked and have its slug rewritten
+-- from "design" to "design-2", silently changing a value the client already
+-- displays. The whole body is therefore guarded, not just the column add.
+--
+-- Editing this file rather than adding 009 is safe only because no database has
+-- ever applied it (BACKEND_TASKS.md, "Verification status"). Once it has run
+-- anywhere, schema changes ship as a new numbered file instead.
 
-ALTER TABLE rooms ADD COLUMN slug TEXT;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_name = 'rooms' AND column_name = 'slug'
+  ) THEN
+    RAISE NOTICE 'rooms.slug already present, skipping backfill';
+    RETURN;
+  END IF;
 
-WITH slugged AS (
-  SELECT
-    id,
-    created_at,
-    COALESCE(
-      NULLIF(
-        trim(both '-' FROM regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g')),
-        ''
-      ),
-      'room'
-    ) AS base
-  FROM rooms
-),
-ranked AS (
-  SELECT
-    id,
-    base,
-    row_number() OVER (PARTITION BY base ORDER BY created_at, id) AS n
-  FROM slugged
-)
-UPDATE rooms r
-   SET slug = CASE
-                WHEN ranked.n = 1 THEN ranked.base
-                ELSE ranked.base || '-' || ranked.n
-              END
-  FROM ranked
- WHERE r.id = ranked.id;
+  ALTER TABLE rooms ADD COLUMN slug TEXT;
 
--- Anything inserted while the column was nullable, or that somehow missed the
--- backfill, must not survive as NULL.
-UPDATE rooms SET slug = 'room-' || id::text WHERE slug IS NULL;
+  WITH slugged AS (
+    SELECT
+      id,
+      created_at,
+      COALESCE(
+        NULLIF(
+          trim(both '-' FROM regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g')),
+          ''
+        ),
+        'room'
+      ) AS base
+    FROM rooms
+  ),
+  ranked AS (
+    SELECT
+      id,
+      base,
+      row_number() OVER (PARTITION BY base ORDER BY created_at, id) AS n
+    FROM slugged
+  )
+  UPDATE rooms r
+     SET slug = CASE
+                 WHEN ranked.n = 1 THEN ranked.base
+                 ELSE ranked.base || '-' || ranked.n
+               END
+    FROM ranked
+   WHERE r.id = ranked.id;
 
-ALTER TABLE rooms ALTER COLUMN slug SET NOT NULL;
+  -- Anything inserted while the column was nullable, or that somehow missed the
+  -- backfill, must not survive as NULL.
+  UPDATE rooms SET slug = 'room-' || id::text WHERE slug IS NULL;
 
-CREATE UNIQUE INDEX idx_rooms_slug ON rooms (slug);
+  ALTER TABLE rooms ALTER COLUMN slug SET NOT NULL;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_slug ON rooms (slug);

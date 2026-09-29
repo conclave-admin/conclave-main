@@ -28,8 +28,9 @@ services:
       retries: 10
 
   # The backend service was missing entirely, so `docker compose up` only ever
-  # gave you the datastores. Run migrations with:
-  #   docker compose run --rm backend node database/migrate.js
+  # gave you the datastores. Migrations now run automatically from
+  # docker-entrypoint.sh on every start, so no manual step is needed:
+  #   docker compose up -d --build
   backend:
     build: ./backend
     restart: unless-stopped
@@ -59,6 +60,16 @@ services:
     volumes:
       - ./backend/src:/app/src
       - ./backend/database:/app/database
+    # /health is declared before the /api router, so it needs no auth token.
+    # node:20-alpine has busybox wget, not curl, hence the form used here.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      # Generous, because the first start also compiles bcrypt and applies
+      # migrations before the port is accepting.
+      start_period: 40s
 
 volumes:
   pgdata:
