@@ -12,6 +12,32 @@ const VALID_TYPES = ["dm", "group", "public", "private", "department"];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Mirrors the slugify expression in migration 008 so a room created now and a
+// room backfilled then produce identical slugs.
+const SLUG_MAX_ATTEMPTS = 10;
+
+function slugify(name) {
+  const base = String(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return base || 'room';
+}
+
+// Allocate a slug that no other room holds. rooms.name is not unique, so
+// collisions are normal. The unique index is the real guarantee; this
+// pre-check just avoids the round trip, and a genuine race surfaces as a 409
+// via the Postgres error mapping in error.middleware.js.
+async function allocateSlug(client, name) {
+  const base = slugify(name);
+  for (let attempt = 1; attempt <= SLUG_MAX_ATTEMPTS; attempt += 1) {
+    const candidate = attempt === 1 ? base : `${base}-${attempt}`;
+    const { rows } = await client.query('SELECT 1 FROM rooms WHERE slug = $1', [candidate]);
+    if (rows.length === 0) return candidate;
+  }
+  throw new ApiError(409, 'Could not allocate a unique room slug');
+}
+
 // Find an existing 2-member DM between two users, so repeated calls return
 // the same conversation instead of minting a new one every time.
 async function findExistingDm(userA, userB) {
@@ -90,19 +116,21 @@ const createRoom = asyncHandler(async (req, res) => {
       if (existingId) {
         await client.query("COMMIT");
         const { rows } = await query(
-          "SELECT id, name, type, created_by, created_at FROM rooms WHERE id = $1",
+          "SELECT id, name, type, created_by, slug, created_at FROM rooms WHERE id = $1",
           [existingId],
         );
         return ok(res, { ...rows[0], existing: true });
       }
     }
 
-    // 3. Insert the room
+    // 3. Insert the room. The slug is derived server-side, never accepted from
+    //    the request, so it cannot be used to squat a handle.
+    const slug = await allocateSlug(client, name.trim());
     const roomResult = await client.query(
-      `INSERT INTO rooms (name, type, created_by)
-       VALUES ($1, $2, $3)
-       RETURNING id, name, type, created_by, created_at`,
-      [name.trim(), roomType, req.user.id],
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, type, created_by, slug, created_at`,
+      [name.trim(), roomType, req.user.id, slug],
     );
     const room = roomResult.rows[0];
 
@@ -155,6 +183,7 @@ const listRooms = asyncHandler(async (req, res) => {
        r.id,
        r.name,
        r.type,
+       r.slug,
        r.created_by,
        r.created_at,
        rm.role AS my_role,
@@ -171,6 +200,7 @@ const listRooms = asyncHandler(async (req, res) => {
        r.id,
        r.name,
        r.type,
+       r.slug,
        r.created_by,
        r.created_at,
        rm.role,
@@ -195,6 +225,7 @@ const getRoom = asyncHandler(async (req, res) => {
        r.id,
        r.name,
        r.type,
+       r.slug,
        r.created_by,
        r.created_at,
        (

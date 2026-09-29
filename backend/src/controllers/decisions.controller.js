@@ -27,10 +27,23 @@ const promoteToDecision = asyncHandler(async (req, res) => {
     throw new ApiError(403, 'You are not a member of this room');
   }
 
+  // One statement, so the 201 response carries the same joined shape the list
+  // and search endpoints return. A bare RETURNING * would hand back eight raw
+  // columns with no room_name, room_slug or author_name — the same shape drift
+  // fixed for attachments in Bug 6.
   const result = await query(
-    `INSERT INTO decisions (room_id, source_message_id, title, body, tags, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
+    `WITH inserted AS (
+       INSERT INTO decisions (room_id, source_message_id, title, body, tags, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *
+     )
+     SELECT d.*,
+            r.name AS room_name,
+            r.slug AS room_slug,
+            u.display_name AS author_name
+     FROM inserted d
+     INNER JOIN rooms r ON r.id = d.room_id
+     INNER JOIN users u ON u.id = d.created_by`,
     [roomId, sourceMessageId || null, title, body, tags || [], req.user.id],
   );
 
@@ -68,7 +81,7 @@ const listDecisions = asyncHandler(async (req, res) => {
 
   params.push(PAGE_SIZE);
   const result = await query(
-    `SELECT d.*, r.name AS room_name, u.display_name AS author_name
+    `SELECT d.*, r.name AS room_name, r.slug AS room_slug, u.display_name AS author_name
      FROM decisions d
      INNER JOIN rooms r ON r.id = d.room_id
      INNER JOIN users u ON u.id = d.created_by
@@ -128,7 +141,7 @@ const searchDecisions = asyncHandler(async (req, res) => {
 
   params.push(q.trim());
   const result = await query(
-    `SELECT d.*, r.name AS room_name, u.display_name AS author_name,
+    `SELECT d.*, r.name AS room_name, r.slug AS room_slug, u.display_name AS author_name,
        ts_rank(${DECISIONS_TSVECTOR}, plainto_tsquery('english', $${params.length})) AS rank
      FROM decisions d
      INNER JOIN rooms r ON r.id = d.room_id
