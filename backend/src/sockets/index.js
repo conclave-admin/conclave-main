@@ -4,28 +4,43 @@ const { query } = require('../config/db');
 const { createMessage } = require('../services/message.service');
 const presence = require('../services/presence.service');
 
-// Event names match what was scoped in the original planning conversation,
-// plus two new events for the differentiator features (decision:created,
-// task:updated) so room UIs can update live without polling.
+// Event names match what was scoped in the original planning conversation.
 //
 // Client -> Server:
 //   join-room        { roomId }
 //   leave-room       { roomId }
-//   send-message     { roomId, content, replyToId? }
+//   send-message     { roomId, content, replyToId?, attachments? }
 //   typing            { roomId }
 //   stop-typing       { roomId }
 //   message-read      { roomId, messageId }
-//   heartbeat         {}              (new — keep-alive for presence)
+//   heartbeat         {}              (keep-alive for presence)
 //
 // Server -> Client:
 //   receive-message   { message }
 //   user-online        { userId }
 //   user-offline       { userId }
-//   notification        { notification }
-//   upload-progress      { messageId, percent }
-//   room-typing          { roomId, typingUserIds }  (new — full typing state on join)
-//   decision:created       { decision }   (new — Decisions Layer)
-//   task:updated             { task }       (new — Action Items)
+//   room-presence      { roomId, onlineUserIds }
+//   room-typing        { roomId, typingUserIds }
+//   typing             { roomId, userId }
+//   stop-typing        { roomId, userId }
+//   message-read       { roomId, messageId, userId }
+//   error:message      { message }   (see note below)
+//
+// Not yet implemented, so deliberately absent from this list rather than
+// advertised and never sent (BACKEND_TASKS.md Bug 13): notification,
+// upload-progress, decision:created and task:updated all belong to the
+// tasks/notifications/upload endpoints, which are still stubs.
+
+// Membership check for events that only relay state. createMessage already
+// authorises send-message; these three did not, so a client could spoof read
+// receipts and typing indicators into rooms it does not belong to.
+async function isMember(roomId, userId) {
+  const result = await query(
+    `SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2`,
+    [roomId, userId],
+  );
+  return result.rows.length > 0;
+}
 
 function registerSocketHandlers(io) {
   // Auth: client connects with `io(url, { auth: { token } })`.
@@ -45,8 +60,13 @@ function registerSocketHandlers(io) {
     const { id: userId } = socket.user;
 
     // --- Presence: mark user online + start heartbeat ---
+    // Only announce user-online for the user's first socket; a second tab
+    // joining should not re-announce someone already online.
+    const openSockets = await presence.socketConnected(userId, socket.id);
     await presence.userConnected(userId);
-    socket.broadcast.emit('user-online', { userId });
+    if (openSockets === 1) {
+      socket.broadcast.emit('user-online', { userId });
+    }
 
     // --- join-room: verify membership, track per-room presence ---
     socket.on('join-room', async ({ roomId }) => {
@@ -59,7 +79,7 @@ function registerSocketHandlers(io) {
       );
 
       if (result.rows.length === 0) {
-        socket.emit('error', { message: 'You are not a member of this room' });
+        socket.emit('error:message', { message: 'You are not a member of this room' });
         return;
       }
 
@@ -82,6 +102,12 @@ function registerSocketHandlers(io) {
       if (!roomId) return;
 
       socket.leave(roomId);
+      // Stamp last_seen_at before leaving so the digest window closes when
+      // the user actually goes away (BACKEND_TASKS.md Bug 2).
+      await query(
+        `UPDATE room_members SET last_seen_at = NOW() WHERE room_id = $1 AND user_id = $2`,
+        [roomId, userId],
+      );
       await presence.userLeftRoom(userId, roomId);
       const roomOnlineUsers = await presence.getRoomOnlineUsers(roomId);
       io.to(roomId).emit('room-presence', {
@@ -107,7 +133,9 @@ function registerSocketHandlers(io) {
 
         io.to(roomId).emit('receive-message', { message });
       } catch (err) {
-        socket.emit('error', {
+        // 'error' is reserved by Socket.IO and collides with its internals;
+        // use a namespaced event instead.
+        socket.emit('error:message', {
           message: err.message || 'Failed to send message',
         });
       }
@@ -116,18 +144,26 @@ function registerSocketHandlers(io) {
     // --- typing indicators: Redis-backed with auto-expiry ---
     socket.on('typing', async ({ roomId }) => {
       if (!roomId) return;
+      if (!(await isMember(roomId, userId))) return;
       await presence.setTyping(roomId, userId);
       socket.to(roomId).emit('typing', { roomId, userId });
     });
 
     socket.on('stop-typing', async ({ roomId }) => {
       if (!roomId) return;
+      if (!(await isMember(roomId, userId))) return;
       await presence.clearTyping(roomId, userId);
       socket.to(roomId).emit('stop-typing', { roomId, userId });
     });
 
     // --- message-read: broadcast read receipt to the room ---
+    // Membership is checked because this previously relayed to any roomId the
+    // client named, letting a user spoof read receipts into rooms they are not
+    // in. It still only broadcasts; nothing is persisted (see BACKEND_TASKS.md
+    // item I for a real read-receipt store).
     socket.on('message-read', async ({ roomId, messageId }) => {
+      if (!roomId || !messageId) return;
+      if (!(await isMember(roomId, userId))) return;
       socket.to(roomId).emit('message-read', { roomId, messageId, userId });
     });
 
@@ -138,6 +174,11 @@ function registerSocketHandlers(io) {
 
     // --- disconnect: clean up all presence state ---
     socket.on('disconnect', async () => {
+      // If the user still has another tab open, they are not offline — do not
+      // tear down their presence or announce them as gone.
+      const remainingSockets = await presence.socketDisconnected(userId, socket.id);
+      if (remainingSockets > 0) return;
+
       // Remove from global online set + heartbeat key
       await presence.userDisconnected(userId);
 

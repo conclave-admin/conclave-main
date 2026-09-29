@@ -13,6 +13,26 @@ const ApiError = require('../utils/ApiError');
 // v2: hand that same query result to the Claude API as context and ask
 // for a short narrative summary instead of a raw list.
 
+// Stopgap mention matching (BACKEND_TASKS.md Bug 9). Matching raw text with
+// ILIKE is wrong in two ways: '%' and '_' inside a display name act as
+// wildcards, and a plain substring match means a user named "Al" matches
+// "@Alice". Escape the name for POSIX regex and require a non-word
+// character after it, which gives a real word boundary.
+//
+// Replaced entirely by the message_mentions table (BACKEND_TASKS.md item H).
+function mentionPattern(displayName) {
+  const escaped = displayName.replace(/[.*+?^${}()|[\]\\\-]/g, '\\$&');
+  // Postgres uses POSIX regex, which has no lookahead, so express the
+  // boundary as "a non-word character, or end of string".
+  return `@${escaped}([^A-Za-z0-9_]|$)`;
+}
+
+// The caller's display_name, needed to build the mention pattern.
+async function loadDisplayName(userId) {
+  const result = await query('SELECT display_name FROM users WHERE id = $1', [userId]);
+  return result.rows[0]?.display_name || '';
+}
+
 // ---------- getRoomDigest ----------
 // Per-room digest: everything new since the user's last visit
 const getRoomDigest = asyncHandler(async (req, res) => {
@@ -20,13 +40,17 @@ const getRoomDigest = asyncHandler(async (req, res) => {
 
   // 1. Verify membership and get last_seen_at
   const membership = await query(
-    `SELECT last_seen_at FROM room_members WHERE room_id = $1 AND user_id = $2`,
+    `SELECT rm.last_seen_at, r.name AS room_name
+     FROM room_members rm
+     INNER JOIN rooms r ON r.id = rm.room_id
+     WHERE rm.room_id = $1 AND rm.user_id = $2`,
     [roomId, req.user.id],
   );
   if (membership.rows.length === 0) {
     throw new ApiError(403, 'You are not a member of this room');
   }
   const lastSeenAt = membership.rows[0].last_seen_at;
+  const roomName = membership.rows[0].room_name;
 
   // 2. New decisions since last visit
   const decisions = await query(
@@ -49,18 +73,19 @@ const getRoomDigest = asyncHandler(async (req, res) => {
   );
 
   // 4. Messages that @-mention me since last visit
-  // Stopgap: matching by @displayName until structured mentions exist (BACKEND_TASKS.md)
+  const displayName = await loadDisplayName(req.user.id);
   const mentions = await query(
     `SELECT m.id, m.content, m.created_at, u.display_name AS sender_name
      FROM messages m
      INNER JOIN users u ON u.id = m.sender_id
      WHERE m.room_id = $1
        AND m.created_at > $2
-       AND m.content ILIKE '%@' || (SELECT display_name FROM users WHERE id = $3) || '%'
+       AND m.content ~* $4
        AND m.sender_id != $3
+       AND m.deleted_at IS NULL
      ORDER BY m.created_at DESC
      LIMIT 20`,
-    [roomId, lastSeenAt, req.user.id],
+    [roomId, lastSeenAt, req.user.id, mentionPattern(displayName)],
   );
 
   // 5. New attachments since last visit
@@ -90,6 +115,8 @@ const getRoomDigest = asyncHandler(async (req, res) => {
       type: 'decision',
       title: d.title,
       metadata: d.author_name,
+      room_id: roomId,
+      room_name: roomName,
       created_at: d.created_at,
     })),
     ...tasks.rows.map((t) => ({
@@ -97,6 +124,8 @@ const getRoomDigest = asyncHandler(async (req, res) => {
       type: 'task',
       title: t.title,
       metadata: `${t.status} · ${t.assignee_name}`,
+      room_id: roomId,
+      room_name: roomName,
       created_at: t.updated_at,
     })),
     ...mentions.rows.map((m) => ({
@@ -104,6 +133,8 @@ const getRoomDigest = asyncHandler(async (req, res) => {
       type: 'mention',
       title: m.content,
       metadata: m.sender_name,
+      room_id: roomId,
+      room_name: roomName,
       created_at: m.created_at,
     })),
     ...files.rows.map((f) => ({
@@ -111,6 +142,8 @@ const getRoomDigest = asyncHandler(async (req, res) => {
       type: 'file',
       title: f.filename,
       metadata: f.sender_name,
+      room_id: roomId,
+      room_name: roomName,
       created_at: f.created_at,
     })),
     ...(activity.rows[0].message_count > 0
@@ -119,6 +152,8 @@ const getRoomDigest = asyncHandler(async (req, res) => {
           type: 'activity',
           title: `${activity.rows[0].message_count} new messages`,
           metadata: null,
+          room_id: roomId,
+          room_name: roomName,
           created_at: lastSeenAt,
         }]
       : []),
@@ -150,11 +185,12 @@ const getUserDigest = asyncHandler(async (req, res) => {
     return ok(res, { items: [], summary: { headline: 'No updates', summary: 'You are not in any rooms.' } });
   }
 
-  // Build per-room last_seen_at map
-  const lastSeenMap = {};
-  for (const r of rooms.rows) {
-    lastSeenMap[r.room_id] = r.last_seen_at;
-  }
+  // Every category below joins room_members on (room_id, user_id) and filters
+  // against that row's own last_seen_at. A single shared timestamp would be
+  // wrong: last_seen_at is per room, so a user who read #design-crit this
+  // morning but not #marketing since last week must see the marketing backlog
+  // and not the design one. See BACKEND_TASKS.md Bug 2.
+  const displayName = await loadDisplayName(req.user.id);
 
   // 1. New decisions across all rooms
   const decisions = await query(
@@ -163,10 +199,12 @@ const getUserDigest = asyncHandler(async (req, res) => {
      FROM decisions d
      INNER JOIN rooms r ON r.id = d.room_id
      INNER JOIN users u ON u.id = d.created_by
+     INNER JOIN room_members rm ON rm.room_id = d.room_id AND rm.user_id = $2
      WHERE d.room_id = ANY($1)
+       AND d.created_at > rm.last_seen_at
      ORDER BY d.created_at DESC
      LIMIT 50`,
-    [roomIds],
+    [roomIds, req.user.id],
   );
 
   // 2. Tasks assigned to me that were updated
@@ -176,26 +214,31 @@ const getUserDigest = asyncHandler(async (req, res) => {
      FROM tasks t
      INNER JOIN rooms r ON r.id = t.room_id
      INNER JOIN users u ON u.id = t.assignee_id
-     WHERE t.room_id = ANY($1) AND t.assignee_id = $2
+     INNER JOIN room_members rm ON rm.room_id = t.room_id AND rm.user_id = $2
+     WHERE t.room_id = ANY($1)
+       AND t.assignee_id = $2
+       AND t.updated_at > rm.last_seen_at
      ORDER BY t.updated_at DESC
      LIMIT 50`,
     [roomIds, req.user.id],
   );
 
   // 3. Messages that @-mention me
-  // Stopgap: matching by @displayName until structured mentions exist (BACKEND_TASKS.md)
   const mentions = await query(
     `SELECT m.id, m.content, m.created_at, m.room_id,
             r.name AS room_name, u.display_name AS sender_name
      FROM messages m
      INNER JOIN rooms r ON r.id = m.room_id
      INNER JOIN users u ON u.id = m.sender_id
+     INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
      WHERE m.room_id = ANY($1)
-       AND m.content ILIKE '%@' || (SELECT display_name FROM users WHERE id = $2) || '%'
+       AND m.content ~* $3
        AND m.sender_id != $2
+       AND m.deleted_at IS NULL
+       AND m.created_at > rm.last_seen_at
      ORDER BY m.created_at DESC
      LIMIT 50`,
-    [roomIds, req.user.id],
+    [roomIds, req.user.id, mentionPattern(displayName)],
   );
 
   // 4. New attachments
@@ -206,20 +249,30 @@ const getUserDigest = asyncHandler(async (req, res) => {
      INNER JOIN messages m ON m.id = a.message_id
      INNER JOIN rooms r ON r.id = m.room_id
      INNER JOIN users u ON u.id = m.sender_id
+     INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
      WHERE m.room_id = ANY($1)
+       AND a.created_at > rm.last_seen_at
      ORDER BY a.created_at DESC
      LIMIT 50`,
-    [roomIds],
+    [roomIds, req.user.id],
   );
 
-  // 5. Activity per room (only rooms with new messages since last_seen)
+  // 5. Activity per room, counting only messages newer than that room's
+  //    last_seen_at. last_activity_at is carried through so activity items
+  //    sort by when the room was actually active — stamping them with
+  //    new Date() made every room's activity float to the top of the digest.
   const activity = await query(
-    `SELECT room_id, COUNT(*)::int AS message_count
-     FROM messages
-     WHERE room_id = ANY($1) AND created_at > (
-       SELECT MAX(last_seen_at) FROM room_members WHERE user_id = $2 AND room_id = messages.room_id
-     )
-     GROUP BY room_id`,
+    `SELECT m.room_id,
+            r.name AS room_name,
+            COUNT(*)::int AS message_count,
+            MAX(m.created_at) AS last_activity_at
+     FROM messages m
+     INNER JOIN rooms r ON r.id = m.room_id
+     INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
+     WHERE m.room_id = ANY($1)
+       AND m.created_at > rm.last_seen_at
+       AND m.deleted_at IS NULL
+     GROUP BY m.room_id, r.name`,
     [roomIds, req.user.id],
   );
 
@@ -228,28 +281,36 @@ const getUserDigest = asyncHandler(async (req, res) => {
       id: d.id,
       type: 'decision',
       title: d.title,
-      metadata: `${d.room_name} · ${d.author_name}`,
+      metadata: d.author_name,
+      room_id: d.room_id,
+      room_name: d.room_name,
       created_at: d.created_at,
     })),
     ...tasks.rows.map((t) => ({
       id: t.id,
       type: 'task',
       title: t.title,
-      metadata: `${t.room_name} · ${t.status} · ${t.assignee_name}`,
+      metadata: `${t.status} · ${t.assignee_name}`,
+      room_id: t.room_id,
+      room_name: t.room_name,
       created_at: t.updated_at,
     })),
     ...mentions.rows.map((m) => ({
       id: m.id,
       type: 'mention',
       title: m.content,
-      metadata: `${m.room_name} · ${m.sender_name}`,
+      metadata: m.sender_name,
+      room_id: m.room_id,
+      room_name: m.room_name,
       created_at: m.created_at,
     })),
     ...files.rows.map((f) => ({
       id: f.id,
       type: 'file',
       title: f.filename,
-      metadata: `${f.room_name} · ${f.sender_name}`,
+      metadata: f.sender_name,
+      room_id: f.room_id,
+      room_name: f.room_name,
       created_at: f.created_at,
     })),
     ...activity.rows.map((a) => ({
@@ -257,7 +318,9 @@ const getUserDigest = asyncHandler(async (req, res) => {
       type: 'activity',
       title: `${a.message_count} new messages`,
       metadata: null,
-      created_at: new Date().toISOString(),
+      room_id: a.room_id,
+      room_name: a.room_name,
+      created_at: a.last_activity_at,
     })),
   ];
 

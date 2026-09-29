@@ -12,6 +12,7 @@ export const previewUser = {
 export const previewRoom = {
   id: "preview-room",
   name: "Product & Engineering",
+  slug: "product-eng",
   type: "group",
   member_count: 4,
   members: [

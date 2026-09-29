@@ -1,6 +1,66 @@
 const { pool, query } = require('../config/db');
 const ApiError = require('../utils/ApiError');
 
+// Kept in step with the multer limit in routes/upload.routes.js.
+const MAX_ATTACHMENTS = 10;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Validate a client-supplied attachment list. Returns a normalised array.
+ *
+ * NOTE: `url` is still client-supplied, so this checks shape, not provenance.
+ * Once the Cloudinary upload endpoint lands (BACKEND_TASKS.md item C) the
+ * server should own the URL — ideally by looking it up from the upload
+ * record rather than trusting whatever the client posts here.
+ */
+function validateAttachments(attachments) {
+  if (attachments === undefined || attachments === null) return [];
+  if (!Array.isArray(attachments)) {
+    throw new ApiError(400, 'attachments must be an array');
+  }
+  if (attachments.length > MAX_ATTACHMENTS) {
+    throw new ApiError(400, `Too many attachments (max ${MAX_ATTACHMENTS})`);
+  }
+
+  for (const a of attachments) {
+    const name = a && typeof a.filename === 'string' ? a.filename.trim() : '';
+    if (!name) {
+      throw new ApiError(400, 'Each attachment requires a filename');
+    }
+    if (typeof a.url !== 'string' || !a.url.trim()) {
+      throw new ApiError(400, `Attachment "${name}" requires a url`);
+    }
+    if (typeof a.mime_type !== 'string' || !a.mime_type.trim()) {
+      throw new ApiError(400, `Attachment "${name}" requires a mime_type`);
+    }
+    if (a.size !== undefined && a.size !== null) {
+      if (!Number.isInteger(a.size) || a.size <= 0) {
+        throw new ApiError(400, `Attachment "${name}" has an invalid size`);
+      }
+      if (a.size > MAX_ATTACHMENT_BYTES) {
+        throw new ApiError(413, `Attachment "${name}" exceeds the 25MB limit`);
+      }
+    }
+  }
+
+  return attachments;
+}
+
+/**
+ * Map an `attachments` row to the shape the client expects. Mirrors the
+ * json_build_object in messages.controller.listMessages so history loads
+ * and live socket messages agree (BACKEND_TASKS.md Bug 6).
+ */
+function serializeAttachment(row) {
+  return {
+    id: row.id,
+    filename: row.filename,
+    size: row.size_bytes,
+    mime_type: row.file_type,
+    url: row.file_url,
+  };
+}
+
 /**
  * Persist a message and return the full row with sender metadata.
  * Used by both messages.controller.sendMessage (REST) and
@@ -16,8 +76,16 @@ const ApiError = require('../utils/ApiError');
  * @returns {object} The inserted message row enriched with sender info and attachments
  */
 async function createMessage({ roomId, senderId, content, replyToId, attachments }) {
-  if (!content || !content.trim()) {
-    throw new ApiError(400, 'Message content is required');
+  const cleanAttachments = validateAttachments(attachments);
+  const hasContent = typeof content === 'string' && content.trim().length > 0;
+
+  // A message may be file-only (BACKEND_TASKS.md Bug 8) — the dev fixtures
+  // include one. It may not be empty in both senses.
+  if (!hasContent && cleanAttachments.length === 0) {
+    throw new ApiError(
+      400,
+      'Message content is required unless there is at least one attachment'
+    );
   }
 
   // 1. Verify room exists and sender is a member (1 query)
@@ -58,20 +126,18 @@ async function createMessage({ roomId, senderId, content, replyToId, attachments
        RETURNING
          id, room_id, sender_id, content, reply_to_id,
          edited_at, deleted_at, created_at`,
-      [roomId, senderId, content.trim(), replyToId || null],
+      [roomId, senderId, hasContent ? content.trim() : null, replyToId || null],
     );
     message = result.rows[0];
 
-    if (Array.isArray(attachments) && attachments.length > 0) {
-      for (const a of attachments) {
-        const attResult = await client.query(
-          `INSERT INTO attachments (message_id, filename, file_url, file_type, size_bytes)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING id, filename, file_url, file_type, size_bytes`,
-          [message.id, a.filename, a.url, a.mime_type, a.size || null],
-        );
-        savedAttachments.push(attResult.rows[0]);
-      }
+    for (const a of cleanAttachments) {
+      const attResult = await client.query(
+        `INSERT INTO attachments (message_id, filename, file_url, file_type, size_bytes)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, filename, file_url, file_type, size_bytes`,
+        [message.id, a.filename.trim(), a.url.trim(), a.mime_type.trim(), a.size ?? null],
+      );
+      savedAttachments.push(attResult.rows[0]);
     }
 
     await client.query('COMMIT');
@@ -92,7 +158,7 @@ async function createMessage({ roomId, senderId, content, replyToId, attachments
     ...message,
     sender_name: sender.rows[0]?.display_name || null,
     sender_avatar: sender.rows[0]?.avatar_url || null,
-    attachments: savedAttachments,
+    attachments: savedAttachments.map(serializeAttachment),
   };
 }
 

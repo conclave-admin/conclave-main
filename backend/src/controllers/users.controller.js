@@ -6,6 +6,14 @@ const ApiError = require('../utils/ApiError');
 const UPDATABLE_FIELDS = ['display_name', 'avatar_url', 'bio'];
 const PAGE_SIZE = 25;
 
+// Per-field length ceilings. Without these, updateProfile accepted an
+// arbitrarily long avatar_url or bio (BACKEND_TASKS.md Bug 15).
+const FIELD_LIMITS = {
+  display_name: 100,
+  avatar_url: 2048,
+  bio: 1000,
+};
+
 // ---------- getMe ----------
 const getMe = asyncHandler(async (req, res) => {
   const result = await query(
@@ -39,6 +47,14 @@ const updateProfile = asyncHandler(async (req, res) => {
 
   if ('display_name' in updates && !String(updates.display_name).trim()) {
     throw new ApiError(400, 'display_name cannot be empty');
+  }
+
+  for (const [field, value] of Object.entries(updates)) {
+    const limit = FIELD_LIMITS[field];
+    if (limit === undefined) continue;
+    if (value !== null && String(value).length > limit) {
+      throw new ApiError(400, `${field} must be at most ${limit} characters`);
+    }
   }
 
   // 2. Build a dynamic SET clause from only the whitelisted fields present
