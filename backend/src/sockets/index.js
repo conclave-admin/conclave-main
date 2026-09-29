@@ -44,16 +44,36 @@ async function isMember(roomId, userId) {
 
 function registerSocketHandlers(io) {
   // Auth: client connects with `io(url, { auth: { token } })`.
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Missing auth token'));
+
+    let payload;
     try {
-      const payload = jwt.verify(token, env.jwt.accessSecret);
-      socket.user = { id: payload.sub, email: payload.email };
-      return next();
+      payload = jwt.verify(token, env.jwt.accessSecret);
     } catch (err) {
       return next(new Error('Invalid or expired token'));
     }
+
+    // Same soft-delete check requireAuth does on the REST side. A self-contained
+    // JWT cannot be revoked, so without this a deleted account kept an open
+    // socket and could still send messages until its token expired. Checked once
+    // at connect rather than per event, which bounds the window to the lifetime
+    // of the connection rather than a single request.
+    try {
+      const result = await query(
+        `SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL`,
+        [payload.sub],
+      );
+      if (result.rows.length === 0) {
+        return next(new Error('This account has been deleted'));
+      }
+    } catch (err) {
+      return next(new Error('Could not verify account'));
+    }
+
+    socket.user = { id: payload.sub, email: payload.email };
+    return next();
   });
 
   io.on('connection', async (socket) => {

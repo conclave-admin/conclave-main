@@ -24,4 +24,7 @@ EXPOSE 5000
 # it ever needs to write (e.g. uploads/tmp).
 USER node
 
-CMD ["node", "src/server.js"]
+# Invoked through `sh` rather than executed directly so the image does not
+# depend on the file's executable bit surviving the build context. The script
+# itself uses `exec`, so node still ends up as PID 1 and receives SIGTERM.
+ENTRYPOINT ["sh", "/app/docker-entrypoint.sh"]

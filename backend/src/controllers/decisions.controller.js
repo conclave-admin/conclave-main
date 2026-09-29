@@ -75,8 +75,21 @@ const listDecisions = asyncHandler(async (req, res) => {
   }
 
   if (before) {
-    params.push(before);
-    scope += ` AND d.created_at < $${params.length}`;
+    // Compound cursor "<created_at>|<id>". A bare created_at comparison skips
+    // rows when two decisions share a timestamp, because `created_at < cursor`
+    // drops every row equal to the cursor — including ones already returned.
+    // The id breaks the tie, and the ORDER BY below matches the comparison so
+    // the walk is stable. A cursor without the separator is still accepted, so
+    // this stays backward compatible with clients holding an older one.
+    const sep = before.indexOf('|');
+    if (sep === -1) {
+      params.push(before);
+      scope += ` AND d.created_at < $${params.length}`;
+    } else {
+      params.push(before.slice(0, sep), before.slice(sep + 1));
+      scope +=
+        ` AND (d.created_at, d.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+    }
   }
 
   params.push(PAGE_SIZE);
@@ -86,17 +99,19 @@ const listDecisions = asyncHandler(async (req, res) => {
      INNER JOIN rooms r ON r.id = d.room_id
      INNER JOIN users u ON u.id = d.created_by
      WHERE ${scope}
-     ORDER BY d.created_at DESC
+     ORDER BY d.created_at DESC, d.id DESC
      LIMIT $${params.length}`,
     params,
   );
 
   // Cursor so older decisions stay reachable; a bare LIMIT 50 stranded them.
+  // Only returned on a full page, so a short final page ends the walk.
   const decisions = result.rows;
-  const nextCursor =
-    decisions.length === PAGE_SIZE
-      ? decisions[decisions.length - 1].created_at
-      : null;
+  let nextCursor = null;
+  if (decisions.length === PAGE_SIZE) {
+    const last = decisions[decisions.length - 1];
+    nextCursor = `${new Date(last.created_at).toISOString()}|${last.id}`;
+  }
 
   return ok(res, { decisions, nextCursor });
 });
@@ -114,9 +129,11 @@ const listDecisions = asyncHandler(async (req, res) => {
 // see the migration for the upgrade path.
 const DECISIONS_TSVECTOR = `to_tsvector('english', d.title || ' ' || d.body)`;
 
-// Escape LIKE/ILIKE wildcards in the caller's term. Without this, searching
-// for "50%" or "a_b" matches far more than intended.
-const ILIKE_ESCAPED_TERM = `replace(replace($TERM, '\\', '\\\\'), '%', '\\%')`;
+// Escape LIKE/ILIKE wildcards in the caller's term. Without this, searching for
+// "50%" or "a_b" matches far more than intended. Backslash is escaped first so
+// the escapes added afterwards are not themselves re-escaped. `_` is included
+// because it is a single-character wildcard, not just `%`.
+const ILIKE_ESCAPED_TERM = `replace(replace(replace($TERM, '\\', '\\\\'), '%', '\\%'), '_', '\\_')`;
 
 const searchDecisions = asyncHandler(async (req, res) => {
   const { q } = req.query;
@@ -158,7 +175,11 @@ const searchDecisions = asyncHandler(async (req, res) => {
          OR d.tags @> ARRAY[lower(${termParam})]::text[]
          OR EXISTS (
            SELECT 1 FROM unnest(d.tags) AS tag
-           WHERE tag ILIKE '%' || ${ILIKE_ESCAPED_TERM.replace('$TERM', termParam)} || '%'
+           -- ESCAPE must be stated, not inherited. Postgres happens to default
+           -- to backslash, but the term above is only correct under that exact
+           -- setting; stating it makes the escaping independent of the
+           -- database's standard_conforming_strings configuration.
+           WHERE tag ILIKE '%' || ${ILIKE_ESCAPED_TERM.replace('$TERM', termParam)} || '%' ESCAPE '\\'
          )
        )
      ORDER BY rank DESC, d.created_at DESC
