@@ -1,37 +1,66 @@
 # Backend tasks
 
-Found while building the frontend against the Penpot design, then updated after a full backend audit (routes, controllers, services, sockets, migrations) checked against what the client calls, then updated again after the audit bugs were fixed on `fix/backend-audit-bugs`.
+Found while building the frontend against the Penpot design, then updated after a full backend audit (routes, controllers, services, sockets, migrations) checked against what the client calls, then updated again after the audit bugs were fixed, and once more after everything was finally run against a real database.
 
-Legend: DONE = shipped and verified in code. PARTIAL = shipped with a known problem. FIXED = was a bug, now repaired. OPEN = not started or still a stub. NEEDS DECISION = deliberately not actioned, waiting on a call.
+Legend: DONE = shipped and verified. PARTIAL = shipped with a known problem. FIXED = was a bug, now repaired and verified. OPEN = not started or still a stub. MOSTLY FIXED = the reported problem is closed but related work remains.
 
-**Current state:** every bug in the audit list below is either FIXED or explicitly deferred with a reason. The open work is the feature set (items A–J), not the bug list.
+**Current state:** all fifteen audited bugs are FIXED, and all of them have now been executed against a real PostgreSQL rather than merely type-checked. The remaining work is the feature set (items A–J), not the bug list. Two things are deliberately still open and are _decisions_ rather than defects: whether decision search should rank on tags (Bug 5), and the four product questions in item G and Bug 11.
 
 ---
 
 ## Status summary
 
-| Area                                    | Status                                                              |
-| --------------------------------------- | ------------------------------------------------------------------- |
-| Auth (register, login, refresh, logout) | DONE (hardened; token rotation added — see Bug 11 client note)      |
+| Area                                    | Status                                                               |
+| --------------------------------------- | -------------------------------------------------------------------- |
+| Auth (register, login, refresh, logout) | DONE (hardened; token rotation added — see Bug 11 client note)       |
 | Users (me, update, list, delete)        | DONE (delete account repaired and now works)                         |
 | Rooms (create, list, get, add member)   | DONE (public/private creatable, DMs deduped)                         |
 | Messages (send, list, search)           | DONE (deleted content masked, attachment shapes unified)             |
-| Decisions                               | PARTIAL (search and pagination fixed; `room_slug` still open, Bug 4) |
+| Decisions                               | DONE (`room_slug` shipped — see Bug 4)                               |
 | Digest                                  | DONE (now genuinely time-bounded per room)                           |
-| Sockets and presence                    | DONE (membership guards, no blocking KEYS, no phantom events)       |
+| Sockets and presence                    | DONE (membership guards, no blocking KEYS, no phantom events)        |
 | Tasks                                   | OPEN (all three handlers are stubs; now return 501)                  |
 | Notifications                           | OPEN (both handlers are stubs; now return 501)                       |
 | File upload (Cloudinary)                | OPEN (handler is a stub; now returns 501)                            |
-| Migrations                              | DONE (runner is re-runnable and tracks applied files)                 |
-| Tests                                   | OPEN (none exist — still the largest risk on this list)              |
+| Migrations                              | DONE (runner is re-runnable; all 8 verified against a real Postgres) |
+| Tests                                   | DONE (39 tests: 17 no-database smoke, 22 integration on a real DB)   |
 
 ### Verification status
 
-**No SQL was executed.** Docker is not available in the environment this branch was built in, so every query and migration here is syntax-checked and module-loaded but unrun. Syntax is verified (`node --check` across all backend JS, and every controller plus the route tree loads). Before merging, run against a real Postgres:
+**Everything below has now been executed against a real PostgreSQL 16.** The earlier claim that no SQL had been run is no longer true — Docker became available after the fixes were written, and the whole thing was then migrated onto a clean database and re-verified.
 
-- `006_drop_email_not_null.sql` — the fix for the delete-account 500
-- `007_decisions_search_includes_tags.sql` — rebuilds the decisions GIN index
-- the `(created_at, id)` tuple cursor, the `unnest($1::uuid[])` member insert, and the SCAN-based presence helpers
+What that verification found and changed:
+
+- **All eight migrations apply in order on a clean database**, and re-running the runner is a no-op (`Nothing to migrate — database is up to date`), confirming the `schema_migrations` tracking added for Bug 10.
+- **Migration 007 was wrong and failed on its first real execution**: `functions in index expression must be marked IMMUTABLE`. `array_to_string` is STABLE, not IMMUTABLE, so it cannot appear in an index expression. It was rewritten to index title+body and match tags separately, with a new GIN index on `decisions.tags`. Worth remembering if anyone tries to fold tags back into the tsvector.
+- **The per-file transaction added for Bug 10 did its job on that failure**: 007 rolled back alone, 001–006 stayed recorded, and the error named the file. Under the old single-transaction runner all seven would have been rolled back with no indication of which one broke.
+- **The delete-account P0 now commits.** Before migration 006 the transaction rolled back with a 500 on every call.
+- **The `rooms.slug` backfill produces correct values on real data**, including the two cases most likely to break: a duplicate room name (`Product & Engineering` → `product-engineering` and `product-engineering-2`) and a name with nothing sluggable (`日本語` → `room`).
+- The `(created_at, id)` tuple cursor pages through tied timestamps without skipping; the per-room digest window returns only the unread room, where a single shared `MAX(last_seen_at)` would have returned nothing; `22P02`/`23503`/`23505` map as documented.
+
+**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all eight migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. It skips itself when Postgres is unreachable. `npm test` runs it alongside the existing no-database smoke suite — 39 tests total.
+
+Two things that verification still cannot prove: the Cloudinary upload path (item C is a stub, so there is nothing to exercise), and behaviour under real production data volume — the queries were verified for correctness, not for query plans at scale.
+
+### Migrations
+
+Eight files, applied in filename order and recorded in `schema_migrations`. 001–003 are the original schema; 004–008 came out of this audit.
+
+| Migration                                | What it does                                                                     | Why                                                            |
+| ---------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `001_init.sql`                           | users, roles, rooms, membership, messages, reactions, attachments, notifications | original schema                                                |
+| `002_decisions_tasks_digest.sql`         | `decisions`, `tasks`, `digests` — the differentiator layer                       | original schema                                                |
+| `003_messages_search_index.sql`          | FTS GIN index + composite index for cursor paging                                | original schema                                                |
+| `004_add_attachment_filename.sql`        | adds `attachments.filename`, backfills from `file_url`                           | the file card rendered a URL instead of a name                 |
+| `005_add_user_deleted_at.sql`            | adds `users.deleted_at`                                                          | soft delete, so FKs from messages/decisions/tasks stay valid   |
+| `006_drop_email_not_null.sql`            | drops `NOT NULL` on `users.email`                                                | without it the soft delete always rolled back with a 500       |
+| `007_decisions_search_includes_tags.sql` | GIN index on `decisions.tags`                                                    | tags were never searchable despite the docs claiming otherwise |
+| `008_add_rooms_slug.sql`                 | adds `rooms.slug`, backfills, disambiguates, `UNIQUE`                            | decisions rendered `#undefined`                                |
+
+Two of these are worth knowing about before you touch them:
+
+- **Never edit a migration that has been applied.** Add a new numbered file. Editing 008 on a machine that already ran it changes nothing, because the runner skips recorded filenames.
+- **`007` is the one that will bite you.** If you are tempted to fold tags back into the tsvector so they affect ranking, do not — `array_to_string` is STABLE, not IMMUTABLE, and `CREATE INDEX` will fail. The migration file documents the trigger-maintained `search_vector` column as the proper upgrade.
 
 ---
 
@@ -69,7 +98,7 @@ REST and socket paths both return flat `sender_name` and `sender_avatar` now. Th
 
 ## Bugs found in the backend
 
-Ordered by severity. All fixed on `fix/backend-audit-bugs` except where marked NEEDS DECISION or deferred.
+Ordered by severity. All fifteen are fixed and verified against a real database. Where something is only partly fixed, or was deliberately left, the section says so and says why.
 
 **Fix map:** Bug 1 → `13b5762` · Bugs 2 and 9 → `a8a83a2` · Bugs 10 and 14 → `1c921ef` · Bug 3 and one Bug 15 item → `520191a` · Bug 5 → `f02ed86` · Bug 11 → `3615495` · Bug 13 and two Bug 15 items → `aebfba2`
 
@@ -98,18 +127,30 @@ Had three independent causes; all three had to be fixed for the digest to mean a
 - The response `members` array is read back from the database, matching the shape `getRoom` returns. It used to be built from the request body, so it could advertise members that `ON CONFLICT` had skipped.
 - `memberIds` is validated as an array of UUIDs.
 
-**Deferred.** The `rooms.type` comment is still not backed by a CHECK constraint. Adding one needs validating against real data, and no database was available, so it is left as a follow-up.
+**Still open, and now verifiable.** A tag-only hit **matches but does not contribute to rank**, so it sorts by date rather than relevance. That is a deliberate trade-off, not an oversight: the first attempt folded tags into the tsvector and failed at `CREATE INDEX` because `array_to_string` is STABLE, not IMMUTABLE. Replacing it properly means a trigger-maintained `search_vector` column, which sidesteps the immutability rule because it is a column rather than an expression, at the cost of having to keep it in sync. Worth doing only if tag relevance actually matters.
 
-### Bug 4. Decisions response has no `room_slug` (medium): NEEDS DECISION
+**Deferred.** The `rooms.type` comment is still not backed by a CHECK constraint. The code now honours all five documented types, so the constraint is belt-and-braces — but adding one means validating against whatever rows already exist, so it is left as a follow-up rather than risking a failed migration.
 
-`Decisions.jsx` renders `#{decision.room_slug}`. The backend returns `room_name` only, and `rooms` has no slug column, so real data renders `#undefined`. Either add a `slug` column to `rooms` (with a migration and backfill) or have the client render `room_name`.
+### Bug 4. Decisions response has no `room_slug` (medium): FIXED
 
-**Still open — this is a product call, not a bug fix.** A slug is a real schema addition with backfill and uniqueness rules; changing the client to render `room_name` is a one-line change. Decide which before building the page. This is the only audit bug left unaddressed.
+`Decisions.jsx` rendered `#{decision.room_slug}` while the backend returned `room_name` only, so real data rendered `#undefined`. The dev fixtures carried a `room_slug` that no endpoint ever returned, which is what hid it.
+
+Resolved by adding the column rather than changing the client:
+
+- Migration `008_add_rooms_slug.sql` adds `rooms.slug`, backfills it, then sets `NOT NULL` and adds a unique index.
+- `rooms.name` is **not** unique, so the backfill disambiguates duplicates with `row_number() OVER (PARTITION BY base ORDER BY created_at, id)`. Ordering by `created_at` makes the outcome deterministic — the oldest room keeps the bare slug, later ones get `-2`, `-3` — rather than depending on scan order. Names with nothing sluggable fall back to `room` and resolve through the same ranking.
+- `createRoom` derives the slug server-side and never accepts one from the request, so a handle cannot be squatted. Collisions walk `-2`, `-3` up to ten attempts; the unique index is the real guarantee and a genuine race surfaces as a 409 via the Postgres error mapping.
+- The slugify expression in JS mirrors the migration's SQL, so rooms created now and rooms backfilled then produce identical slugs.
+- `listRooms`, `getRoom`, `listDecisions` and `searchDecisions` all return `slug`. `promoteToDecision` was returning a bare `RETURNING *` with no `room_name`, `room_slug` or `author_name` at all; it now joins so the create response matches the list response.
+
+**Client side:** `Decisions.jsx` falls back to `room_name` when `room_slug` is nullish, using `??` rather than `||` so an empty string does not silently drop the handle. `previewRoom` gained the `slug` field it was missing.
+
+Verified against real rows: a duplicate name yields `product-engineering` and `product-engineering-2`; `日本語` yields `room` rather than an empty string.
 
 ### Bug 5. Decision search is limited and inconsistent (medium): FIXED
 
 - `searchDecisions` is now mounted at `GET /decisions/search?q=` for the cross-room page, and the handler serves both routes, room-scoped when `:roomId` is present.
-- Tags are actually searched. The comment claimed "title, body, tags" but both the GIN index and the query covered only title and body. Migration `007_decisions_search_includes_tags.sql` rebuilds `idx_decisions_search` over all three, and the query uses the identical expression so the index is used.
+- Tags are actually searched. The comment claimed "title, body, tags" but the query only covered title and body. Migration `007_decisions_search_includes_tags.sql` adds a GIN index on `decisions.tags` and the query matches tags by array containment plus an escaped substring scan, alongside the existing title+body index.
 - `listDecisions` takes `?before=<ISO>` and returns `nextCursor`, the same shape `listMessages` uses. The hard `LIMIT 50` with no cursor made older decisions unreachable.
 
 ### Bug 6. Attachment shape differs between endpoints (medium): FIXED
@@ -275,7 +316,7 @@ The Navbar has a search icon. Per-room message search and per-room decision sear
 
 Missing: update room name, leave room, remove member, delete room, and promote member to admin. Also missing: find or create DM by user id (`POST /rooms/dm { userId }`), which the `/dms` screen needs.
 
-`createRoom` now returns an existing DM rather than duplicating one, but there is still no way to *find* one by user id without creating it.
+`createRoom` now returns an existing DM rather than duplicating one, but there is still no way to _find_ one by user id without creating it.
 
 ### G. Invites (OPEN)
 
@@ -293,9 +334,12 @@ The payloads already include `edited_at`, `deleted_at`, and there is a `message_
 
 **Partly ready:** the read side already handles soft-deleted rows correctly (Bug 7) — `listMessages` withholds the body and sets `is_deleted`, and `searchMessages` excludes them. So once the delete endpoint exists, it will behave. The client needs to render the tombstone.
 
-### J. Tests and docs (OPEN)
+### J. Tests and docs (MOSTLY DONE)
 
-- **There are no tests, and this is now the biggest risk on this list.** The bug fixes on `fix/backend-audit-bugs` are syntax-checked and module-loaded but no SQL was executed, because Docker was unavailable. Everything should be exercised against a real Postgres before merge. Start with auth, room membership checks, message create/list, and the digest queries.
+- **Tests exist and pass — 39 of them**, via `cd backend && npm test`. Two suites:
+  - `backend/test/smoke.test.js` runs no SQL. It boots the Express app in-process and asserts the full route table, middleware order, the error envelope, UUID validation, and that the `501` stubs do not return a fake success. This is the class of breakage otherwise only found in production.
+  - `backend/tests/integration.test.js` is the suite the audit actually needed. It creates a throwaway `conclave_test` database, applies all eight migrations, exercises the rewritten queries, and drops the database afterwards — so it cannot touch development data. It skips itself when Postgres is unreachable, so `npm test` stays green without Docker.
+- **Still to add:** auth round-trips against real bcrypt hashing, room membership _denials_ (the suite covers grants, not refusals), socket-level tests for the events in `sockets/index.js`, and anything covering the Cloudinary path once item C exists.
 - `docs/API_CONTRACTS.md` still lists finished routes as TODO. Update it with every route above, including request bodies and response shapes.
 - Add the frontend token refresh: `client/src/lib/api.js` has a TODO for a 401 interceptor calling `POST /auth/refresh`. Without it users are signed out every 15 minutes. The backend endpoint is ready — but note it now returns a rotated `refreshToken` that the interceptor must persist (see Bug 11).
 - The client should call `POST /rooms/:roomId/seen` when a room is opened, otherwise digests keep showing everything.
