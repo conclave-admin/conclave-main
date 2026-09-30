@@ -23,7 +23,7 @@ not a configuration mistake when it does.
 ```
 
 **Vercel is right for the client and wrong for the backend.** This is worth being
-precise about, because Vercel *does* now support WebSockets (public beta since
+precise about, because Vercel _does_ now support WebSockets (public beta since
 June 2026) and a lot of older advice says otherwise. The problem is the Hobby
 tier's limits, not the absence of support:
 
@@ -43,18 +43,18 @@ introducing risk.
 
 **Supabase is right for Postgres and has no Redis.** Supabase's only Redis
 offering is `redis_wrapper`, a Postgres foreign-data wrapper for querying an
-*external* Redis from SQL. It is not a Redis you can point `REDIS_URL` at. So
+_external_ Redis from SQL. It is not a Redis you can point `REDIS_URL` at. So
 Redis has to come from somewhere else — section 5.
 
 ### Free tier comparison for the backend
 
-| Platform    | Card? | Sleeps?             | WebSockets | Verdict for Conclave             |
-| ----------- | ----- | ------------------- | ---------- | -------------------------------- |
-| Render      | No    | Yes, after ~15 min  | Yes        | **Chosen.** Accept the sleep.    |
-| Vercel      | No    | 300s connection cap | Beta       | Client only.                     |
-| Railway     | No    | No                  | Yes        | Good alternative, ~$1/mo credit. |
-| Northflank  | Yes   | No                  | Yes        | Best fit, but needs a card.      |
-| Koyeb       | Yes   | Scales to zero      | Yes        | Good alternative, needs a card.  |
+| Platform   | Card? | Sleeps?             | WebSockets | Verdict for Conclave             |
+| ---------- | ----- | ------------------- | ---------- | -------------------------------- |
+| Render     | No    | Yes, after ~15 min  | Yes        | **Chosen.** Accept the sleep.    |
+| Vercel     | No    | 300s connection cap | Beta       | Client only.                     |
+| Railway    | No    | No                  | Yes        | Good alternative, ~$1/mo credit. |
+| Northflank | Yes   | No                  | Yes        | Best fit, but needs a card.      |
+| Koyeb      | Yes   | Scales to zero      | Yes        | Good alternative, needs a card.  |
 
 We picked **Render free with no keep-alive pinger** — agreed, and that is the
 right instinct: a synthetic pinger is arguably circumventing the intent of the
@@ -88,23 +88,37 @@ Do them in this order. Each step assumes the previous one works.
 
 ---
 
-## 4. Pre-flight: the migrations have never been run
+## 4. Pre-flight: migrations on a throwaway database first
 
-**Read this twice.** `docs/BACKEND_TASKS.md` records that the backend was written
-in an environment without Docker, so:
+**Read this twice.** All eight migrations have now been run against a real
+PostgreSQL 16 and pass, so this is no longer about discovering that they are
+broken — it is about confirming *your* target database is at the version you
+expect before a deploy does it for you.
 
-- No migration has ever executed against a real Postgres.
-- `migrate.js`'s `schema_migrations` ledger has never been exercised.
-- Migration `008` (rooms slug) has never run.
-- The `(created_at, id)` tuple cursors, the `unnest($1::uuid[])` member insert and
-  the SCAN-based presence helpers have never been run.
+Still worth doing before you point this at production:
 
-If you deploy and then discover a migration is broken, you are debugging against
-a live environment with a half-built schema. Do this first, on a throwaway
-database, and you find out in five minutes instead of an hour.
+- `migrate.js`'s `schema_migrations` ledger has been exercised, but not against
+  your production database. Confirm `SELECT count(*) FROM schema_migrations`
+  returns 8 there, or run `npm run migrate` and read what it says.
+- Migration `008` adds `rooms.slug` and **backfills it**. On a database with
+  real room names this is a write-heavy step: it rewrites every row in `rooms`.
+  Check the row count and be ready for a longer transaction than the others.
+- If your database predates the ledger, `npm run migrate` will try to replay
+  `001_init.sql` and fail on `roles`/`users` already existing. Use
+  `npm run migrate:baseline` **once**, after confirming which of 001–008 have
+  genuinely been applied.
 
-The new smoke tests (`cd backend && npm test`) do **not** cover this — they run no
-SQL by design.
+**This is what the integration suite does for you, locally.** `npm run test:db`
+creates a throwaway `conclave_test` database, applies all eight migrations, runs
+22 assertions against the real query paths, and drops the database. Run it before
+you deploy and you are reproducing the whole chain in seconds:
+
+```bash
+cd backend && npm run test:db
+```
+
+The `test/` smoke suite still runs no SQL by design, so it cannot tell you
+anything about migrations. `tests/` is the one that can.
 
 ---
 
@@ -116,7 +130,7 @@ SQL by design.
 2. **Database → Connection string.** Use the **Session mode (port 5432)**
    connection string, not Transaction mode.
 
-   This matters and is a common failure. The *direct* connection
+   This matters and is a common failure. The _direct_ connection
    (`db.<ref>.supabase.co:5432`) is **IPv6-only** on the free tier. Render's
    instances are IPv4-only, so the direct string will not connect. The Supavisor
    **session-mode** string (`aws-<region>.pooler.supabase.com:5432`) is IPv4 and
@@ -177,11 +191,13 @@ All migrations complete.
 # Tables present?
 psql "$DATABASE_URL" -c "\dt"
 ```
+
 If you don't have `psql`, use the **SQL Editor** in the Supabase dashboard and run:
 
 ```sql
 SELECT tablename FROM pg_tables WHERE schemptype = 'public' ORDER BY tablename;
 ```
+
 You should see 15 tables. Then:
 
 ```sql
@@ -201,8 +217,11 @@ SELECT is_nullable FROM information_schema.columns
 report that everything is already applied and exit cleanly. If it tries to
 re-apply, the ledger is broken and every future deploy will fail.
 
-Finally, exercise the real query paths. The digest is the one most likely to have
-a latent SQL error, and it is also the feature that has never been run at all:
+Finally, exercise the real query paths against the deployed database. The digest
+is the one most likely to have a latent SQL error, and it is the feature whose
+window logic changed most recently — it now filters per room on that room's own
+`room_members.last_seen_at`, and it does nothing at all unless the client calls
+`POST /rooms/:roomId/seen` when a room is opened.
 
 ```sql
 INSERT INTO users (email, password_hash, display_name, role_id)
@@ -242,11 +261,11 @@ at the bottom of the file. So this step is not optional.
 Conclave writes a presence TTL on every heartbeat, and `useHeartbeat.js` beats
 every 30 seconds per connected client:
 
-| Connected users | Heartbeat writes/day | vs 10k budget |
-| --------------- | -------------------- | -------------- |
-| 1               | 2,880                | comfortable    |
+| Connected users | Heartbeat writes/day | vs 10k budget    |
+| --------------- | -------------------- | ---------------- |
+| 1               | 2,880                | comfortable      |
 | 3               | 8,640                | nearly all of it |
-| 5               | 14,400               | **over**       |
+| 5               | 14,400               | **over**         |
 
 That is heartbeats alone — typing indicators, join/leave and the presence sweep
 are on top. For a demo with a handful of people, one database is fine. The moment
@@ -265,13 +284,13 @@ instance alongside the web service, or **Railway's** Redis.
 
 Render's dashboard: **New → Web Service → connect the repo.**
 
-| Setting                | Value                                                    |
-| ---------------------- | -------------------------------------------------------- |
-| Root Directory         | `backend`                                                |
-| Runtime                | Node                                                     |
-| Build Command          | `npm ci`                                                 |
-| Start Command          | `node src/server.js`                                     |
-| Health Check Path      | `/health`                                                |
+| Setting           | Value                |
+| ----------------- | -------------------- |
+| Root Directory    | `backend`            |
+| Runtime           | Node                 |
+| Build Command     | `npm ci`             |
+| Start Command     | `node src/server.js` |
+| Health Check Path | `/health`            |
 
 **Use the native runtime, not the Dockerfile.** You have a `backend/Dockerfile`
 and Render would auto-detect it, and that path works too — the entrypoint runs
@@ -323,7 +342,7 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
 1. **`CLIENT_ORIGIN` is not optional and not decorative.** It feeds CORS, and
    Socket.IO reads it too. Until it is set to your Vercel URL, the browser will
-   refuse every request from the deployed client. Set it *after* step 9 when you
+   refuse every request from the deployed client. Set it _after_ step 9 when you
    know the URL, then redeploy.
 2. **Do not rely on the compose fallbacks.** `docker-compose.yml` contains
    `dev-only-access-secret-change-me`. Never copy those into a real environment.
@@ -341,12 +360,12 @@ will be the first thing you want when debugging.
 
 Dashboard: **New Project → import the repo.**
 
-| Setting           | Value                                            |
-| ----------------- | ------------------------------------------------ |
-| Root Directory    | `client`                                         |
-| Framework Preset  | Vite                                             |
-| Build Command     | `npm run build`                                  |
-| Output Directory  | `dist`                                           |
+| Setting          | Value           |
+| ---------------- | --------------- |
+| Root Directory   | `client`        |
+| Framework Preset | Vite            |
+| Build Command    | `npm run build` |
+| Output Directory | `dist`          |
 
 A `client/vercel.json` is included with an SPA rewrite. **Without it, refreshing
 `/rooms/<id>` returns Vercel's 404** rather than your app, because there is no
@@ -462,17 +481,17 @@ about it.
 
 ## 12. Troubleshooting
 
-| Symptom | Likely cause | Fix |
-| --- | --- | --- |
-| `relation "users" does not exist` | Migrations never ran | Section 6. This is the one to expect first. |
-| CORS error in the browser console | `CLIENT_ORIGIN` not set to the Vercel URL | Set it on Render, then redeploy. Env changes restart the service. |
-| Socket connects, then immediately drops | Render cold start; client gave up | It retries. If persistent, check `REDIS_URL` in the logs. |
-| Server exits at boot, logs `Failed to start server` | Redis unreachable. `connectRedis()` is a hard dependency | Check `REDIS_URL`. On Upstash, confirm the `rediss://` scheme and the region. |
-| `invalid input syntax for type uuid` | Usually the pooler string was hand-assembled | Copy the session-mode string from the dashboard verbatim. |
-| `too many connections` | Pool size vs Supabase limits | `pg.Pool` defaults to 10. Free Supabase allows ~15 direct. Fine unless you add services. |
-| `bcrypt` fails to load on deploy | Native build | Native runtime: Render's build tools handle it. Docker: the `Dockerfile` installs python3/make/g++ in the same layer, which is required on Alpine. |
-| Vercel 404 on `/rooms/<id>` | Missing SPA rewrite | `client/vercel.json` is included; confirm Root Directory is `client`. |
-| Everything works locally, nothing in production | `VITE_*` baked at build time | Vite inlines env vars **at build time**. Changing them in the dashboard requires a **redeploy**, not just a restart. |
+| Symptom                                             | Likely cause                                             | Fix                                                                                                                                                |
+| --------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relation "users" does not exist`                   | Migrations never ran                                     | Section 6. This is the one to expect first.                                                                                                        |
+| CORS error in the browser console                   | `CLIENT_ORIGIN` not set to the Vercel URL                | Set it on Render, then redeploy. Env changes restart the service.                                                                                  |
+| Socket connects, then immediately drops             | Render cold start; client gave up                        | It retries. If persistent, check `REDIS_URL` in the logs.                                                                                          |
+| Server exits at boot, logs `Failed to start server` | Redis unreachable. `connectRedis()` is a hard dependency | Check `REDIS_URL`. On Upstash, confirm the `rediss://` scheme and the region.                                                                      |
+| `invalid input syntax for type uuid`                | Usually the pooler string was hand-assembled             | Copy the session-mode string from the dashboard verbatim.                                                                                          |
+| `too many connections`                              | Pool size vs Supabase limits                             | `pg.Pool` defaults to 10. Free Supabase allows ~15 direct. Fine unless you add services.                                                           |
+| `bcrypt` fails to load on deploy                    | Native build                                             | Native runtime: Render's build tools handle it. Docker: the `Dockerfile` installs python3/make/g++ in the same layer, which is required on Alpine. |
+| Vercel 404 on `/rooms/<id>`                         | Missing SPA rewrite                                      | `client/vercel.json` is included; confirm Root Directory is `client`.                                                                              |
+| Everything works locally, nothing in production     | `VITE_*` baked at build time                             | Vite inlines env vars **at build time**. Changing them in the dashboard requires a **redeploy**, not just a restart.                               |
 
 ---
 
