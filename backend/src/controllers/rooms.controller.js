@@ -320,10 +320,14 @@ const addMember = asyncHandler(async (req, res) => {
       throw new ApiError(409, "User is already a member of this room");
     }
 
+    // Record who invited, so the notification can read "Victor invited you"
+    // rather than just naming the room. The inviter is stored nowhere else, so
+    // without this column the information is lost the moment this row is written.
+    // Still not emitted on the socket — that lands with the Item B endpoints.
     await client.query(
-      `INSERT INTO notifications (recipient_id, type, reference_id)
-       VALUES ($1, 'room_invite', $2)`,
-      [userId, roomId],
+      `INSERT INTO notifications (recipient_id, type, reference_id, actor_id)
+       VALUES ($1, 'room_invite', $2, $3)`,
+      [userId, roomId, req.user.id],
     );
 
     await client.query("COMMIT");

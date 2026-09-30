@@ -153,11 +153,22 @@ const TABLES = [
 
 // --- Schema ------------------------------------------------------------------
 
-dbTest('all eight migrations apply and are recorded', async () => {
+dbTest('every migration file applies and is recorded', async () => {
+  // Compared against the files on disk rather than a hardcoded count, so adding
+  // a migration cannot silently leave this test asserting a stale number.
+  const fs = require('fs');
+  const path = require('path');
+  const dir = path.join(__dirname, '..', 'database', 'migrations');
+  const onDisk = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+
   const { rows } = await query('SELECT filename FROM schema_migrations ORDER BY filename');
-  assert.equal(rows.length, 8, `recorded: ${rows.map((r) => r.filename).join(', ')}`);
-  assert.equal(rows[0].filename, '001_init.sql');
-  assert.equal(rows[7].filename, '008_add_rooms_slug.sql');
+  const recorded = rows.map((r) => r.filename);
+
+  assert.deepEqual(
+    recorded, onDisk,
+    `recorded migrations do not match the files on disk (${onDisk.length} files)`,
+  );
+  assert.equal(recorded[0], '001_init.sql');
 });
 
 dbTest('every expected table exists', async () => {
@@ -181,6 +192,15 @@ dbTest('rooms.slug is NOT NULL and unique', async () => {
       WHERE tablename = 'rooms' AND indexdef LIKE '%slug%' AND indexdef LIKE '%UNIQUE%'`,
   );
   assert.ok(idx.rows.length > 0, 'expected a unique index on rooms.slug');
+});
+
+dbTest('notifications.actor_id exists and nulls the actor on hard delete', async () => {
+  const col = await query(
+    `SELECT is_nullable FROM information_schema.columns
+      WHERE table_name = 'notifications' AND column_name = 'actor_id'`,
+  );
+  assert.equal(col.rows.length, 1, 'migration 009 should have added actor_id');
+  assert.equal(col.rows[0].is_nullable, 'YES', 'actor_id must be nullable for ON DELETE SET NULL');
 });
 
 dbTest('users.email is nullable so soft delete can release it', async () => {

@@ -44,7 +44,7 @@ Two things that verification still cannot prove: the Cloudinary upload path (ite
 
 ### Migrations
 
-Eight files, applied in filename order and recorded in `schema_migrations`. 001–003 are the original schema; 004–008 came out of this audit.
+Nine files, applied in filename order and recorded in `schema_migrations`. 001–003 are the original schema; 004 onward came out of this audit and the differentiator lane.
 
 | Migration                                | What it does                                                                     | Why                                                            |
 | ---------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------- |
@@ -56,8 +56,12 @@ Eight files, applied in filename order and recorded in `schema_migrations`. 001�
 | `006_drop_email_not_null.sql`            | drops `NOT NULL` on `users.email`                                                | without it the soft delete always rolled back with a 500       |
 | `007_decisions_search_includes_tags.sql` | GIN index on `decisions.tags`                                                    | tags were never searchable despite the docs claiming otherwise |
 | `008_add_rooms_slug.sql`                 | adds `rooms.slug`, backfills, disambiguates, `UNIQUE`                            | decisions rendered `#undefined`                                |
+| `009_add_notification_actor.sql`          | adds `notifications.actor_id`                                                    | a room invite could not say who invited you                    |
 
-Two of these are worth knowing about before you touch them:
+Migration 009 took that number, so the ones still to come shift: item C
+(`file_uploads`) becomes 010, and item H (`message_mentions`) becomes 011.
+
+Three of these are worth knowing about before you touch them:
 
 - **Never edit a migration that has been applied.** Add a new numbered file. Editing 008 on a machine that already ran it changes nothing, because the runner skips recorded filenames.
 - **`007` is the one that will bite you.** If you are tempted to fold tags back into the tsvector so they affect ranking, do not — `array_to_string` is STABLE, not IMMUTABLE, and `CREATE INDEX` will fail. The migration file documents the trigger-maintained `search_vector` column as the proper upgrade.

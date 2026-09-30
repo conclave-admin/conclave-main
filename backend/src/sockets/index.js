@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 const { query } = require('../config/db');
 const { createMessage } = require('../services/message.service');
+const { personalRoom } = require('../services/notification.service');
 const presence = require('../services/presence.service');
 
 // Event names match what was scoped in the original planning conversation.
@@ -26,9 +27,15 @@ const presence = require('../services/presence.service');
 //   message-read       { roomId, messageId, userId }
 //   error:message      { message }   (see note below)
 //
+// Rooms the server joins for you, without the client asking:
+//   user:{userId}     every socket joins its own on connect. This is the
+//                      delivery target for per-user events such as
+//                      `notification`, which are addressed to one person rather
+//                      than to a chat room.
+//
 // Not yet implemented, so deliberately absent from this list rather than
-// advertised and never sent (BACKEND_TASKS.md Bug 13): notification,
-// upload-progress, decision:created and task:updated all belong to the
+// advertised and never sent (BACKEND_TASKS.md Bug 13): upload-progress,
+// decision:created and task:updated all belong to the
 // tasks/notifications/upload endpoints, which are still stubs.
 
 // Membership check for events that only relay state. createMessage already
@@ -87,6 +94,11 @@ function registerSocketHandlers(io) {
     if (openSockets === 1) {
       socket.broadcast.emit('user-online', { userId });
     }
+
+    // Join a per-user room so events addressed to one person (notifications)
+    // can reach every tab they have open. Chat rooms are joined by raw room
+    // UUID via join-room, so this prefixed name cannot collide with one.
+    socket.join(personalRoom(userId));
 
     // --- join-room: verify membership, track per-room presence ---
     socket.on('join-room', async ({ roomId }) => {
