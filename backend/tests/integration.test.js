@@ -149,6 +149,7 @@ const dbTest = (name, fn) =>
 const TABLES = [
   'rooms', 'users', 'messages', 'attachments', 'decisions', 'tasks',
   'room_members', 'message_reactions', 'notifications', 'refresh_tokens',
+  'file_uploads',
 ];
 
 // --- Schema ------------------------------------------------------------------
@@ -201,6 +202,27 @@ dbTest('notifications.actor_id exists and nulls the actor on hard delete', async
   );
   assert.equal(col.rows.length, 1, 'migration 009 should have added actor_id');
   assert.equal(col.rows[0].is_nullable, 'YES', 'actor_id must be nullable for ON DELETE SET NULL');
+});
+
+dbTest('file_uploads enforces one-time use and releases on message delete', async () => {
+  // Migration 010. The unique index is what stops two upload records for one
+  // asset; attached_message_id is what makes a file single-use.
+  const url = await query(
+    `SELECT indexdef FROM pg_indexes
+      WHERE tablename = 'file_uploads' AND indexdef LIKE '%UNIQUE%'`,
+  );
+  assert.ok(url.rows.length > 0, 'expected a unique index on file_uploads.file_url');
+
+  const fk = await query(
+    `SELECT rc.delete_rule
+       FROM information_schema.referential_constraints rc
+       JOIN information_schema.table_constraints tc
+         ON tc.constraint_name = rc.constraint_name AND tc.constraint_schema = rc.constraint_schema
+       JOIN information_schema.key_column_usage kcu
+         ON kcu.constraint_name = tc.constraint_name AND kcu.constraint_schema = tc.constraint_schema
+      WHERE tc.table_name = 'file_uploads' AND kcu.column_name = 'attached_message_id'`,
+  );
+  assert.equal(fk.rows[0].delete_rule, 'SET NULL', 'deleting a message must free the upload, not drop the record');
 });
 
 dbTest('users.email is nullable so soft delete can release it', async () => {
@@ -522,18 +544,30 @@ dbTest('deleted message bodies are withheld and flagged is_deleted', async () =>
   assert.equal(leak.rows.length, 0, 'search must never surface retracted content');
 });
 
-// --- createMessage attachments (Bugs 6 and 8) --------------------------------
+// --- createMessage attachments (Bugs 6 and 8, item C) -------------------------
+
+/**
+ * Insert an unclaimed upload row for a fixture user, as POST /upload would.
+ * Lets the attachment tests below run without touching Cloudinary.
+ */
+async function seedUpload({ uploaderId, url, filename = 'checklist.pdf', mimeType = 'application/pdf', size = 4096 }) {
+  return (await query(
+    `INSERT INTO file_uploads (uploader_id, file_url, filename, mime_type, size_bytes)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id, file_url`,
+    [uploaderId, url, filename, mimeType, size],
+  )).rows[0];
+}
 
 dbTest('an attachment-only message is accepted and shaped like listMessages', async () => {
   const u = user;
+  const url = `https://x/c-${Date.now()}.pdf`;
+  await seedUpload({ uploaderId: u.id, url });
 
   const m = await createMessage({
     roomId: room.id,
     senderId: u.id,
     content: '',
-    attachments: [
-      { filename: 'checklist.pdf', url: 'https://x/c.pdf', mime_type: 'application/pdf', size: 4096 },
-    ],
+    attachments: [{ url }],
   });
 
   assert.ok(m.id, 'should have been created');
@@ -544,6 +578,7 @@ dbTest('an attachment-only message is accepted and shaped like listMessages', as
     ['id', 'filename', 'size', 'mime_type', 'url'],
     'must match the shape listMessages returns',
   );
+  assert.equal(m.attachments[0].url, url);
   assert.equal(m.sender_name, (await query('SELECT display_name FROM users WHERE id = $1', [u.id])).rows[0].display_name);
   assert.equal(m.sender, undefined, 'sender must be flat, not a nested object');
 });
@@ -556,29 +591,176 @@ dbTest('a message empty in both content and attachments is rejected', async () =
   );
 });
 
-dbTest('attachments are validated, and a rejection leaves no orphan message', async () => {
+dbTest('attachment shape is validated before the insert, leaving no orphan message', async () => {
   const u = user;
   const before = (await query('SELECT COUNT(*)::int n FROM messages WHERE room_id = $1', [room.id])).rows[0].n;
 
   const cases = [
-    [[{ url: 'u', mime_type: 'm' }], 'missing filename'],
-    [[{ filename: 'f', mime_type: 'm' }], 'missing url'],
-    [[{ filename: 'f', url: 'u' }], 'missing mime_type'],
-    [[{ filename: 'f', url: 'u', mime_type: 'm', size: -5 }], 'negative size'],
-    [[{ filename: 'f', url: 'u', mime_type: 'm', size: 30 * 1024 * 1024 }], 'oversize'],
-    [Array.from({ length: 11 }, () => ({ filename: 'f', url: 'u', mime_type: 'm' })), 'too many files'],
+    [[{}], 'no url'],
+    [[{ url: '   ' }], 'blank url'],
+    [[{ url: 42 }], 'non-string url'],
+    [[null], 'null attachment'],
+    [['not-an-object'], 'string instead of object'],
+    [Array.from({ length: 11 }, () => ({ url: 'https://x/u' })), 'too many files'],
   ];
 
   for (const [attachments, label] of cases) {
     await assert.rejects(
       () => createMessage({ roomId: room.id, senderId: u.id, content: 'x', attachments }),
-      (err) => err.status === 400 || err.status === 413,
+      (err) => err.status === 400,
       `should reject: ${label}`,
     );
   }
 
   const after = (await query('SELECT COUNT(*)::int n FROM messages WHERE room_id = $1', [room.id])).rows[0].n;
   assert.equal(after, before, 'validation must happen before the insert');
+});
+
+// --- Attachment provenance and one-time use (item C) --------------------------
+
+dbTest('an upload can only be attached by the user who uploaded it', async () => {
+  const uploader = (
+    await query(
+      `INSERT INTO users (email, password_hash, display_name)
+       VALUES ('other@test.com', 'x', 'Other User') RETURNING id`,
+    )
+  ).rows[0];
+  const url = `https://x/other-${Date.now()}.png`;
+  await seedUpload({ uploaderId: uploader.id, url, filename: 'not-yours.png', mimeType: 'image/png' });
+
+  const before = (await query('SELECT COUNT(*)::int n FROM messages WHERE room_id = $1', [room.id])).rows[0].n;
+
+  await assert.rejects(
+    () => createMessage({ roomId: room.id, senderId: user.id, content: 'borrowed', attachments: [{ url }] }),
+    (err) => err.status === 400,
+    "attaching another user's upload must be rejected",
+  );
+
+  const after = (await query('SELECT COUNT(*)::int n FROM messages WHERE room_id = $1', [room.id])).rows[0].n;
+  assert.equal(after, before, 'the rejection must roll back the message');
+
+  const stillUnclaimed = await query(
+    'SELECT attached_message_id FROM file_uploads WHERE file_url = $1',
+    [url],
+  );
+  assert.equal(stillUnclaimed.rows[0].attached_message_id, null, "the upload must stay claimable by its owner");
+});
+
+dbTest('an upload is attached exactly once', async () => {
+  const u = user;
+  const url = `https://x/once-${Date.now()}.pdf`;
+  await seedUpload({ uploaderId: u.id, url });
+
+  const first = await createMessage({ roomId: room.id, senderId: u.id, content: 'first', attachments: [{ url }] });
+  assert.equal(first.attachments.length, 1);
+
+  const before = (await query('SELECT COUNT(*)::int n FROM messages WHERE room_id = $1', [room.id])).rows[0].n;
+  await assert.rejects(
+    () => createMessage({ roomId: room.id, senderId: u.id, content: 'second', attachments: [{ url }] }),
+    (err) => err.status === 400,
+    'reusing an attached upload must be rejected',
+  );
+  const after = (await query('SELECT COUNT(*)::int n FROM messages WHERE room_id = $1', [room.id])).rows[0].n;
+  assert.equal(after, before, 'the rejected message must not be persisted');
+
+  const claimed = await query('SELECT attached_message_id FROM file_uploads WHERE file_url = $1', [url]);
+  assert.equal(claimed.rows[0].attached_message_id, first.id, 'the claim must still point at the first message');
+});
+
+dbTest('the same URL cannot be claimed twice within one message', async () => {
+  const u = user;
+  const url = `https://x/dup-${Date.now()}.pdf`;
+  await seedUpload({ uploaderId: u.id, url });
+
+  // The first claim succeeds, the second hits the same already-attached row and
+  // rolls the whole message back — otherwise one URL would yield two attachment
+  // rows on a single message.
+  await assert.rejects(
+    () => createMessage({
+      roomId: room.id, senderId: u.id, content: 'twice',
+      attachments: [{ url }, { url }],
+    }),
+    (err) => err.status === 400,
+  );
+
+  const claimed = await query('SELECT attached_message_id FROM file_uploads WHERE file_url = $1', [url]);
+  assert.equal(claimed.rows[0].attached_message_id, null, 'the rollback must release the claim');
+});
+
+dbTest('an unknown URL is rejected', async () => {
+  await assert.rejects(
+    () => createMessage({
+      roomId: room.id, senderId: user.id, content: 'ghost',
+      attachments: [{ url: 'https://evil.example/never-uploaded.exe' }],
+    }),
+    (err) => err.status === 400,
+    'a URL that was never uploaded must not be attachable',
+  );
+});
+
+dbTest('client-supplied metadata is ignored in favour of the upload record', async () => {
+  const u = user;
+  const url = `https://x/liar-${Date.now()}.png`;
+  await seedUpload({
+    uploaderId: u.id, url, filename: 'honest.png', mimeType: 'image/png', size: 1234,
+  });
+
+  const m = await createMessage({
+    roomId: room.id,
+    senderId: u.id,
+    content: 'liar',
+    attachments: [{
+      url,
+      // Deliberately wrong: the server must not take any of this from the client.
+      filename: 'actually-a-payload.exe',
+      mime_type: 'application/x-msdownload',
+      size: 999999,
+    }],
+  });
+
+  assert.equal(m.attachments[0].filename, 'honest.png');
+  assert.equal(m.attachments[0].mime_type, 'image/png');
+  assert.equal(m.attachments[0].size, 1234);
+
+  const row = await query('SELECT filename, file_type, size_bytes FROM attachments WHERE id = $1', [m.attachments[0].id]);
+  assert.equal(row.rows[0].filename, 'honest.png');
+  assert.equal(row.rows[0].file_type, 'image/png');
+  assert.equal(row.rows[0].size_bytes, 1234, 'the stored row must not carry the client-supplied size');
+});
+
+dbTest('a failed send leaves its uploads unclaimed and reusable', async () => {
+  const u = user;
+  const good = `https://x/retry-${Date.now()}.pdf`;
+  const unknown = 'https://x/does-not-exist.png';
+  await seedUpload({ uploaderId: u.id, url: good });
+
+  await assert.rejects(
+    () => createMessage({
+      roomId: room.id, senderId: u.id, content: 'mixed',
+      attachments: [{ url: good }, { url: unknown }],
+    }),
+    (err) => err.status === 400,
+  );
+
+  const row = await query('SELECT attached_message_id FROM file_uploads WHERE file_url = $1', [good]);
+  assert.equal(row.rows[0].attached_message_id, null, 'the first claim must roll back with the message');
+
+  // And it is genuinely reusable, not just un-set.
+  const retry = await createMessage({ roomId: room.id, senderId: u.id, content: 'retry', attachments: [{ url: good }] });
+  assert.equal(retry.attachments.length, 1);
+});
+
+dbTest('hard-deleting a message releases its upload instead of deleting the record', async () => {
+  const u = user;
+  const url = `https://x/released-${Date.now()}.pdf`;
+  await seedUpload({ uploaderId: u.id, url });
+
+  const m = await createMessage({ roomId: room.id, senderId: u.id, content: 'doomed', attachments: [{ url }] });
+  await query('DELETE FROM messages WHERE id = $1', [m.id]);
+
+  const stillThere = await query('SELECT attached_message_id FROM file_uploads WHERE file_url = $1', [url]);
+  assert.equal(stillThere.rows.length, 1, 'ON DELETE SET NULL must keep the provenance row');
+  assert.equal(stillThere.rows[0].attached_message_id, null);
 });
 
 dbTest('searchMessages returns attachments, matching listMessages', async () => {

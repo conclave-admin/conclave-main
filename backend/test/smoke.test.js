@@ -74,7 +74,7 @@ const EXPECTED_ROUTES = [
   // notifications — 501 stubs
   ['GET', '/api/notifications', true],
   ['PATCH', '/api/notifications/seen', true],
-  // upload — 501 stub, but must be auth-guarded
+  // upload — implemented, but must be auth-guarded
   ['POST', '/api/upload', true],
 ];
 
@@ -258,9 +258,12 @@ test('the tasks and notifications stubs answer 501, not a fake success', async (
 test('unimplemented controllers throw 501 rather than returning fake data', async () => {
   // Controller-level, so the handler's own behaviour is checked directly rather
   // than through the auth layer.
+  //
+  // upload.uploadFile is deliberately absent: it is implemented now that
+  // POST /upload exists, so it no longer belongs in this list. It is covered by
+  // tests/upload.test.js instead.
   const tasks = require('../src/controllers/tasks.controller');
   const notifications = require('../src/controllers/notifications.controller');
-  const upload = require('../src/controllers/upload.controller');
 
   const cases = [
     ['tasks.createTask', tasks.createTask],
@@ -268,7 +271,6 @@ test('unimplemented controllers throw 501 rather than returning fake data', asyn
     ['tasks.updateTaskStatus', tasks.updateTaskStatus],
     ['notifications.listNotifications', notifications.listNotifications],
     ['notifications.markSeen', notifications.markSeen],
-    ['upload.uploadFile', upload.uploadFile],
   ];
 
   for (const [name, handler] of cases) {

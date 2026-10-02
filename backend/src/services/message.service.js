@@ -3,15 +3,16 @@ const ApiError = require('../utils/ApiError');
 
 // Kept in step with the multer limit in routes/upload.routes.js.
 const MAX_ATTACHMENTS = 10;
-const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 /**
- * Validate a client-supplied attachment list. Returns a normalised array.
+ * Validate a client-supplied attachment list. Returns a normalised array of
+ * `{ url }`.
  *
- * NOTE: `url` is still client-supplied, so this checks shape, not provenance.
- * Once the Cloudinary upload endpoint lands (BACKEND_TASKS.md item C) the
- * server should own the URL — ideally by looking it up from the upload
- * record rather than trusting whatever the client posts here.
+ * Since POST /upload (BACKEND_TASKS.md item C) the URL is a lookup key into
+ * `file_uploads`, not a value we store on trust — claimUploads() resolves the
+ * real filename/mime_type/size from the upload record inside the same
+ * transaction that inserts the message. So this only has to check shape: the
+ * client sends `url` alone, and anything else it sends is ignored.
  */
 function validateAttachments(attachments) {
   if (attachments === undefined || attachments === null) return [];
@@ -22,28 +23,18 @@ function validateAttachments(attachments) {
     throw new ApiError(400, `Too many attachments (max ${MAX_ATTACHMENTS})`);
   }
 
+  const urls = [];
   for (const a of attachments) {
-    const name = a && typeof a.filename === 'string' ? a.filename.trim() : '';
-    if (!name) {
-      throw new ApiError(400, 'Each attachment requires a filename');
+    if (!a || typeof a !== 'object') {
+      throw new ApiError(400, 'Each attachment must be an object with a url');
     }
     if (typeof a.url !== 'string' || !a.url.trim()) {
-      throw new ApiError(400, `Attachment "${name}" requires a url`);
+      throw new ApiError(400, 'Each attachment requires a url');
     }
-    if (typeof a.mime_type !== 'string' || !a.mime_type.trim()) {
-      throw new ApiError(400, `Attachment "${name}" requires a mime_type`);
-    }
-    if (a.size !== undefined && a.size !== null) {
-      if (!Number.isInteger(a.size) || a.size <= 0) {
-        throw new ApiError(400, `Attachment "${name}" has an invalid size`);
-      }
-      if (a.size > MAX_ATTACHMENT_BYTES) {
-        throw new ApiError(413, `Attachment "${name}" exceeds the 25MB limit`);
-      }
-    }
+    urls.push(a.url.trim());
   }
 
-  return attachments;
+  return urls;
 }
 
 /**
@@ -72,7 +63,7 @@ function serializeAttachment(row) {
  * @param {string} params.senderId - UUID of the sending user
  * @param {string} params.content   - message body text
  * @param {string} [params.replyToId] - UUID of the message being replied to
- * @param {Array}  [params.attachments] - array of { filename, url, mime_type, size }
+ * @param {Array}  [params.attachments] - array of { url } from POST /upload
  * @returns {object} The inserted message row enriched with sender info and attachments
  */
 async function createMessage({ roomId, senderId, content, replyToId, attachments }) {
@@ -130,12 +121,42 @@ async function createMessage({ roomId, senderId, content, replyToId, attachments
     );
     message = result.rows[0];
 
-    for (const a of cleanAttachments) {
+    // Claim each upload before inserting its attachment row. One statement does
+    // the lookup, the ownership check and the one-time-use check: the
+    // `attached_message_id IS NULL` predicate takes a row lock, so two messages
+    // sent concurrently cannot both win the same upload.
+    //
+    // Zero rows means one of three things — the URL was never uploaded, it
+    // belongs to somebody else, or it is already attached — and the client
+    // cannot tell which from outside. All three are the same failure here, so
+    // they share one message and the transaction rolls back.
+    for (const url of cleanAttachments) {
+      const claim = await client.query(
+        `UPDATE file_uploads
+            SET attached_message_id = $2
+          WHERE file_url = $1
+            AND uploader_id = $3
+            AND attached_message_id IS NULL
+          RETURNING filename, mime_type, size_bytes`,
+        [url, message.id, senderId],
+      );
+
+      if (claim.rows.length === 0) {
+        throw new ApiError(
+          400,
+          'Attachment is unavailable: it was never uploaded, was uploaded by another user, or is already attached to a message'
+        );
+      }
+
+      // filename/mime_type/size come from the upload record, never the request.
+      // Otherwise a client could attach someone else's real URL while claiming
+      // it is a PDF, and the stored metadata would be whatever it posted.
+      const owned = claim.rows[0];
       const attResult = await client.query(
         `INSERT INTO attachments (message_id, filename, file_url, file_type, size_bytes)
          VALUES ($1, $2, $3, $4, $5)
          RETURNING id, filename, file_url, file_type, size_bytes`,
-        [message.id, a.filename.trim(), a.url.trim(), a.mime_type.trim(), a.size ?? null],
+        [message.id, owned.filename, url, owned.mime_type, owned.size_bytes ?? null],
       );
       savedAttachments.push(attResult.rows[0]);
     }

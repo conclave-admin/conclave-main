@@ -61,7 +61,7 @@ on it.
 
 | Method | Path                          | Body                                             | Returns                    | Notes                                                                                                                                                                                                                                                                           |
 | ------ | ----------------------------- | ------------------------------------------------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | /messages                     | `{ roomId, content?, replyToId?, attachments? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. `attachments[]` is `{ filename, url, mime_type, size }`, max 10 files / 25MB each. ⚠️ `url` is currently client-supplied; prefer the upload endpoint (item C). |
+| POST   | /messages                     | `{ roomId, content?, replyToId?, attachments? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. `attachments[]` is `{ url }` only, max 10 files. Send the `url` returned by `POST /upload`; `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. |
 | GET    | /messages/room/:roomId        | `?before=<cursor>`                               | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. Feed it into "load older"; it is currently discarded client-side.                                                                                                                    |
 | GET    | /messages/room/:roomId/search | `?q=`                                            | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns `attachments` too.                                                                                                                                                                                                   |
 
@@ -154,10 +154,44 @@ A decision row:
 mapping belongs in the client. **Handle an unknown `type` without throwing** — a
 single unrecognised value should not take the page down.
 
-## Tasks, Notifications, Upload — not implemented
+## File upload
 
-All three return **501 Not Implemented**. They are not 200s with a placeholder
-body, so do not treat a success-shaped response as real data.
+| Method | Path    | Status | Body                                       | Returns |
+| ------ | ------- | ------ | ------------------------------------------ | ------- |
+| POST   | /upload | 201    | multipart `file`                           | `{ filename, url, mime_type, size }` |
+
+Auth required. 25MB maximum. The response is wrapped in the standard
+`{ success, data }` envelope, so read it from `data`.
+
+```json
+{
+  "success": true,
+  "data": {
+    "filename": "checklist.pdf",
+    "url": "https://res.cloudinary.com/…/checklist_abc123.pdf",
+    "mime_type": "application/pdf",
+    "size": 4096
+  }
+}
+```
+
+Errors: **400** no file · **413** over 25MB · **415** disallowed type · **502**
+Cloudinary unavailable · **503** not configured on this server.
+
+**Send only `url` back.** `POST /messages` takes `attachments: [{ url }]` and
+resolves `filename`, `mime_type` and `size` from the upload record, so any
+metadata you post is ignored. An upload can be attached to **exactly one
+message**, by the user who uploaded it — a second use is a 400.
+
+Accepted types: images (`jpeg`, `png`, `gif`, `webp`, `svg`), documents (`pdf`,
+plain text, markdown, csv), Word, Excel and PowerPoint (both `.docx`-style and
+legacy), `zip`, `gzip`, and audio (`mpeg`, `ogg`, `wav`, `webm`, `mp4`).
+**Video is not accepted yet.**
+
+## Tasks and Notifications — not implemented
+
+Both return **501 Not Implemented**. They are not 200s with a placeholder body,
+so do not treat a success-shaped response as real data.
 
 | Method | Path                  | Status | Planned                                                      |
 | ------ | --------------------- | ------ | ------------------------------------------------------------ |
@@ -166,7 +200,6 @@ body, so do not treat a success-shaped response as real data.
 | PATCH  | /tasks/:taskId/status | 501    | `{ status }` ∈ `open \| in_progress \| done`                 |
 | GET    | /notifications        | 501    | List + unread count                                          |
 | PATCH  | /notifications/seen   | 501    | Mark one or all seen                                         |
-| POST   | /upload               | 501    | multipart `file` → `{ filename, url, mime_type, size }`      |
 
 ## Not built yet
 

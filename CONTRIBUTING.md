@@ -56,7 +56,8 @@ socket layer, so the write path and everything emitted from it are yours.
    it is still text matching, and a display name is not an identity: renaming a
    user changes who gets mentioned. Add `message_mentions(message_id, user_id)`,
    parse from a client-supplied `mentionedUserIds`, and use it for the digest and
-   notifications. This is a new migration — the next number is `009`.
+   notifications. This is a new migration — the next number is `011`
+   (`009` is the notification actor column, `010` is file uploads).
 5. **Item I — Message edit, delete, reactions.** `edited_at` and `deleted_at` ship
    in every payload and `message_reactions` has a table but no routes. The read
    side already handles soft-deleted rows (content withheld, `is_deleted` set), so

@@ -21,9 +21,9 @@ Legend: DONE = shipped and verified. PARTIAL = shipped with a known problem. FIX
 | Sockets and presence                    | DONE (membership guards, no blocking KEYS, no phantom events)        |
 | Tasks                                   | OPEN (all three handlers are stubs; now return 501)                  |
 | Notifications                           | OPEN (both handlers are stubs; now return 501)                       |
-| File upload (Cloudinary)                | OPEN (handler is a stub; now returns 501)                            |
-| Migrations                              | DONE (runner is re-runnable; all 8 verified against a real Postgres) |
-| Tests                                   | DONE (39 tests: 17 no-database smoke, 22 integration on a real DB)   |
+| File upload (Cloudinary)                | DONE (real round trip verified; attachments are server-owned)       |
+| Migrations                              | DONE (runner is re-runnable; all 10 verified against a real Postgres) |
+| Tests                                   | DONE (57 tests: 17 no-database smoke, 40 on a real DB + Cloudinary)  |
 
 ### Verification status
 
@@ -38,9 +38,9 @@ What that verification found and changed:
 - **The `rooms.slug` backfill produces correct values on real data**, including the two cases most likely to break: a duplicate room name (`Product & Engineering` → `product-engineering` and `product-engineering-2`) and a name with nothing sluggable (`日本語` → `room`).
 - The `(created_at, id)` tuple cursor pages through tied timestamps without skipping; the per-room digest window returns only the unread room, where a single shared `MAX(last_seen_at)` would have returned nothing; `22P02`/`23503`/`23505` map as documented.
 
-**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all eight migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. It skips itself when Postgres is unreachable. `npm test` runs it alongside the existing no-database smoke suite — 39 tests total.
+**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all ten migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. `backend/tests/upload.test.js` does the same for the Cloudinary path, including a real upload round trip, and skips when credentials are absent. `npm test` runs both alongside the no-database smoke suite — 57 tests total.
 
-Two things that verification still cannot prove: the Cloudinary upload path (item C is a stub, so there is nothing to exercise), and behaviour under real production data volume — the queries were verified for correctness, not for query plans at scale.
+One thing that verification still cannot prove: behaviour under real production data volume. The queries were verified for correctness, not for query plans at scale.
 
 ### Migrations
 
@@ -57,9 +57,9 @@ Nine files, applied in filename order and recorded in `schema_migrations`. 001�
 | `007_decisions_search_includes_tags.sql` | GIN index on `decisions.tags`                                                    | tags were never searchable despite the docs claiming otherwise |
 | `008_add_rooms_slug.sql`                 | adds `rooms.slug`, backfills, disambiguates, `UNIQUE`                            | decisions rendered `#undefined`                                |
 | `009_add_notification_actor.sql`          | adds `notifications.actor_id`                                                    | a room invite could not say who invited you                    |
+| `010_add_file_uploads.sql`               | adds `file_uploads`, `UNIQUE` on `file_url`, partial index on unclaimed            | any member could persist an arbitrary string as a file URL     |
 
-Migration 009 took that number, so the ones still to come shift: item C
-(`file_uploads`) becomes 010, and item H (`message_mentions`) becomes 011.
+Item H (`message_mentions`) is the next migration and takes number `011`.
 
 Three of these are worth knowing about before you touch them:
 
@@ -172,9 +172,8 @@ Verified against real rows: a duplicate name yields `product-engineering` and `p
 ### Bug 8. `createMessage` rejects attachment-only messages (medium): FIXED
 
 - Content is now optional when attachments are present, so the file-only message in the preview fixtures can be sent. A message that is empty in both senses is still a 400.
-- Attachments are now validated: `filename`, `url` and `mime_type` are required, `size` must be a positive integer, capped at 25MB and 10 files per message.
-
-**Known limitation.** `url` is still client-supplied, so this validates shape, not provenance. The service should take URLs from the upload endpoint's records instead. That is not possible until the upload endpoint exists (item C); the code carries a comment saying so.
+- Attachments are validated for shape (up to 10 per message, each with a non-empty `url`).
+- **Provenance limitation resolved.** `url` is no longer trusted. `POST /upload` (item C) records every accepted file in `file_uploads`, and `createMessage` claims the upload inside the message transaction, taking `filename`, `mime_type` and `size` from the record rather than the request. An upload can only be attached once, and only by the user who uploaded it.
 
 ### Bug 9. Mention matching is unreliable (medium): FIXED (still a stopgap)
 
@@ -289,20 +288,23 @@ Also note the digest's task query filters on `rm.last_seen_at`, which now works,
 
 `addMember` already writes a `room_invite` row but never emits it, so this is the natural place to close that loop.
 
-### C. File upload (OPEN, blocks the composer's attach button)
+### C. File upload (DONE)
 
-`upload.controller.js` is a stub and now throws 501. Multer is wired with a 25 MB memory limit, and Cloudinary config exists but `.env` has empty keys.
+`POST /upload` stores a file in Cloudinary and records it in `file_uploads` (migration 010). It streams `req.file.buffer` via `upload_stream` with `resource_type: 'auto'` and returns `{ filename, url, mime_type, size }` in the standard `{ success, data }` envelope.
 
-Needed:
+Verified end to end against real Cloudinary and a real Postgres: a 1x1 PNG uploads, lands in `conclave/attachments/`, gets a `file_uploads` row, and attaches to exactly one message.
 
-- Stream `req.file.buffer` to `cloudinary.uploader.upload_stream` with `resource_type: 'auto'`.
-- Return `{ filename, url, mime_type, size }` in the same shape `createMessage` expects and `listMessages` returns.
-- Validate an allowlist of mime types and reject oversized files with a clear 413.
-- Optional: emit `upload-progress` for large files.
+Status codes: no file → 400, disallowed type → 415, over 25MB → 413 (multer), Cloudinary failure → 502, credentials absent → 503.
 
-**Already done ahead of this item:** oversize uploads are now a 413 rather than a 500, because the error middleware handles `MulterError` (was Bug 14). Malformed JSON bodies are a 400 too.
+**The allowlist** is 22 types — images (including SVG), documents, Word/Excel/PowerPoint, zip and gzip, and five audio types. **Video is held back** because 25 MB is a poor ceiling for it.
 
-**Still open after this item:** `createMessage` still trusts the client-supplied attachment `url`. Once upload exists, the service should look the URL up from the upload record instead of accepting it from the request (noted in Bug 8).
+**SVG is allowed and is safe here.** The client renders only the filename, never the URL, and `<img src>` does not execute script in an SVG. It would stop being safe if anything ever used `<object>`, `<embed>`, or inlined the markup. The residual risk is a user hosting branded content on the project's Cloudinary quota.
+
+**The provenance fix this unblocked** (Bug 8): `createMessage` no longer trusts a client-supplied URL. Clients send `attachments: [{ url }]` and nothing else; the service resolves `filename`, `mime_type` and `size` from the upload record inside the message transaction. A conditional `UPDATE ... WHERE file_url = $1 AND uploader_id = $2 AND attached_message_id IS NULL RETURNING ...` does the lookup, the ownership check and the one-time-use check in one statement, and takes a row lock so concurrent sends cannot both claim the same upload. Zero rows means unknown, someone else's, or already attached — all three are a 400 that rolls back the message, so a failed send leaves the upload claimable.
+
+**Known gap:** `mime_type` comes from the client-declared multipart `Content-Type`, so a client can label any file as an allowed type. Cloudinary stores the real bytes, so nothing executable is served as an image, but the recorded type can be inaccurate. Fixing it properly needs magic-byte sniffing (`file-type`), which was out of scope.
+
+**Still open:** the composer's attach button is not wired up (Isaac's lane) — the endpoint exists but nothing calls it. `upload-progress` was not implemented. Uploaded files that are never attached accumulate as orphans; a sweeper can use the partial index `idx_file_uploads_unclaimed`.
 
 ### D. Home page data (OPEN)
 
