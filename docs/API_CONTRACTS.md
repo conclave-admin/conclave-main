@@ -63,7 +63,11 @@ on it.
 | ------ | ----------------------------- | ------------------------------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | POST   | /messages                     | `{ roomId, content?, replyToId?, attachments?, mentionedUserIds? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. `attachments[]` is `{ url }` only, max 10 files. Send the `url` returned by `POST /upload`; `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. `mentionedUserIds[]` is the ids of users the message mentions — see below. |
 | GET    | /messages/room/:roomId        | `?before=<cursor>`                               | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. Feed it into "load older"; it is currently discarded client-side.                                                                                                                                                         |
-| GET    | /messages/room/:roomId/search | `?q=`                                            | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns `attachments` too.                                                                                                                                                                                                                                        |
+| GET    | /messages/room/:roomId/search | `?q=`                                            | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns the **same message shape** as `listMessages`, plus a `rank`.                                                                                                                                                                                          |
+| PATCH  | /messages/:messageId          | `{ content }`                                   | message                    | Author only, no time limit. Sets `edited_at`. Empty content is a 400 unless the message has an attachment. Mentions and notifications are **not** affected.                                                                                                                                        |
+| DELETE | /messages/:messageId          | —                                                | message                    | Author **or room admin**. Soft delete: sets `deleted_at` and overwrites `content` to NULL. Returns the tombstone (`is_deleted: true`).                                                                                                                                                                   |
+| PUT    | /messages/:messageId/reactions | `{ emoji }`                                    | message                    | Idempotent — reacting twice does not stack. `emoji` ∈ `👍 👎 🎉 ✅`; anything else is a 400.                                                                                                                                                                          |
+| DELETE | /messages/:messageId/reactions/:emoji | —                                    | message                    | Removes your own reaction. `emoji` must be URL-encoded. Removing an absent reaction succeeds.                                                                                                                                                                          |
 
 A message row is:
 
@@ -89,9 +93,17 @@ A message row is:
       "url": "https://…"
     }
   ],
-  "mentioned_user_ids": ["uuid"]
+  "mentioned_user_ids": ["uuid"],
+  "reactions": [
+    { "emoji": "👍", "count": 3, "user_ids": ["uuid", "…"], "reacted": true }
+  ]
 }
 ```
+
+⚠️ `reactions` is always an array — `[]` when there are none. It is aggregated in
+allowlist order, and `reacted` is **per viewer**: the same message legitimately
+reads `reacted: true` for one person and `false` for another. `user_ids` is present
+so you can show who reacted without a second request.
 
 ⚠️ A soft-deleted message is **kept in the timeline** with `content: null` and
 `is_deleted: true`, so ordering and replies hold. Render a tombstone.
@@ -323,7 +335,14 @@ an existing DM by user id, home summary, or a global cross-room search. See
 Server → client, as documented at the top of `backend/src/sockets/index.js`:
 `receive-message`, `user-online`, `user-offline`, `room-presence`,
 `room-typing`, `typing`, `stop-typing`, `message-read`, `task:updated`,
-`notification`, `notification:seen`, and `error:message`.
+`message:updated`, `message:deleted`, `message:reaction`, `notification`,
+`notification:seen`, and `error:message`.
+
+`message:updated`, `message:deleted` and `message:reaction` each carry the **whole
+message** under `{ message }`, emitted to the room. Replacing your copy from the
+event alone is enough — no refetch. `message:reaction` fires on both add and
+remove, and the message is re-read per change rather than a delta being pushed,
+because one person's reaction flips `reacted` for every other viewer.
 Errors are emitted on **`error:message`**, not `error` — Socket.IO reserves
 `error` for its own internals.
 

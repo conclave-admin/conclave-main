@@ -28,6 +28,15 @@ const presence = require('../services/presence.service');
 //   message-read       { roomId, messageId, userId }
 //   task:updated       { task }     emitted by POST /tasks and
 //                                   PATCH /tasks/:taskId/status
+//   message:updated    { message }  the whole edited row, from
+//                                   PATCH /messages/:messageId
+//   message:deleted    { message }  the whole tombstone row, from
+//                                   DELETE /messages/:messageId
+//   message:reaction   { message }  the whole row with reactions recomputed,
+//                                   from PUT/DELETE .../reactions. A reaction by
+//                                   anyone changes `reacted` for the viewer, so
+//                                   the message is re-read per change rather than
+//                                   a delta being pushed.
 //   notification       { notification }  a full row; clients append it to their
 //                                   list directly, so it is never a bare count
 //   notification:seen  { updated }  how many rows the caller just marked seen,

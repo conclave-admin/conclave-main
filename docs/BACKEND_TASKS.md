@@ -23,7 +23,7 @@ Legend: DONE = shipped and verified. PARTIAL = shipped with a known problem. FIX
 | Notifications                           | DONE (list, unread count, mark-seen; invites and mentions emitted)    |
 | File upload (Cloudinary)                | DONE (real round trip verified; attachments are server-owned)         |
 | Migrations                              | DONE (runner is re-runnable; all 11 verified against a real Postgres) |
-| Tests                                   | DONE (99 tests: 15 no-database smoke, 84 on a real DB + Cloudinary)   |
+| Tests                                   | DONE (121 tests: 15 no-database smoke, 106 on a real DB + Cloudinary) |
 
 ### Verification status
 
@@ -38,7 +38,7 @@ What that verification found and changed:
 - **The `rooms.slug` backfill produces correct values on real data**, including the two cases most likely to break: a duplicate room name (`Product & Engineering` → `product-engineering` and `product-engineering-2`) and a name with nothing sluggable (`日本語` → `room`).
 - The `(created_at, id)` tuple cursor pages through tied timestamps without skipping; the per-room digest window returns only the unread room, where a single shared `MAX(last_seen_at)` would have returned nothing; `22P02`/`23503`/`23505` map as documented.
 
-**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all twelve migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. `backend/tests/upload.test.js` does the same for the Cloudinary path, including a real upload round trip, and skips when credentials are absent. `npm test` runs both alongside the no-database smoke suite — 99 tests total.
+**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all thirteen migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. `backend/tests/upload.test.js` does the same for the Cloudinary path, including a real upload round trip, and skips when credentials are absent. `npm test` runs both alongside the no-database smoke suite — 121 tests total.
 
 One thing that verification still cannot prove: behaviour under real production data volume. The queries were verified for correctness, not for query plans at scale.
 
@@ -60,6 +60,7 @@ Nine files, applied in filename order and recorded in `schema_migrations`. 001�
 | `010_add_file_uploads.sql`               | adds `file_uploads`, `UNIQUE` on `file_url`, partial index on unclaimed          | any member could persist an arbitrary string as a file URL     |
 | `011_tasks_status_check.sql`             | `CHECK (status IN ('open','in_progress','done'))` on `tasks`                     | migration 002 only documented the values in a comment          |
 | `012_add_message_mentions.sql`           | adds `message_mentions`, composite PK, index leading on `user_id`                 | a display name is not an identity, so a rename redirected mentions |
+| `013_message_reactions_emoji_check.sql`  | `CHECK (emoji IN ('👍','👎','🎉','✅'))` on `message_reactions`                    | `emoji` was free text in a column the client renders as a chip    |
 
 Three of these are worth knowing about before you touch them:
 
@@ -370,9 +371,23 @@ This is also the open half of Bug 11 — registration is fully open today while 
 
 **The digest deliberately has no such fallback.** It reads `message_mentions` only, so a message from an older client simply has no rows and does not appear. Re-deriving mentions from text in the digest would reintroduce the rename bug on historical rows, which is where it matters most: a name may have changed since those messages were written. That asymmetry with `createMessage` is intentional.
 
-### I. Message edit, delete and reactions (OPEN)
+### I. Message edit, delete and reactions (DONE)
 
-The payloads already include `edited_at`, `deleted_at`, and there is a `message_reactions` table. Add `PATCH /messages/:id`, `DELETE /messages/:id` (soft delete, author or room admin), and reaction add/remove, with socket events so open clients update live.
+`PATCH /messages/:id`, `DELETE /messages/:id`, `PUT`/`DELETE /messages/:id/reactions`, with socket events so open clients update live. No table work was needed — `edited_at`, `deleted_at` and `message_reactions` all shipped in migration 001; only migration 013's `CHECK` was added.
+
+- **Edit is author-only, with no time limit.** A room admin gets no edit power: editing is not moderation, only deleting is. `edited_at` is set and content is trimmed.
+- **Mentions and notifications are immutable on edit.** Removing someone's name from the text does not unsend their notification — a notification cannot be recalled, and re-deriving mentions here would make the text authoritative again, undoing item H. Tested explicitly.
+- **Empty content is rejected unless the message has an attachment**, mirroring the create-time rule from Bug 8, so an attachment-less message cannot be blanked into meaninglessness.
+- **Delete is author or room admin** (`room_members.role`, matching `addMember` rather than the unused workspace `roles` table).
+- **Delete overwrites `content` to NULL.** Leaving retracted text in the column means anyone with SQL can still read it, which is not what "delete" means to the person who pressed the button. It also matches what `deleteMe` does to `display_name` and `email`. The read side already withheld the body, so overwriting changes nothing a client observes — only what the database still holds.
+- **The message stays in history as a tombstone**, so replies and ordering hold. `message_mentions` rows are left alone too: the digest already filters `deleted_at IS NULL`, so the message leaves digests correctly while its provenance survives a moderation action.
+- **A member of another room gets 404, not 403** — existence is not confirmed for someone who cannot see the message. A member who *can* see it but may not act on it gets 403, because hiding existence they already have helps nobody.
+- **Reactions require room membership but confer no extra power.** Reacting is not moderation, so an admin gets nothing special. The `UNIQUE (message_id, user_id, emoji)` constraint makes a repeat reaction idempotent.
+- **`reactions` is on the payload** from all six surfaces, aggregated in SQL order by allowlist rather than assembled client-side, with `reacted` computed per viewer — the same message legitimately reads differently for two people.
+
+**A heart is deliberately not a reaction.** `❤️` has two encodings, `U+2764` and `U+2764 U+FE0F`, and Postgres compares code points, so both insert successfully against a `UNIQUE (message_id, user_id, emoji)` constraint — verified, two rows for what looks like one reaction. The allowlist uses `👍 👎 🎉 ✅`, none of which has a variation-selector variant.
+
+**Fixed alongside:** `searchMessages` was not returning `edited_at`, `deleted_at` or `is_deleted`, while `listMessages` returned all three. A search result and a history row were already two different message shapes, and the gap only became visible once edit and delete existed — a tombstone could not be rendered from a search result because the field saying it was one was missing. Same shape-drift class as Bug 6, and cheaper to fix here than to leave for someone to trip over.
 
 **Partly ready:** the read side already handles soft-deleted rows correctly (Bug 7) — `listMessages` withholds the body and sets `is_deleted`, and `searchMessages` excludes them. So once the delete endpoint exists, it will behave. The client needs to render the tombstone.
 

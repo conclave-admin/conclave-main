@@ -58,6 +58,10 @@ const EXPECTED_ROUTES = [
   ['POST', '/api/messages', true],
   ['GET', '/api/messages/room/:roomId', true],
   ['GET', '/api/messages/room/:roomId/search', true],
+  ['PATCH', '/api/messages/:messageId', true],
+  ['DELETE', '/api/messages/:messageId', true],
+  ['PUT', '/api/messages/:messageId/reactions', true],
+  ['DELETE', '/api/messages/:messageId/reactions/:emoji', true],
   // decisions
   ['POST', '/api/decisions', true],
   ['GET', '/api/decisions', true],
@@ -288,6 +292,7 @@ test('every backend module loads without throwing', async () => {
     '../src/controllers/upload.controller',
     '../src/services/mention.service',
     '../src/services/notification.service',
+    '../src/services/reaction.service',
   ];
   for (const id of modules) {
     assert.doesNotThrow(() => require(id), `${id} failed to load`);

@@ -2,6 +2,7 @@ const { pool, query } = require('../config/db');
 const ApiError = require('../utils/ApiError');
 const { notifyAndEmit } = require('./notification.service');
 const { isMentioned } = require('./mention.service');
+const { attachReactions } = require('./reaction.service');
 
 // Kept in step with the multer limit in routes/upload.routes.js.
 const MAX_ATTACHMENTS = 10;
@@ -220,7 +221,10 @@ async function createMessage({ roomId, senderId, content, replyToId, attachments
   //    that exists.
   await notifyMentions({ message, mentionedIds, senderId, io });
 
-  return {
+  // Reactions are attached for the same reason the other payload fields are: all
+  // six surfaces return one message shape, and a message that was just created has
+  // none, so this is always [].
+  const [payload] = await attachReactions([{
     ...message,
     sender_name: sender.rows[0]?.display_name || null,
     sender_avatar: sender.rows[0]?.avatar_url || null,
@@ -228,7 +232,9 @@ async function createMessage({ roomId, senderId, content, replyToId, attachments
     // Exposed so the client can style a real mention rather than regex-matching
     // the text, and so a client can learn which ids a send actually resolved to.
     mentioned_user_ids: mentionedIds,
-  };
+  }], senderId);
+
+  return payload;
 }
 
 /**
@@ -321,4 +327,201 @@ async function notifyMentions({ message, mentionedIds, senderId, io }) {
   return notified;
 }
 
-module.exports = { createMessage };
+
+/**
+ * One query that loads a message and proves the caller may act on it.
+ *
+ * `requireAdmin` is how the two entry points differ: an author may always edit or
+ * delete their own message, while a room admin may act on anyone's. The
+ * membership join is what makes a message in a room you are not in a 404 rather
+ * than a 403 — the same reasoning as updateTaskStatus, so the endpoint does not
+ * confirm that an id exists somewhere you cannot see.
+ *
+ * @returns {object} the message row
+ */
+async function loadMessageForAction({ messageId, userId, requireAdmin = false }) {
+  const result = await query(
+    `SELECT m.id, m.room_id, m.sender_id, m.deleted_at,
+            (m.sender_id = $2) AS is_author,
+            (rm.role = 'admin') AS is_room_admin
+     FROM messages m
+     INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
+     WHERE m.id = $1`,
+    [messageId, userId],
+  );
+
+  if (result.rows.length === 0) {
+    throw new ApiError(404, 'Message not found');
+  }
+
+  const row = result.rows[0];
+  const permitted = requireAdmin
+    ? row.is_author || row.is_room_admin
+    : row.is_author;
+
+  if (!permitted) {
+    // 403 rather than 404 here: the message exists and you can see it, the issue
+    // is what you are allowed to do to it. Distinguishing that from the 404 above
+    // is deliberate — hiding existence you already know about helps nobody.
+    throw new ApiError(
+      403,
+      requireAdmin
+        ? 'Only the author or a room admin can delete this message'
+        : 'You can only edit your own messages',
+    );
+  }
+
+  return row;
+}
+
+/**
+ * Edit a message's text.
+ *
+ * Author-only, no time limit, and the whole body is replaced rather than patched.
+ *
+ * Mentions and notifications are deliberately left alone. A notification cannot
+ * be unsent, so editing "@Amina" out of a message must not silently rewrite who
+ * was told about it — and re-deriving mentions here would make the text the source
+ * of truth again, undoing item H. message_mentions rows and existing `mention`
+ * notifications both survive an edit, by design.
+ *
+ * `attachments` and `mentionedUserIds` are not editable: both are recorded facts
+ * about the send, not the current text.
+ *
+ * @returns {object} the updated message row
+ */
+async function editMessage({ messageId, userId, content }) {
+  if (typeof content !== 'string') {
+    throw new ApiError(400, 'content must be a string');
+  }
+  const trimmed = content.trim();
+
+  const existing = await loadMessageForAction({ messageId, userId });
+
+  if (existing.deleted_at) {
+    // A tombstone has nothing to edit. Allowing it would mean a deleted message
+    // could be brought back to life with content nobody else can see.
+    throw new ApiError(400, 'Cannot edit a deleted message');
+  }
+
+  // Same rule as createMessage (Bug 8): a message may be file-only, so empty
+  // content is only acceptable when there is an attachment carrying it.
+  if (!trimmed) {
+    const attachments = (
+      await query('SELECT 1 FROM attachments WHERE message_id = $1 LIMIT 1', [messageId])
+    ).rows;
+    if (attachments.length === 0) {
+      throw new ApiError(
+        400,
+        'content cannot be empty unless the message has an attachment',
+      );
+    }
+  }
+
+  const result = await query(
+    `UPDATE messages
+        SET content = $2, edited_at = NOW()
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING id, room_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at`,
+    [messageId, trimmed || null],
+  );
+
+  return result.rows[0];
+}
+
+/**
+ * Soft-delete a message. Author or room admin.
+ *
+ * `content` is overwritten rather than merely hidden. Leaving retracted text in
+ * the column means anyone with SQL can still read it, which is not what "delete"
+ * means to the person who pressed the button — and it matches what deleteMe
+ * already does to display_name and email. The read side already withheld the body
+ * via `CASE WHEN deleted_at IS NOT NULL`, so overwriting changes nothing a client
+ * can observe, only what the database still holds.
+ *
+ * Attachments and message_mentions rows are left in place. The digest already
+ * filters `deleted_at IS NULL`, so the message leaves digests correctly, and its
+ * Cloudinary asset and provenance are not destroyed by a moderation action. The
+ * message itself stays in history as a tombstone so replies and ordering hold.
+ *
+ * @returns {object} the updated message row
+ */
+async function deleteMessage({ messageId, userId }) {
+  const existing = await loadMessageForAction({ messageId, userId, requireAdmin: true });
+
+  const result = await query(
+    `UPDATE messages
+        SET deleted_at = NOW(), content = NULL
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING id, room_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at`,
+    [messageId],
+  );
+
+  // A concurrent delete by someone else already won. Reporting success is
+  // correct — the caller wanted it deleted, and it is — but there is nothing to
+  // return as changed.
+  return result.rows[0] || existing;
+}
+
+/**
+ * Add a reaction. Idempotent: reacting twice with the same emoji is not an error
+ * and does not stack.
+ *
+ * Room membership is required, but membership is not otherwise special — reacting
+ * is not a moderation action, so a room admin gets no additional power here.
+ *
+ * @returns {object} the reaction row
+ */
+async function addReaction({ messageId, userId, emoji }) {
+  const membership = await query(
+    `SELECT 1
+     FROM messages m
+     INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
+     WHERE m.id = $1 AND m.deleted_at IS NULL`,
+    [messageId, userId],
+  );
+  if (membership.rows.length === 0) {
+    // Covers "no such message", "not a member of that room", and "already
+    // deleted" as one 404 — a tombstone should not accept new reactions, and
+    // there is no useful distinction to draw for the caller.
+    throw new ApiError(404, 'Message not found');
+  }
+
+  // Qualified on the right-hand side: a bare `SET created_at = created_at` is
+  // rejected by Postgres as an ambiguous column reference. Written this way the
+  // timestamp of the ORIGINAL reaction is preserved when someone re-reacts with an
+  // emoji they already used, which is what "no change" should mean.
+  const result = await query(
+    `INSERT INTO message_reactions (message_id, user_id, emoji)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (message_id, user_id, emoji)
+     DO UPDATE SET created_at = message_reactions.created_at
+     RETURNING id, message_id, user_id, emoji, created_at`,
+    [messageId, userId, emoji],
+  );
+
+  return result.rows[0];
+}
+
+/**
+ * Remove one of the caller's reactions. Idempotent in effect: removing a
+ * reaction that is not there succeeds, because the caller wanted it gone.
+ *
+ * @returns {boolean} whether a row was actually removed
+ */
+async function removeReaction({ messageId, userId, emoji }) {
+  const result = await query(
+    `DELETE FROM message_reactions
+      WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
+    [messageId, userId, emoji],
+  );
+  return result.rowCount > 0;
+}
+
+module.exports = {
+  createMessage,
+  editMessage,
+  deleteMessage,
+  addReaction,
+  removeReaction,
+};

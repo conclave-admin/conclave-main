@@ -28,9 +28,10 @@ lane removes that crossing. It is now Michael's outright, not shared.
 Conclave from a chat clone, and they are the least built. This is the
 highest-leverage work available.
 
-**Current state: mostly done.** Decisions, digest, tasks, notifications, upload and
-structured mentions are all implemented. You also own `message.service.js` and the
-socket layer, so the write path and everything emitted from it are yours.
+**Current state: complete.** Decisions, digest, tasks, notifications, upload,
+structured mentions, and message edit/delete/reactions are all implemented. You
+also own `message.service.js` and the socket layer, so the write path and
+everything emitted from it are yours.
 
 **Owns going forward, in priority order:**
 
@@ -74,11 +75,17 @@ socket layer, so the write path and everything emitted from it are yours.
    when that hook starts sending them.** The digest has no such fallback on
    purpose: re-deriving mentions from text there would reintroduce the rename bug
    on historical rows.
-5. **Item I — Message edit, delete, reactions.** `edited_at` and `deleted_at` ship
-   in every payload and `message_reactions` has a table but no routes. The read
-   side already handles soft-deleted rows (content withheld, `is_deleted` set), so
-   once the delete endpoint exists it will behave. You own the write path, so
-   this one is entirely in your lane.
+5. **Item I — Message edit, delete, reactions.** DONE. `PATCH /messages/:id`,
+   `DELETE /messages/:id`, and `PUT`/`DELETE /messages/:id/reactions`, each
+   emitting the whole updated message so open clients need no refetch.
+   Edit is author-only with no time limit; delete is author **or room admin** and
+   overwrites `content` to NULL, so delete means delete rather than hide.
+   Reactions are constrained to `👍 👎 🎉 ✅` in the schema (migration 013).
+   `reactions` is on the payload from all six message surfaces.
+
+   That completes items C, A, B, H and I — the differentiator layer. Remaining in
+   this lane: global search (item E) below, and the temporary mention fallback
+   under item H.
 6. **Global search (Item E)** — or decide the navbar icon opens per-room search only.
 
 **Watch out for:**

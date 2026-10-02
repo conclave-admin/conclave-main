@@ -2012,6 +2012,510 @@ dbTest('a failed send leaves no mention rows behind', async () => {
   assert.equal(after, before, 'the mention insert must be inside the same transaction as the message');
 });
 
+// --- Message edit, delete, reactions (item I) --------------------------------
+
+/** An author in a room, plus a plain member and a room admin alongside. */
+async function messageFixture(prefix) {
+  const author = await authedAccount(`${prefix}-author@test.com`);
+  const member = await authedAccount(`${prefix}-member@test.com`);
+  const admin = await authedAccount(`${prefix}-admin@test.com`);
+  const room = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ($1, 'group', $2, $3) RETURNING id`,
+      [`ItemI ${prefix}`, author.userId, `itemi-${prefix}-${Math.floor(Math.random() * 1e9)}`],
+    )
+  ).rows[0];
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [room.id, author.userId]);
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [room.id, member.userId]);
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'admin')`, [room.id, admin.userId]);
+  return { author, member, admin, roomId: room.id };
+}
+
+async function sendMessage(token, roomId, content, extra = {}) {
+  const res = await fetch(`${baseUrl}/api/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ roomId, content, ...extra }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 201, body);
+  return JSON.parse(body).data;
+}
+
+// --- Edit --------------------------------------------------------------------
+
+dbTest('the author can edit their message, and edited_at is set', async () => {
+  const { author, roomId } = await messageFixture('edit');
+  const message = await sendMessage(author.token, roomId, 'original text');
+  assert.equal(message.edited_at, null, 'a fresh message is not edited');
+
+  const res = await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ content: '  corrected text  ' }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const edited = JSON.parse(body).data;
+
+  assert.equal(edited.content, 'corrected text', 'content is trimmed');
+  assert.ok(edited.edited_at, 'edited_at must be set');
+  assert.equal(edited.id, message.id, 'same message, edited in place');
+});
+
+dbTest('only the author can edit', async () => {
+  const { author, member, admin, roomId } = await messageFixture('editperm');
+  const message = await sendMessage(author.token, roomId, 'not yours');
+
+  // A room admin gets no edit power: editing is not moderation, only deleting is.
+  for (const [who, label] of [[member, 'a member'], [admin, 'a room admin']]) {
+    const res = await fetch(`${baseUrl}/api/messages/${message.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${who.token}` },
+      body: JSON.stringify({ content: 'hijacked' }),
+    });
+    assert.equal(res.status, 403, `${label} must not be able to edit`);
+  }
+
+  const after = (await query('SELECT content FROM messages WHERE id = $1', [message.id])).rows[0];
+  assert.equal(after.content, 'not yours', 'the content must be untouched');
+});
+
+dbTest('editing a deleted message is rejected', async () => {
+  const { author, roomId } = await messageFixture('editdeleted');
+  const message = await sendMessage(author.token, roomId, 'about to go');
+  await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${author.token}` },
+  });
+
+  const res = await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ content: 'back from the dead' }),
+  });
+  assert.equal(res.status, 400, 'a tombstone has nothing to edit');
+
+  const after = (await query('SELECT content, deleted_at FROM messages WHERE id = $1', [message.id])).rows[0];
+  assert.equal(after.content, null, 'a deleted message must not be resurrected with content');
+  assert.ok(after.deleted_at);
+});
+
+dbTest('emptying a message is rejected unless it has an attachment', async () => {
+  // Mirrors the create-time rule (Bug 8): a file-only message is valid, so empty
+  // content is only acceptable when an attachment carries it.
+  const { author, roomId } = await messageFixture('editempty');
+  const plain = await sendMessage(author.token, roomId, 'will be blanked');
+
+  const res = await fetch(`${baseUrl}/api/messages/${plain.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ content: '   ' }),
+  });
+  assert.equal(res.status, 400, 'an attachment-less message cannot be blanked');
+
+  // With a file attached, blanking the text is fine.
+  const upload = await seedUpload({ uploaderId: author.userId, url: `https://x/blank-${Date.now()}.pdf` });
+  const withFile = await sendMessage(author.token, roomId, 'has words', { attachments: [{ url: upload.file_url }] });
+
+  const okRes = await fetch(`${baseUrl}/api/messages/${withFile.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ content: '' }),
+  });
+  const body = await okRes.text();
+  assert.equal(okRes.status, 200, body);
+  assert.equal(JSON.parse(body).data.content, null, 'a file-only message may have null content');
+});
+
+dbTest('editing does not touch mention rows or notifications', async () => {
+  // A notification cannot be unsent, so removing the name must not rewrite who
+  // was told. This is the immutability guarantee item I was specified with.
+  const { author, roomId } = await messageFixture('editmention');
+  const target = await authedAccount('editmention-target@test.com');
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [roomId, target.userId]);
+
+  const message = await sendMessage(author.token, roomId, 'hey @you', { mentionedUserIds: [target.userId] });
+
+  const before = (await query('SELECT COUNT(*)::int n FROM message_mentions WHERE message_id = $1', [message.id])).rows[0].n;
+  const notifiedBefore = (await query('SELECT COUNT(*)::int n FROM notifications WHERE recipient_id = $1', [target.userId])).rows[0].n;
+  assert.equal(before, 1);
+  assert.equal(notifiedBefore, 1);
+
+  await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ content: 'the name is gone now' }),
+  });
+
+  const after = (await query('SELECT COUNT(*)::int n FROM message_mentions WHERE message_id = $1', [message.id])).rows[0].n;
+  const notifiedAfter = (await query('SELECT COUNT(*)::int n FROM notifications WHERE recipient_id = $1', [target.userId])).rows[0].n;
+  assert.equal(after, 1, 'mention rows survive an edit');
+  assert.equal(notifiedAfter, 1, 'the notification is not unsent');
+});
+
+dbTest('editing an unknown message is a 404, not a 403', async () => {
+  const { author } = await messageFixture('edit404');
+  const res = await fetch(`${baseUrl}/api/messages/11111111-2222-3333-4444-555555555555`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ content: 'ghost' }),
+  });
+  assert.equal(res.status, 404, 'a non-existent message must not be confirmed or denied as a permission problem');
+});
+
+// --- Delete ------------------------------------------------------------------
+
+dbTest('a room admin can delete anyone\'s message', async () => {
+  const { author, admin, roomId } = await messageFixture('deladmin');
+  const message = await sendMessage(author.token, roomId, 'moderated away');
+
+  const res = await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${admin.token}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  assert.equal(JSON.parse(body).data.is_deleted, true);
+});
+
+dbTest('an ordinary member cannot delete someone else\'s message', async () => {
+  const { author, member, roomId } = await messageFixture('delmember');
+  const message = await sendMessage(author.token, roomId, 'safe');
+
+  const res = await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${member.token}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 403, `expected 403, got ${res.status}: ${body}`);
+
+  const after = (await query('SELECT deleted_at FROM messages WHERE id = $1', [message.id])).rows[0];
+  assert.equal(after.deleted_at, null, 'must still be live');
+});
+
+dbTest('delete overwrites the content rather than only hiding it', async () => {
+  // Anyone with SQL could otherwise still read retracted text, which is not what
+  // "delete" means to the person who pressed the button.
+  const { author, roomId } = await messageFixture('delwipe');
+  const message = await sendMessage(author.token, roomId, 'SECRET TEXT that must not survive');
+
+  await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${author.token}` },
+  });
+
+  const row = (await query('SELECT content, deleted_at FROM messages WHERE id = $1', [message.id])).rows[0];
+  assert.equal(row.content, null, 'the column itself must be overwritten');
+  assert.ok(row.deleted_at);
+});
+
+dbTest('a deleted message stays in history as a tombstone, with ordering intact', async () => {
+  // The read side already withholds the body and sets is_deleted, so replies and
+  // ordering must keep working after the write side lands.
+  const { author, member, roomId } = await messageFixture('deltomb');
+  const first = await sendMessage(author.token, roomId, 'first');
+  const doomed = await sendMessage(author.token, roomId, 'second, doomed');
+  const reply = await sendMessage(author.token, roomId, 'replying', { replyToId: doomed.id });
+
+  await fetch(`${baseUrl}/api/messages/${doomed.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${author.token}` },
+  });
+
+  const res = await fetch(`${baseUrl}/api/messages/room/${roomId}`, {
+    headers: { authorization: `Bearer ${member.token}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const { messages } = JSON.parse(body).data;
+
+  assert.equal(messages.length, 3, 'the tombstone must remain in the timeline');
+  const tomb = messages.find((m) => m.id === doomed.id);
+  assert.equal(tomb.is_deleted, true);
+  assert.equal(tomb.content, null, 'the body is withheld');
+
+  // And the reply that pointed at it still resolves.
+  const replyRow = messages.find((m) => m.id === reply.id);
+  assert.equal(replyRow.reply_to_id, doomed.id, 'reply ordering must not break');
+});
+
+dbTest('a member of another room gets 404 for a message they cannot see', async () => {
+  const { author, roomId } = await messageFixture('delscope');
+  const outsider = await authedAccount('del-outsider@test.com');
+  const message = await sendMessage(author.token, roomId, 'private');
+
+  const res = await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${outsider.token}` },
+  });
+  assert.equal(res.status, 404, 'existence must not be confirmed for someone outside the room');
+});
+
+dbTest('a deleted message drops out of the digest but keeps its mention rows', async () => {
+  const { author, roomId } = await messageFixture('deldigest');
+  const target = await authedAccount('deldigest-target@test.com');
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [roomId, target.userId]);
+
+  const message = await sendMessage(author.token, roomId, 'a digest needle', { mentionedUserIds: [target.userId] });
+  await query(
+    `UPDATE room_members SET last_seen_at = NOW() - interval '1 day' WHERE room_id = $1 AND user_id = $2`,
+    [roomId, target.userId],
+  );
+
+  const before = JSON.parse((await (await fetch(`${baseUrl}/api/digest/room/${roomId}`, {
+    headers: { authorization: `Bearer ${target.token}` },
+  })).text())).data.items;
+  assert.ok(before.some((i) => i.type === 'mention' && i.id === message.id));
+
+  await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${author.token}` },
+  });
+
+  const after = JSON.parse((await (await fetch(`${baseUrl}/api/digest/room/${roomId}`, {
+    headers: { authorization: `Bearer ${target.token}` },
+  })).text())).data.items;
+  assert.ok(!after.some((i) => i.id === message.id), 'a deleted message must not appear in the digest');
+
+  // The rows survive: a moderation action should not destroy provenance, and the
+  // digest already filters deleted_at so nothing reads them.
+  const rows = (await query('SELECT COUNT(*)::int n FROM message_mentions WHERE message_id = $1', [message.id])).rows[0].n;
+  assert.equal(rows, 1, 'mention rows are left in place');
+});
+
+// --- Reactions ---------------------------------------------------------------
+
+const LIKE = '\u{1F44D}';
+const TADA = '\u{1F389}';
+const CHECK_MARK = '\u{2705}';
+const BANANA = '\u{1F34C}';
+
+dbTest('reactions aggregate, and reacted is true only for who reacted', async () => {
+  const { author, member, admin, roomId } = await messageFixture('react');
+  const message = await sendMessage(author.token, roomId, 'react to me');
+
+  for (const who of [author, member, admin]) {
+    const res = await fetch(`${baseUrl}/api/messages/${message.id}/reactions`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${who.token}` },
+      body: JSON.stringify({ emoji: LIKE }),
+    });
+    assert.equal(res.status, 200, await res.clone().text());
+  }
+  await fetch(`${baseUrl}/api/messages/${message.id}/reactions`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ emoji: TADA }),
+  });
+
+  const asAuthor = await (await fetch(`${baseUrl}/api/messages/room/${roomId}`, {
+    headers: { authorization: `Bearer ${author.token}` },
+  })).json();
+  const forAuthor = asAuthor.data.messages.find((m) => m.id === message.id);
+
+  const likeAuthor = forAuthor.reactions.find((r) => r.emoji === LIKE);
+  assert.equal(likeAuthor.count, 3, 'three people reacted');
+  assert.equal(likeAuthor.reacted, true, 'the author did react');
+  assert.equal(likeAuthor.user_ids.length, 3);
+
+  const tadaAuthor = forAuthor.reactions.find((r) => r.emoji === TADA);
+  assert.equal(tadaAuthor.count, 1);
+
+  // Order follows the allowlist, not insertion order.
+  assert.deepEqual(forAuthor.reactions.map((r) => r.emoji), [LIKE, TADA]);
+
+  // And the same message reads differently for a different viewer.
+  const asMember = await (await fetch(`${baseUrl}/api/messages/room/${roomId}`, {
+    headers: { authorization: `Bearer ${member.token}` },
+  })).json();
+  const forMember = asMember.data.messages.find((m) => m.id === message.id);
+  const likeMember = forMember.reactions.find((r) => r.emoji === LIKE);
+  assert.equal(likeMember.count, 3, 'counts are shared');
+  assert.equal(likeMember.reacted, true, 'the member did react');
+});
+
+dbTest('reacting twice is idempotent and does not stack', async () => {
+  const { author, roomId } = await messageFixture('reacttwice');
+  const message = await sendMessage(author.token, roomId, 'react twice');
+
+  for (let i = 0; i < 3; i += 1) {
+    const res = await fetch(`${baseUrl}/api/messages/${message.id}/reactions`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+      body: JSON.stringify({ emoji: LIKE }),
+    });
+    assert.equal(res.status, 200, 'a repeated reaction must not error');
+  }
+
+  const rows = (await query('SELECT COUNT(*)::int n FROM message_reactions WHERE message_id = $1 AND user_id = $2', [message.id, author.userId])).rows[0].n;
+  assert.equal(rows, 1, 'one row, not three');
+});
+
+dbTest('removing a reaction works, and removing twice is harmless', async () => {
+  const { author, roomId } = await messageFixture('reactremove');
+  const message = await sendMessage(author.token, roomId, 'unreact me');
+
+  await fetch(`${baseUrl}/api/messages/${message.id}/reactions`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ emoji: CHECK_MARK }),
+  });
+
+  // Percent-encoded: the emoji is multi-byte and arrives in the path.
+  const url = `${baseUrl}/api/messages/${message.id}/reactions/${encodeURIComponent(CHECK_MARK)}`;
+  const res = await fetch(url, { method: 'DELETE', headers: { authorization: `Bearer ${author.token}` } });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  assert.deepEqual(JSON.parse(body).data.reactions, [], 'the chip is gone');
+
+  const again = await fetch(url, { method: 'DELETE', headers: { authorization: `Bearer ${author.token}` } });
+  assert.equal(again.status, 200, 'removing an absent reaction is not an error');
+});
+
+dbTest('a disallowed emoji is rejected by the controller and by the database', async () => {
+  const { author, roomId } = await messageFixture('reactallow');
+  const message = await sendMessage(author.token, roomId, 'bad emoji');
+
+  const res = await fetch(`${baseUrl}/api/messages/${message.id}/reactions`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ emoji: BANANA }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 400, `expected 400, got ${res.status}: ${body}`);
+
+  // The controller check is not the guarantee — the CHECK constraint is, because a
+  // service or script bypassing the controller would otherwise be unconstrained.
+  await assert.rejects(
+    () => query(
+      `INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3)`,
+      [message.id, author.userId, BANANA],
+    ),
+    (err) => err.code === '23514',
+    'a raw insert of a disallowed emoji must be rejected by the schema',
+  );
+});
+
+dbTest('reacting in a room you are not in is a 404', async () => {
+  const { author, roomId } = await messageFixture('reactscope');
+  const outsider = await authedAccount('react-outsider@test.com');
+  const message = await sendMessage(author.token, roomId, 'not for you');
+
+  const res = await fetch(`${baseUrl}/api/messages/${message.id}/reactions`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${outsider.token}` },
+    body: JSON.stringify({ emoji: LIKE }),
+  });
+  assert.equal(res.status, 404, 'existence must not be confirmed outside the room');
+});
+
+dbTest('a deleted message accepts no new reactions', async () => {
+  const { author, member, roomId } = await messageFixture('reactdeleted');
+  const message = await sendMessage(author.token, roomId, 'tombstone chip');
+  await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${author.token}` },
+  });
+
+  const res = await fetch(`${baseUrl}/api/messages/${message.id}/reactions`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${member.token}` },
+    body: JSON.stringify({ emoji: LIKE }),
+  });
+  assert.equal(res.status, 404, 'a tombstone should not collect new reactions');
+});
+
+dbTest('reactions: [] appears on every message surface', async () => {
+  const { author, roomId } = await messageFixture('reactpayload');
+  const needle = `reactpayload${Date.now()}`;
+  const message = await sendMessage(author.token, roomId, `${needle} nothing yet`);
+
+  assert.deepEqual(message.reactions, [], 'createMessage');
+
+  const listed = await (await fetch(`${baseUrl}/api/messages/room/${roomId}`, {
+    headers: { authorization: `Bearer ${author.token}` },
+  })).json();
+  const fromList = listed.data.messages.find((m) => m.id === message.id);
+  assert.deepEqual(fromList.reactions, [], 'listMessages');
+
+  const searched = await (await fetch(`${baseUrl}/api/messages/room/${roomId}/search?q=${needle}`, {
+    headers: { authorization: `Bearer ${author.token}` },
+  })).json();
+  const fromSearch = searched.data.messages.find((m) => m.id === message.id);
+  assert.deepEqual(fromSearch.reactions, [], 'searchMessages');
+});
+
+dbTest('searchMessages returns the same message shape as listMessages', async () => {
+  // The shape gap that Bug 6 describes: search omitted edited_at, deleted_at and
+  // is_deleted, so a tombstone could not be rendered from a search result.
+  const { author, roomId } = await messageFixture('shapesearch');
+  const needle = `shapesearch${Date.now()}`;
+  const edited = await sendMessage(author.token, roomId, `${needle} edited soon`);
+  await fetch(`${baseUrl}/api/messages/${edited.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ content: `${needle} edited` }),
+  });
+
+  const listed = await (await fetch(`${baseUrl}/api/messages/room/${roomId}`, {
+    headers: { authorization: `Bearer ${author.token}` },
+  })).json();
+  const fromList = listed.data.messages.find((m) => m.id === edited.id);
+
+  const searched = await (await fetch(`${baseUrl}/api/messages/room/${roomId}/search?q=${needle}`, {
+    headers: { authorization: `Bearer ${author.token}` },
+  })).json();
+  const fromSearch = searched.data.messages.find((m) => m.id === edited.id);
+
+  assert.deepEqual(
+    Object.keys(fromSearch).filter((k) => k !== 'rank').sort(),
+    Object.keys(fromList).sort(),
+    'search and history must agree on every field but rank',
+  );
+  assert.ok(fromSearch.edited_at, 'search must expose edited_at');
+  assert.ok('is_deleted' in fromSearch, 'search must expose is_deleted');
+  assert.deepEqual(fromSearch.mentioned_user_ids, [], 'and the mention field');
+});
+
+dbTest('the edit and reaction responses carry the full message shape', async () => {
+  const { author, roomId } = await messageFixture('shaperesponse');
+  const message = await sendMessage(author.token, roomId, 'shape check');
+
+  const editRes = await fetch(`${baseUrl}/api/messages/${message.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ content: 'shape check edited' }),
+  });
+  const edited = (await editRes.json()).data;
+
+  const reactRes = await fetch(`${baseUrl}/api/messages/${message.id}/reactions`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${author.token}` },
+    body: JSON.stringify({ emoji: TADA }),
+  });
+  const reacted = (await reactRes.json()).data;
+
+  const listed = await (await fetch(`${baseUrl}/api/messages/room/${roomId}`, {
+    headers: { authorization: `Bearer ${author.token}` },
+  })).json();
+  const fromList = listed.data.messages.find((m) => m.id === message.id);
+
+  const expected = Object.keys(fromList).sort();
+  assert.deepEqual(Object.keys(edited).sort(), expected, 'edit must return the same shape as a history row');
+  assert.deepEqual(Object.keys(reacted).sort(), expected, 'a reaction must too');
+  assert.ok(edited.sender_name, 'including resolved sender metadata');
+  assert.deepEqual(edited.attachments, [], 'and the attachments array');
+});
+
+dbTest('the heartbeat and event surface still loads after adding message events', async () => {
+  // Cheap guard that the socket module's documented list stayed loadable after
+  // three more event names were added to its header.
+  const registerSocketHandlers = require('../src/sockets');
+  assert.equal(typeof registerSocketHandlers, 'function');
+});
+
 // --- Decisions search (Bug 5) ------------------------------------------------
 
 dbTest('decision tags are searchable, and title/body are still ranked', async () => {

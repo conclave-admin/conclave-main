@@ -2,7 +2,14 @@ const { query } = require("../config/db");
 const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
-const { createMessage } = require("../services/message.service");
+const {
+  createMessage,
+  editMessage,
+  deleteMessage,
+  addReaction,
+  removeReaction,
+} = require("../services/message.service");
+const { assertAllowedEmoji, attachReactions } = require("../services/reaction.service");
 
 const PAGE_SIZE = 50;
 
@@ -119,14 +126,70 @@ const listMessages = asyncHandler(async (req, res) => {
 
   const result = await query(sql, params);
 
-  // 3. Return with cursor for the next page
-  const messages = result.rows;
+  // 3. Attach reactions, then return with the cursor for the next page.
+  //    One extra query for the whole page, not one per message.
+  const messages = await attachReactions(result.rows, req.user.id);
   const last = messages[messages.length - 1];
   const nextCursor =
     messages.length === PAGE_SIZE && last ? `${last.created_at}|${last.id}` : null;
 
   return ok(res, { messages, nextCursor });
 });
+
+/**
+ * Load one message in the same shape listMessages returns, with sender metadata
+ * and reactions resolved.
+ *
+ * The edit/delete/reaction endpoints re-read through this rather than returning
+ * the UPDATE ... RETURNING row, so all five surfaces hand the client one message
+ * shape. Returning the raw updated row would have reintroduced exactly the drift
+ * that Bug 6 describes, one endpoint at a time.
+ */
+async function getMessagePayload(messageId, viewerId) {
+  const result = await query(
+    `SELECT m.id, m.room_id, m.sender_id,
+            u.display_name AS sender_name,
+            u.avatar_url   AS sender_avatar,
+            CASE WHEN m.deleted_at IS NOT NULL THEN NULL ELSE m.content END AS content,
+            m.deleted_at IS NOT NULL AS is_deleted,
+            m.reply_to_id,
+            m.edited_at,
+            m.deleted_at,
+            m.created_at,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id',        a.id,
+                  'filename',  a.filename,
+                  'size',      a.size_bytes,
+                  'mime_type', a.file_type,
+                  'url',       a.file_url
+                )
+              ) FILTER (WHERE a.id IS NOT NULL),
+              '[]'
+            ) AS attachments,
+            COALESCE(
+              (SELECT json_agg(mm.user_id)
+                 FROM message_mentions mm
+                WHERE mm.message_id = m.id),
+              '[]'
+            ) AS mentioned_user_ids
+     FROM messages m
+     INNER JOIN users u ON u.id = m.sender_id
+     LEFT JOIN attachments a ON a.message_id = m.id
+     WHERE m.id = $1
+     GROUP BY m.id, m.room_id, m.sender_id, u.display_name, u.avatar_url,
+              m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at`,
+    [messageId],
+  );
+
+  if (result.rows.length === 0) {
+    throw new ApiError(404, "Message not found");
+  }
+
+  const [message] = await attachReactions(result.rows, viewerId);
+  return message;
+}
 
 // ---------- searchMessages ----------
 // Full-text search across a room's messages using Postgres tsvector.
@@ -154,6 +217,14 @@ const searchMessages = asyncHandler(async (req, res) => {
   //    mirrors listMessages so a hit on a file message still renders its
   //    file card (BACKEND_TASKS.md Bug 7 and the listMessages/searchMessages
   //    shape gap).
+  //
+  //    edited_at, deleted_at and is_deleted are selected here because they were
+  //    NOT, while listMessages returned all three. So a search result and a
+  //    history row were already two different message shapes, and the gap only
+  //    became visible once edit and delete existed — a tombstone could not render
+  //    from a search result because the field saying it was a tombstone was
+  //    absent. Same shape-drift class as Bug 6, folded in here rather than left
+  //    for someone to trip over.
   const result = await query(
     `SELECT
        m.id,
@@ -163,6 +234,9 @@ const searchMessages = asyncHandler(async (req, res) => {
        u.avatar_url   AS sender_avatar,
        m.content,
        m.reply_to_id,
+       m.edited_at,
+       m.deleted_at,
+       m.deleted_at IS NOT NULL AS is_deleted,
        m.created_at,
        COALESCE(
          json_agg(
@@ -196,13 +270,105 @@ const searchMessages = asyncHandler(async (req, res) => {
        AND m.deleted_at IS NULL
        AND to_tsvector('english', m.content) @@ plainto_tsquery('english', $2)
      GROUP BY m.id, m.room_id, m.sender_id, u.display_name, u.avatar_url,
-              m.content, m.reply_to_id, m.created_at
+              m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
      ORDER BY rank DESC, m.created_at DESC
      LIMIT 50`,
     [roomId, q.trim()],
   );
 
-  return ok(res, { messages: result.rows, query: q.trim() });
+  return ok(res, {
+    messages: await attachReactions(result.rows, req.user.id),
+    query: q.trim(),
+  });
 });
 
-module.exports = { sendMessage, listMessages, searchMessages };
+
+// ---------- editMessage ----------
+// PATCH /messages/:id — author-only, no time limit. Replaces the body wholesale.
+const editMessageHandler = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const { content } = req.body;
+
+  await editMessage({ messageId, userId: req.user.id, content });
+
+  // Re-read the full row rather than trusting the UPDATE ... RETURNING, so the
+  // response has exactly the shape listMessages returns — including sender
+  // metadata and the resolved reactions. Emitting the whole message is what lets
+  // a socket client replace its copy without a second request.
+  const message = await getMessagePayload(messageId, req.user.id);
+
+  const io = req.app.get("io");
+  if (io) {
+    io.to(message.room_id).emit("message:updated", { message });
+  }
+
+  return ok(res, message);
+});
+
+// ---------- deleteMessage ----------
+// DELETE /messages/:id — author or room admin. Soft delete; content is overwritten.
+const deleteMessageHandler = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+
+  const message = await deleteMessage({ messageId, userId: req.user.id });
+
+  // Re-read for the full shape. The tombstone is what clients swap in, and it
+  // carries is_deleted so the client knows to render one.
+  const payload = await getMessagePayload(message.room_id && message.id, req.user.id);
+
+  const io = req.app.get("io");
+  if (io) {
+    io.to(payload.room_id).emit("message:deleted", { message: payload });
+  }
+
+  return ok(res, payload);
+});
+
+// ---------- addReaction ----------
+// PUT /messages/:id/reactions — idempotent. Reacting twice does not stack.
+const addReactionHandler = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const emoji = assertAllowedEmoji((req.body || {}).emoji);
+
+  await addReaction({ messageId, userId: req.user.id, emoji });
+
+  const message = await getMessagePayload(messageId, req.user.id);
+
+  const io = req.app.get("io");
+  if (io) {
+    io.to(message.room_id).emit("message:reaction", { message });
+  }
+
+  return ok(res, message);
+});
+
+// ---------- removeReaction ----------
+// DELETE /messages/:id/reactions/:emoji — removes the caller's own reaction.
+const removeReactionHandler = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  // The emoji arrives percent-encoded in the path, and it is a multi-byte
+  // character — so it must be decoded before the allowlist comparison, or a
+  // legitimate 👍 fails the check as "%F0%9F%91%8D".
+  const emoji = assertAllowedEmoji(decodeURIComponent(req.params.emoji));
+
+  await removeReaction({ messageId, userId: req.user.id, emoji });
+
+  const message = await getMessagePayload(messageId, req.user.id);
+
+  const io = req.app.get("io");
+  if (io) {
+    io.to(message.room_id).emit("message:reaction", { message });
+  }
+
+  return ok(res, message);
+});
+
+module.exports = {
+  sendMessage,
+  listMessages,
+  searchMessages,
+  editMessage: editMessageHandler,
+  deleteMessage: deleteMessageHandler,
+  addReaction: addReactionHandler,
+  removeReaction: removeReactionHandler,
+};
