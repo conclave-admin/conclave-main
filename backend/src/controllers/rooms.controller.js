@@ -2,6 +2,11 @@ const { pool, query } = require("../config/db");
 const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
+const {
+  createNotification,
+  presentNotification,
+  emitNotification,
+} = require("../services/notification.service");
 
 // The five types named in the rooms.type schema comment. `public` and
 // `private` were previously rejected even though RoomList.jsx draws a Hash and
@@ -10,7 +15,8 @@ const ApiError = require("../utils/ApiError");
 // constraint — worth adding once there is a database to validate against.
 const VALID_TYPES = ["dm", "group", "public", "private", "department"];
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Mirrors the slugify expression in migration 008 so a room created now and a
 // room backfilled then produce identical slugs.
@@ -19,9 +25,9 @@ const SLUG_MAX_ATTEMPTS = 10;
 function slugify(name) {
   const base = String(name)
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return base || 'room';
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return base || "room";
 }
 
 // Allocate a slug that no other room holds. rooms.name is not unique, so
@@ -32,10 +38,12 @@ async function allocateSlug(client, name) {
   const base = slugify(name);
   for (let attempt = 1; attempt <= SLUG_MAX_ATTEMPTS; attempt += 1) {
     const candidate = attempt === 1 ? base : `${base}-${attempt}`;
-    const { rows } = await client.query('SELECT 1 FROM rooms WHERE slug = $1', [candidate]);
+    const { rows } = await client.query("SELECT 1 FROM rooms WHERE slug = $1", [
+      candidate,
+    ]);
     if (rows.length === 0) return candidate;
   }
-  throw new ApiError(409, 'Could not allocate a unique room slug');
+  throw new ApiError(409, "Could not allocate a unique room slug");
 }
 
 // Find an existing 2-member DM between two users, so repeated calls return
@@ -75,9 +83,14 @@ const createRoom = asyncHandler(async (req, res) => {
   }
   const requested = (memberIds || []).filter((id) => id !== req.user.id);
 
-  const malformed = requested.filter((id) => typeof id !== "string" || !UUID_RE.test(id));
+  const malformed = requested.filter(
+    (id) => typeof id !== "string" || !UUID_RE.test(id),
+  );
   if (malformed.length > 0) {
-    throw new ApiError(400, `memberIds must all be UUIDs (${malformed.length} invalid)`);
+    throw new ApiError(
+      400,
+      `memberIds must all be UUIDs (${malformed.length} invalid)`,
+    );
   }
 
   // For DM rooms, ensure exactly 1 other member is provided
@@ -105,7 +118,10 @@ const createRoom = asyncHandler(async (req, res) => {
       const foundIds = new Set(found.map((u) => u.id));
       const missing = requested.filter((id) => !foundIds.has(id));
       if (missing.length > 0) {
-        throw new ApiError(400, `Unknown or deleted user(s): ${missing.join(", ")}`);
+        throw new ApiError(
+          400,
+          `Unknown or deleted user(s): ${missing.join(", ")}`,
+        );
       }
     }
 
@@ -299,12 +315,16 @@ const addMember = asyncHandler(async (req, res) => {
   if (!room_type) throw new ApiError(404, "Room not found");
   // A soft-deleted user still has a row, so without the deleted_at check they
   // could be added to rooms and show up as "Deleted user" members.
-  if (!display_name) throw new ApiError(404, "User not found or has been deleted");
-  if (!caller_role) throw new ApiError(403, "You are not a member of this room");
-  if (caller_role !== "admin") throw new ApiError(403, "Only room admins can add members");
+  if (!display_name)
+    throw new ApiError(404, "User not found or has been deleted");
+  if (!caller_role)
+    throw new ApiError(403, "You are not a member of this room");
+  if (caller_role !== "admin")
+    throw new ApiError(403, "Only room admins can add members");
 
   // 2. Insert the member + create notification in a single transaction.
   const client = await pool.connect();
+  let inviteRow;
   try {
     await client.query("BEGIN");
 
@@ -320,11 +340,21 @@ const addMember = asyncHandler(async (req, res) => {
       throw new ApiError(409, "User is already a member of this room");
     }
 
-    await client.query(
-      `INSERT INTO notifications (recipient_id, type, reference_id)
-       VALUES ($1, 'room_invite', $2)`,
-      [userId, roomId],
-    );
+    // Record who invited, so the notification can read "Victor invited you"
+    // rather than just naming the room. The inviter is stored nowhere else, so
+    // without this column the information is lost the moment this row is written.
+    //
+    // Written through the service rather than as raw SQL so there is one
+    // type-validated path into this table, and so it enlists in this transaction
+    // via the service's `db` parameter — the membership and its notification
+    // commit together or not at all.
+    inviteRow = await createNotification({
+      recipientId: userId,
+      type: "room_invite",
+      referenceId: roomId,
+      actorId: req.user.id,
+      db: client,
+    });
 
     await client.query("COMMIT");
   } catch (err) {
@@ -333,6 +363,12 @@ const addMember = asyncHandler(async (req, res) => {
   } finally {
     client.release();
   }
+
+  // Resolve and push only after the commit. Emitting inside the transaction would
+  // tell the invitee about a membership that could still roll back — and this row
+  // sat unreachable for the whole of item A, so actually sending it is the point.
+  const presented = await presentNotification(inviteRow);
+  emitNotification(req.app.get("io"), userId, presented);
 
   return ok(
     res,

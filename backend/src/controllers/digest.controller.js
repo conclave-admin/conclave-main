@@ -13,25 +13,10 @@ const ApiError = require('../utils/ApiError');
 // v2: hand that same query result to the Claude API as context and ask
 // for a short narrative summary instead of a raw list.
 
-// Stopgap mention matching (BACKEND_TASKS.md Bug 9). Matching raw text with
-// ILIKE is wrong in two ways: '%' and '_' inside a display name act as
-// wildcards, and a plain substring match means a user named "Al" matches
-// "@Alice". Escape the name for POSIX regex and require a non-word
-// character after it, which gives a real word boundary.
-//
-// Replaced entirely by the message_mentions table (BACKEND_TASKS.md item H).
-function mentionPattern(displayName) {
-  const escaped = displayName.replace(/[.*+?^${}()|[\]\\\-]/g, '\\$&');
-  // Postgres uses POSIX regex, which has no lookahead, so express the
-  // boundary as "a non-word character, or end of string".
-  return `@${escaped}([^A-Za-z0-9_]|$)`;
-}
-
-// The caller's display_name, needed to build the mention pattern.
-async function loadDisplayName(userId) {
-  const result = await query('SELECT display_name FROM users WHERE id = $1', [userId]);
-  return result.rows[0]?.display_name || '';
-}
+// Mentions come from the message_mentions table (BACKEND_TASKS.md item H), not
+// from matching display names against message text. The name matcher is still
+// used by createMessage as a temporary fallback for clients that send no
+// mentionedUserIds — see services/mention.service.js.
 
 // ---------- getRoomDigest ----------
 // Per-room digest: everything new since the user's last visit
@@ -72,20 +57,27 @@ const getRoomDigest = asyncHandler(async (req, res) => {
     [roomId, req.user.id, lastSeenAt],
   );
 
-  // 4. Messages that @-mention me since last visit
-  const displayName = await loadDisplayName(req.user.id);
+  // 4. Messages that @-mention me since last visit.
+  //
+  // Joined on message_mentions rather than matched against the message text
+  // (BACKEND_TASKS.md item H). Deliberately no text fallback: a message sent by a
+  // client predating structured mentions simply has no rows and does not appear,
+  // whereas re-deriving mentions from text here would reintroduce the exact
+  // rename bug item H removes — on historical rows, where it matters most, because
+  // a name may have changed since those messages were written.
   const mentions = await query(
     `SELECT m.id, m.content, m.created_at, u.display_name AS sender_name
-     FROM messages m
+     FROM message_mentions mm
+     INNER JOIN messages m ON m.id = mm.message_id
      INNER JOIN users u ON u.id = m.sender_id
      WHERE m.room_id = $1
        AND m.created_at > $2
-       AND m.content ~* $4
+       AND mm.user_id = $3
        AND m.sender_id != $3
        AND m.deleted_at IS NULL
      ORDER BY m.created_at DESC
      LIMIT 20`,
-    [roomId, lastSeenAt, req.user.id, mentionPattern(displayName)],
+    [roomId, lastSeenAt, req.user.id],
   );
 
   // 5. New attachments since last visit
@@ -190,7 +182,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
   // wrong: last_seen_at is per room, so a user who read #design-crit this
   // morning but not #marketing since last week must see the marketing backlog
   // and not the design one. See BACKEND_TASKS.md Bug 2.
-  const displayName = await loadDisplayName(req.user.id);
+  
 
   // 1. New decisions across all rooms
   const decisions = await query(
@@ -223,22 +215,26 @@ const getUserDigest = asyncHandler(async (req, res) => {
     [roomIds, req.user.id],
   );
 
-  // 3. Messages that @-mention me
+  // 3. Messages that @-mention me.
+  //
+  // Same message_mentions join as the per-room digest, and the same deliberate
+  // absence of a text fallback.
   const mentions = await query(
     `SELECT m.id, m.content, m.created_at, m.room_id,
             r.name AS room_name, u.display_name AS sender_name
-     FROM messages m
+     FROM message_mentions mm
+     INNER JOIN messages m ON m.id = mm.message_id
      INNER JOIN rooms r ON r.id = m.room_id
      INNER JOIN users u ON u.id = m.sender_id
      INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
      WHERE m.room_id = ANY($1)
-       AND m.content ~* $3
+       AND mm.user_id = $2
        AND m.sender_id != $2
        AND m.deleted_at IS NULL
        AND m.created_at > rm.last_seen_at
      ORDER BY m.created_at DESC
      LIMIT 50`,
-    [roomIds, req.user.id, mentionPattern(displayName)],
+    [roomIds, req.user.id],
   );
 
   // 4. New attachments
