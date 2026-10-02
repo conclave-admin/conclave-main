@@ -42,11 +42,12 @@ socket layer, so the write path and everything emitted from it are yours.
    exist, look the URL up from the upload record instead. Stream to
    `cloudinary.uploader.upload_stream`, allowlist mime types, return
    `{ filename, url, mime_type, size }`.
-2. **Item A — Tasks endpoints.** Unblocks the Tasks page _and_ the digest's task
-   section, which is permanently empty until something writes to `tasks`.
-   `POST /tasks`, `GET /tasks` (cross-room, the page is top-level), and
-   `PATCH /tasks/:taskId/status` limited to `open | in_progress | done`, updating
-   `updated_at` (nothing maintains that column today) and emitting `task:updated`.
+2. **Item A — Tasks endpoints.** DONE. `POST /tasks`, `GET /tasks` (cross-room,
+   the page is top-level), and `PATCH /tasks/:taskId/status` limited to
+   `open | in_progress | done`. `status` is constrained by a `CHECK` in migration
+   011, not just validated in the controller, and `updated_at` is set explicitly
+   because the digest's whole window depends on it. Emits `task:updated` to the
+   room.
 3. **Item B — Notifications.** `GET /notifications` with an unread count, and
    `PATCH /notifications/seen`. The table stores only `type` and `reference_id`,
    so the list needs a join to return readable text. Create `new_message` and
@@ -56,8 +57,9 @@ socket layer, so the write path and everything emitted from it are yours.
    it is still text matching, and a display name is not an identity: renaming a
    user changes who gets mentioned. Add `message_mentions(message_id, user_id)`,
    parse from a client-supplied `mentionedUserIds`, and use it for the digest and
-   notifications. This is a new migration — the next number is `011`
-   (`009` is the notification actor column, `010` is file uploads).
+   notifications. This is a new migration — the next number is `012`
+   (`009` is the notification actor column, `010` is file uploads, `011` is the
+   tasks status constraint).
 5. **Item I — Message edit, delete, reactions.** `edited_at` and `deleted_at` ship
    in every payload and `message_reactions` has a table but no routes. The read
    side already handles soft-deleted rows (content withheld, `is_deleted` set), so

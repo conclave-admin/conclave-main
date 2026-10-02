@@ -364,6 +364,34 @@ async function authedUser(email) {
   return JSON.parse(body).data.accessToken;
 }
 
+// Some tests need the new account's id as well as its token, to exercise
+// cross-account checks (assigning a task to a non-member, patching another
+// user's task).
+async function authedAccount(email) {
+  const reg = await fetch(`${baseUrl}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password: 'correct-horse-battery', displayName: 'Task Tester' }),
+  });
+  const body = await reg.text();
+  assert.equal(reg.status, 201, `register failed: ${reg.status} ${body}`);
+  const { data } = JSON.parse(body);
+  return { token: data.accessToken, userId: data.user.id };
+}
+
+// A bearer token for the fixture user, who is an admin of `room` but was created
+// with SQL rather than through /auth/register — so no token exists for it yet.
+// Generated directly with the same secret env.js uses, because these tests need
+// to act as that specific user, not as a fresh account.
+function tokenForFixtureUser() {
+  const jwt = require('jsonwebtoken');
+  return jwt.sign(
+    { sub: user.id, email: 'fixture@test.com' },
+    process.env.JWT_ACCESS_SECRET,
+    { expiresIn: '15m' },
+  );
+}
+
 dbTest('createRoom slugifies names and disambiguates duplicates', async () => {
   const token = await authedUser('slug-tester@test.com');
   const post = (name) =>
@@ -789,6 +817,309 @@ dbTest('searchMessages returns attachments, matching listMessages', async () => 
   );
   assert.equal(found.rows.length, 1, 'the message should match');
   assert.equal(found.rows[0].attachments.length, 1, 'its attachment should come back too');
+});
+
+// --- Tasks endpoints (item A) -------------------------------------------------
+
+dbTest('tasks.status is constrained by the database, not just the controller', async () => {
+  // Migration 011. Controller validation can be bypassed by any future write
+  // path — a service, a script, a migration — so the guarantee has to live in
+  // the schema. The digest reads this column straight into user-facing text.
+  const room2 = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ('Task Constraint Room', 'group', $1, 'task-constraint-room') RETURNING id`,
+      [user.id],
+    )
+  ).rows[0];
+
+  await assert.rejects(
+    () => query(
+      `INSERT INTO tasks (room_id, title, status, created_by) VALUES ($1, 'bad', 'banana', $2)`,
+      [room2.id, user.id],
+    ),
+    (err) => err.code === '23514',
+    'a raw insert of an invalid status must be rejected by the CHECK constraint',
+  );
+
+  for (const good of ['open', 'in_progress', 'done']) {
+    const row = await query(
+      `INSERT INTO tasks (room_id, title, status, created_by) VALUES ($1, $2, $3, $4) RETURNING status`,
+      [room2.id, `task ${good}`, good, user.id],
+    );
+    assert.equal(row.rows[0].status, good);
+  }
+});
+
+// --- Tasks endpoints (item A) -------------------------------------------------
+
+// A token for the fixture user, who owns `room`, generated inside the first test
+// rather than at module scope: the user is created by the `before` hook, which has
+// not run while this file is still being evaluated. Declared with `let` for that
+// reason, and assigned exactly once.
+let fixtureToken;
+
+dbTest('createTask returns the same shape listTasks returns', async () => {
+  fixtureToken = tokenForFixtureUser();
+
+  const created = await fetch(`${baseUrl}/api/tasks`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${fixtureToken}` },
+    body: JSON.stringify({ roomId: room.id, title: 'Shape check', dueDate: '2026-12-01' }),
+  });
+  const body = await created.text();
+  assert.equal(created.status, 201, body);
+  const task = JSON.parse(body).data;
+
+  assert.deepEqual(
+    Object.keys(task).sort(),
+    [
+      'assignee_id', 'assignee_name', 'created_at', 'created_by', 'due_date',
+      'id', 'room_id', 'room_name', 'room_slug', 'source_message_id',
+      'status', 'title', 'updated_at',
+    ],
+    'createTask must not hand back a different shape than listTasks',
+  );
+  assert.equal(task.status, 'open', 'the default status comes from the column default');
+  assert.equal(task.room_name, room.name ?? null ?? 'Fixture Room');
+  assert.equal(task.assignee_name, null, 'an unassigned task must still be returned');
+
+  const listed = await fetch(`${baseUrl}/api/tasks`, {
+    headers: { authorization: `Bearer ${fixtureToken}` },
+  });
+  const listedBody = await listed.text();
+  assert.equal(listed.status, 200, listedBody);
+  const found = JSON.parse(listedBody).data.tasks.find((t) => t.id === task.id);
+  assert.ok(found, 'the created task must appear in the list');
+  assert.deepEqual(Object.keys(found).sort(), Object.keys(task).sort(), 'both paths must agree');
+});
+
+dbTest('creating a task requires room membership', async () => {
+  const outsider = await authedUser('task-outsider@test.com');
+  const res = await fetch(`${baseUrl}/api/tasks`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${outsider}` },
+    body: JSON.stringify({ roomId: room.id, title: 'Should not exist' }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 403, `expected 403, got ${res.status}: ${body}`);
+});
+
+dbTest('a task cannot be assigned to someone outside the room', async () => {
+  // Otherwise the task is invisible: its assignee cannot open the room, and
+  // their digest filters on assignee_id within a room they are not in.
+  const stranger = await authedAccount('task-stranger@test.com');
+  const res = await fetch(`${baseUrl}/api/tasks`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${fixtureToken}` },
+    body: JSON.stringify({ roomId: room.id, title: 'Misassigned', assigneeId: stranger.userId }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 400, `expected 400, got ${res.status}: ${body}`);
+});
+
+dbTest('sourceMessageId must belong to the same room', async () => {
+  const otherRoom = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ('Elsewhere', 'group', $1, 'elsewhere') RETURNING id`,
+      [user.id],
+    )
+  ).rows[0];
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [otherRoom.id, user.id]);
+
+  const foreignMessage = (
+    await query(
+      `INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, 'not in your room') RETURNING id`,
+      [otherRoom.id, user.id],
+    )
+  ).rows[0];
+
+  const res = await fetch(`${baseUrl}/api/tasks`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${fixtureToken}` },
+    body: JSON.stringify({ roomId: room.id, title: 'Cross-room link', sourceMessageId: foreignMessage.id }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 400, `expected 400, got ${res.status}: ${body}`);
+});
+
+dbTest('the cross-room task list excludes rooms the caller is not in', async () => {
+  const outsider = await authedUser('task-list-outsider@test.com');
+
+  const mine = await fetch(`${baseUrl}/api/tasks`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${fixtureToken}` },
+    body: JSON.stringify({ roomId: room.id, title: 'Visible to member' }),
+  });
+  assert.equal(mine.status, 201);
+
+  const secret = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ('Not Yours', 'group', $1, 'not-yours') RETURNING id`,
+      [user.id],
+    )
+  ).rows[0];
+  await query(
+    `INSERT INTO tasks (room_id, title, created_by) VALUES ($1, 'Private task', $2)`,
+    [secret.id, user.id],
+  );
+
+  const res = await fetch(`${baseUrl}/api/tasks`, {
+    headers: { authorization: `Bearer ${outsider}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const tasks = JSON.parse(body).data.tasks;
+  assert.ok(
+    !tasks.some((t) => t.title === 'Private task'),
+    'a task from a room the caller is not in must not be listed',
+  );
+});
+
+dbTest('the room-scoped route delegates to the same handler', async () => {
+  const res = await fetch(`${baseUrl}/api/tasks/room/${room.id}`, {
+    headers: { authorization: `Bearer ${fixtureToken}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const scoped = JSON.parse(body).data.tasks;
+
+  const crossRoom = await fetch(`${baseUrl}/api/tasks`, {
+    headers: { authorization: `Bearer ${fixtureToken}` },
+  });
+  const all = JSON.parse(await crossRoom.text()).data.tasks;
+
+  for (const task of scoped) {
+    assert.ok(
+      all.some((t) => t.id === task.id),
+      'every room-scoped task must also appear in the cross-room list',
+    );
+  }
+  assert.ok(all.length >= scoped.length, 'cross-room cannot return fewer tasks');
+});
+
+dbTest('status can be updated, and updated_at actually moves', async () => {
+  // The digest's entire time window is `updated_at > last_seen_at`, and nothing
+  // else maintains that column — so a status change that left it at creation
+  // time would mean the task never appears in anyone's catch-up feed.
+  const created = (
+    await query(
+      `INSERT INTO tasks (room_id, title, created_by, updated_at)
+       VALUES ($1, 'Bump me', $2, NOW() - interval '2 days') RETURNING id, updated_at`,
+      [room.id, user.id],
+    )
+  ).rows[0];
+
+  const res = await fetch(`${baseUrl}/api/tasks/${created.id}/status`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${fixtureToken}` },
+    body: JSON.stringify({ status: 'in_progress' }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  assert.equal(JSON.parse(body).data.status, 'in_progress');
+
+  const after = (
+    await query('SELECT status, updated_at FROM tasks WHERE id = $1', [created.id])
+  ).rows[0];
+  assert.equal(after.status, 'in_progress');
+  assert.ok(
+    new Date(after.updated_at) > new Date(created.updated_at),
+    'updated_at must move forward on a status change',
+  );
+});
+
+dbTest('an invalid status is rejected', async () => {
+  const task = (
+    await query(
+      `INSERT INTO tasks (room_id, title, created_by) VALUES ($1, 'Status test', $2) RETURNING id`,
+      [room.id, user.id],
+    )
+  ).rows[0];
+
+  for (const status of ['banana', 'DONE', '', null]) {
+    const res = await fetch(`${baseUrl}/api/tasks/${task.id}/status`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${fixtureToken}` },
+      body: JSON.stringify({ status }),
+    });
+    assert.equal(res.status, 400, `status=${JSON.stringify(status)} should be rejected`);
+  }
+
+  // And the row is untouched.
+  const after = (await query('SELECT status FROM tasks WHERE id = $1', [task.id])).rows[0];
+  assert.equal(after.status, 'open');
+});
+
+dbTest('a status filter is validated and applied', async () => {
+  const res = await fetch(`${baseUrl}/api/tasks?status=banana`, {
+    headers: { authorization: `Bearer ${fixtureToken}` },
+  });
+  assert.equal(res.status, 400, 'an unknown status filter should be a 400');
+
+  const open = await fetch(`${baseUrl}/api/tasks?status=open`, {
+    headers: { authorization: `Bearer ${fixtureToken}` },
+  });
+  const body = await open.text();
+  assert.equal(open.status, 200, body);
+  assert.ok(
+    JSON.parse(body).data.tasks.every((t) => t.status === 'open'),
+    'every returned task must match the filter',
+  );
+});
+
+dbTest('updating a task you have no access to is a 404, not a 403', async () => {
+  // 404 rather than 403 so the endpoint does not confirm that a task id exists
+  // in a room the caller cannot see.
+  const outsider = await authedUser('task-patch-outsider@test.com');
+  const task = (
+    await query(
+      `INSERT INTO tasks (room_id, title, created_by) VALUES ($1, 'Not yours', $2) RETURNING id`,
+      [room.id, user.id],
+    )
+  ).rows[0];
+
+  const res = await fetch(`${baseUrl}/api/tasks/${task.id}/status`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${outsider}` },
+    body: JSON.stringify({ status: 'done' }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 404, `expected 404, got ${res.status}: ${body}`);
+});
+
+dbTest('undated tasks sort after dated ones rather than first', async () => {
+  // NULLS FIRST would present an undated task as the most overdue item on the
+  // board, which is the opposite of what a missing due date means.
+  const scratch = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ('Ordering', 'group', $1, 'ordering') RETURNING id`,
+      [user.id],
+    )
+  ).rows[0];
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'admin')`, [scratch.id, user.id]);
+
+  await query(
+    `INSERT INTO tasks (room_id, title, due_date, created_by) VALUES
+       ($1, 'undated', NULL, $2),
+       ($1, 'due soon', CURRENT_DATE + 1, $2),
+       ($1, 'due later', CURRENT_DATE + 30, $2)`,
+    [scratch.id, user.id],
+  );
+
+  const res = await fetch(`${baseUrl}/api/tasks/room/${scratch.id}`, {
+    headers: { authorization: `Bearer ${fixtureToken}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const titles = JSON.parse(body).data.tasks.map((t) => t.title);
+  assert.deepEqual(
+    titles, ['due soon', 'due later', 'undated'],
+    'dated tasks ascending, undated last',
+  );
 });
 
 // --- Decisions search (Bug 5) ------------------------------------------------

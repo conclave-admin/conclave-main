@@ -25,6 +25,8 @@ const presence = require('../services/presence.service');
 //   typing             { roomId, userId }
 //   stop-typing        { roomId, userId }
 //   message-read       { roomId, messageId, userId }
+//   task:updated       { task }     emitted by POST /tasks and
+//                                   PATCH /tasks/:taskId/status
 //   error:message      { message }   (see note below)
 //
 // Rooms the server joins for you, without the client asking:
@@ -34,9 +36,15 @@ const presence = require('../services/presence.service');
 //                      than to a chat room.
 //
 // Not yet implemented, so deliberately absent from this list rather than
-// advertised and never sent (BACKEND_TASKS.md Bug 13): upload-progress,
-// decision:created and task:updated all belong to the
-// tasks/notifications/upload endpoints, which are still stubs.
+// advertised and never sent (BACKEND_TASKS.md Bug 13): upload-progress and
+// decision:created. The notifications endpoints are still 501 stubs, but
+// `notification` is already live via notification.service.
+//
+// Limitation worth knowing: task:updated is emitted to the task's room, and
+// sockets only join a room on demand (client/src/hooks/useMessages.js emits
+// join-room when a room view mounts). A user sitting on the top-level cross-room
+// Tasks page has not joined the rooms it lists, so that page will not update
+// live — only on reload.
 
 // Membership check for events that only relay state. createMessage already
 // authorises send-message; these three did not, so a client could spoof read

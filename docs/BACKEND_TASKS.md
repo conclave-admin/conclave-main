@@ -10,20 +10,20 @@ Legend: DONE = shipped and verified. PARTIAL = shipped with a known problem. FIX
 
 ## Status summary
 
-| Area                                    | Status                                                               |
-| --------------------------------------- | -------------------------------------------------------------------- |
-| Auth (register, login, refresh, logout) | DONE (hardened; token rotation added — see Bug 11 client note)       |
-| Users (me, update, list, delete)        | DONE (delete account repaired and now works)                         |
-| Rooms (create, list, get, add member)   | DONE (public/private creatable, DMs deduped)                         |
-| Messages (send, list, search)           | DONE (deleted content masked, attachment shapes unified)             |
-| Decisions                               | DONE (`room_slug` shipped — see Bug 4)                               |
-| Digest                                  | DONE (now genuinely time-bounded per room)                           |
-| Sockets and presence                    | DONE (membership guards, no blocking KEYS, no phantom events)        |
-| Tasks                                   | OPEN (all three handlers are stubs; now return 501)                  |
-| Notifications                           | OPEN (both handlers are stubs; now return 501)                       |
-| File upload (Cloudinary)                | DONE (real round trip verified; attachments are server-owned)       |
-| Migrations                              | DONE (runner is re-runnable; all 10 verified against a real Postgres) |
-| Tests                                   | DONE (57 tests: 17 no-database smoke, 40 on a real DB + Cloudinary)  |
+| Area                                    | Status                                                                |
+| --------------------------------------- | --------------------------------------------------------------------- |
+| Auth (register, login, refresh, logout) | DONE (hardened; token rotation added — see Bug 11 client note)        |
+| Users (me, update, list, delete)        | DONE (delete account repaired and now works)                          |
+| Rooms (create, list, get, add member)   | DONE (public/private creatable, DMs deduped)                          |
+| Messages (send, list, search)           | DONE (deleted content masked, attachment shapes unified)              |
+| Decisions                               | DONE (`room_slug` shipped — see Bug 4)                                |
+| Digest                                  | DONE (now genuinely time-bounded per room)                            |
+| Sockets and presence                    | DONE (membership guards, no blocking KEYS, no phantom events)         |
+| Tasks                                   | DONE (three endpoints; `status` constrained in the schema)            |
+| Notifications                           | OPEN (both handlers are stubs; now return 501)                        |
+| File upload (Cloudinary)                | DONE (real round trip verified; attachments are server-owned)         |
+| Migrations                              | DONE (runner is re-runnable; all 11 verified against a real Postgres) |
+| Tests                                   | DONE (69 tests: 17 no-database smoke, 52 on a real DB + Cloudinary)   |
 
 ### Verification status
 
@@ -38,7 +38,7 @@ What that verification found and changed:
 - **The `rooms.slug` backfill produces correct values on real data**, including the two cases most likely to break: a duplicate room name (`Product & Engineering` → `product-engineering` and `product-engineering-2`) and a name with nothing sluggable (`日本語` → `room`).
 - The `(created_at, id)` tuple cursor pages through tied timestamps without skipping; the per-room digest window returns only the unread room, where a single shared `MAX(last_seen_at)` would have returned nothing; `22P02`/`23503`/`23505` map as documented.
 
-**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all ten migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. `backend/tests/upload.test.js` does the same for the Cloudinary path, including a real upload round trip, and skips when credentials are absent. `npm test` runs both alongside the no-database smoke suite — 57 tests total.
+**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all eleven migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. `backend/tests/upload.test.js` does the same for the Cloudinary path, including a real upload round trip, and skips when credentials are absent. `npm test` runs both alongside the no-database smoke suite — 69 tests total.
 
 One thing that verification still cannot prove: behaviour under real production data volume. The queries were verified for correctness, not for query plans at scale.
 
@@ -56,10 +56,11 @@ Nine files, applied in filename order and recorded in `schema_migrations`. 001�
 | `006_drop_email_not_null.sql`            | drops `NOT NULL` on `users.email`                                                | without it the soft delete always rolled back with a 500       |
 | `007_decisions_search_includes_tags.sql` | GIN index on `decisions.tags`                                                    | tags were never searchable despite the docs claiming otherwise |
 | `008_add_rooms_slug.sql`                 | adds `rooms.slug`, backfills, disambiguates, `UNIQUE`                            | decisions rendered `#undefined`                                |
-| `009_add_notification_actor.sql`          | adds `notifications.actor_id`                                                    | a room invite could not say who invited you                    |
-| `010_add_file_uploads.sql`               | adds `file_uploads`, `UNIQUE` on `file_url`, partial index on unclaimed            | any member could persist an arbitrary string as a file URL     |
+| `009_add_notification_actor.sql`         | adds `notifications.actor_id`                                                    | a room invite could not say who invited you                    |
+| `010_add_file_uploads.sql`               | adds `file_uploads`, `UNIQUE` on `file_url`, partial index on unclaimed          | any member could persist an arbitrary string as a file URL     |
+| `011_tasks_status_check.sql`             | `CHECK (status IN ('open','in_progress','done'))` on `tasks`                     | migration 002 only documented the values in a comment          |
 
-Item H (`message_mentions`) is the next migration and takes number `011`.
+Item H (`message_mentions`) is the next migration and takes number `012`.
 
 Three of these are worth knowing about before you touch them:
 
@@ -223,7 +224,7 @@ The remaining risk is process, not code: do not include `.env` in future shared 
 - Presence is per user, so closing one of two tabs broadcast `user-offline` while the user was still connected, and tore down their presence state. Sockets are now counted per user and presence is only torn down when the last one closes.
 - `cleanupUserFromRooms`, `getTypingUsers` and `cleanupUserTyping` all used `KEYS`, which is O(N) across the whole keyspace and blocks the single-threaded server while it runs. Pattern lookups now use `SCAN`, and a new `user:{userId}:rooms` set tracks per-user room membership so cleanup is proportional to the rooms that user is actually in.
 - `sweepStaleUsers` awaited one `EXISTS` per online user every 30 seconds, a full round trip each. Now pipelined.
-- The header advertised `notification`, `upload-progress`, `decision:created` and `task:updated`, none of which are ever emitted. The list now shows only events that exist, with the unimplemented four called out separately.
+- The header advertised `notification`, `upload-progress`, `decision:created` and `task:updated`, none of which were emitted at the time. The list was rewritten to show only events that exist, with the unimplemented ones called out. `notification` and `task:updated` are now live; `upload-progress` and `decision:created` are still not sent.
 
 **Still open.**
 
@@ -266,18 +267,19 @@ The remaining risk is process, not code: do not include `.env` in future shared 
 
 Ordered by what blocks the most.
 
-### A. Tasks endpoints (OPEN, blocks the Tasks page and the digest)
+### A. Tasks endpoints (DONE)
 
-`tasks.controller.js` has three stubs: `createTask`, `listTasks`, `updateTaskStatus`. They now throw 501 rather than returning a fake success, but nothing is implemented. The Tasks page shows To do, In progress and Done columns with assignee and due date.
+`POST /tasks`, `GET /tasks` (cross-room) and `PATCH /tasks/:taskId/status` are implemented. The Tasks page shows To do, In progress and Done columns with assignee and due date, which is exactly the response shape these return.
 
-Needed:
+- `createTask` takes `roomId`, `title`, `assigneeId?`, `dueDate?`, `sourceMessageId?`. It checks room membership, requires `sourceMessageId` to be an undeleted message **in the same room**, and requires `assigneeId` to be a member of that room — otherwise a task can be handed to someone who cannot open the room and whose digest, which filters on `assignee_id` within a room, would never surface it.
+- `listTasks` is cross-room, scoped through `room_members`, with optional `?roomId`, `?status` and `?assigneeId`. `GET /tasks/room/:roomId` is kept and delegates to the same handler by rewriting `roomId` into the query, mirroring the decisions routes so the two cannot drift.
+- `updateTaskStatus` is limited to `open | in_progress | done`, sets `updated_at = NOW()`, and emits `task:updated` to the room. It returns 404 rather than 403 for a task in a room the caller is not in, so the endpoint does not confirm the id exists.
+- `tasks.status` is constrained by a `CHECK` in migration 011, not only validated in the controller. The digest reads this column straight into user-facing text, so a value like `banana` would otherwise surface in a catch-up feed.
+- Undated tasks sort last (`NULLS LAST`), otherwise a missing due date reads as the most overdue item on the board.
 
-- `POST /tasks` with `roomId`, `title`, `assigneeId?`, `dueDate?`, `sourceMessageId?`, with a membership check and a check that the assignee is a room member.
-- `GET /tasks` (cross-room, mine or all, filter by status) since the page is top-level, plus keep `GET /tasks/room/:roomId`. Return `assignee_name`, `room_name` and `due_date`.
-- `PATCH /tasks/:taskId/status` limited to `open | in_progress | done`, updating `updated_at`, and emitting `task:updated` to the room.
-- A notification for the assignee when a task is assigned.
+**Known limitation.** `task:updated` is emitted to the task's room, but sockets only `join-room` on demand (`client/src/hooks/useMessages.js`, when a room view mounts). A user sitting on the top-level cross-room Tasks page has not joined the rooms it lists, so **that page will not update live** — only on reload. Documented rather than fixed: the fix is a per-user task subscription, not a change to this emit. The caller that made the change still receives the updated task in the response.
 
-Also note the digest's task query filters on `rm.last_seen_at`, which now works, so tasks will start appearing in digests once this lands.
+**Still open:** no notification is created when a task is assigned, and `assignee_id` is unindexed. `idx_tasks_room_status` covers the room filter, so that is adequate at current scale but is the first thing to add if the board grows.
 
 ### B. Notifications endpoints (OPEN, blocks the bell and the Notifications page)
 

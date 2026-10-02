@@ -59,11 +59,11 @@ on it.
 
 ## Messages
 
-| Method | Path                          | Body                                             | Returns                    | Notes                                                                                                                                                                                                                                                                           |
-| ------ | ----------------------------- | ------------------------------------------------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Method | Path                          | Body                                             | Returns                    | Notes                                                                                                                                                                                                                                                                                                                |
+| ------ | ----------------------------- | ------------------------------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | POST   | /messages                     | `{ roomId, content?, replyToId?, attachments? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. `attachments[]` is `{ url }` only, max 10 files. Send the `url` returned by `POST /upload`; `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. |
-| GET    | /messages/room/:roomId        | `?before=<cursor>`                               | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. Feed it into "load older"; it is currently discarded client-side.                                                                                                                    |
-| GET    | /messages/room/:roomId/search | `?q=`                                            | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns `attachments` too.                                                                                                                                                                                                   |
+| GET    | /messages/room/:roomId        | `?before=<cursor>`                               | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. Feed it into "load older"; it is currently discarded client-side.                                                                                                                                                         |
+| GET    | /messages/room/:roomId/search | `?q=`                                            | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns `attachments` too.                                                                                                                                                                                                                                        |
 
 A message row is:
 
@@ -156,9 +156,9 @@ single unrecognised value should not take the page down.
 
 ## File upload
 
-| Method | Path    | Status | Body                                       | Returns |
-| ------ | ------- | ------ | ------------------------------------------ | ------- |
-| POST   | /upload | 201    | multipart `file`                           | `{ filename, url, mime_type, size }` |
+| Method | Path    | Status | Body             | Returns                              |
+| ------ | ------- | ------ | ---------------- | ------------------------------------ |
+| POST   | /upload | 201    | multipart `file` | `{ filename, url, mime_type, size }` |
 
 Auth required. 25MB maximum. The response is wrapped in the standard
 `{ success, data }` envelope, so read it from `data`.
@@ -188,18 +188,63 @@ plain text, markdown, csv), Word, Excel and PowerPoint (both `.docx`-style and
 legacy), `zip`, `gzip`, and audio (`mpeg`, `ogg`, `wav`, `webm`, `mp4`).
 **Video is not accepted yet.**
 
-## Tasks and Notifications — not implemented
+## Tasks
+
+| Method | Path                  | Status | Body / query                                                 | Returns     |
+| ------ | --------------------- | ------ | ------------------------------------------------------------ | ----------- |
+| POST   | /tasks                | 201    | `{ roomId, title, assigneeId?, dueDate?, sourceMessageId? }` | task        |
+| GET    | /tasks                | 200    | `?roomId=`, `?status=`, `?assigneeId=`                       | `{ tasks }` |
+| GET    | /tasks/room/:roomId   | 200    | same filters                                                 | `{ tasks }` |
+| PATCH  | /tasks/:taskId/status | 200    | `{ status }` ∈ `open \| in_progress \| done`                 | task        |
+
+Auth required. `GET /tasks` is **cross-room** — the Tasks page is top-level — and
+scoped to rooms you are a member of. `GET /tasks/room/:roomId` delegates to the
+same handler. Every task row has the same shape from all three endpoints:
+
+```json
+{
+  "id": "uuid",
+  "room_id": "uuid",
+  "room_name": "Product Engineering",
+  "source_message_id": null,
+  "title": "Confirm upload limits",
+  "assignee_id": "uuid",
+  "assignee_name": "Priya",
+  "status": "open",
+  "due_date": "2026-08-22",
+  "created_by": "uuid",
+  "created_at": "ISO",
+  "updated_at": "ISO"
+}
+```
+
+`assignee_name` is `null` for an unassigned task — those rows are still returned.
+Ordering is `due_date` ascending with undated tasks **last**, then newest first.
+
+`POST /tasks` requires you to be in the room. `sourceMessageId`, if given, must be
+an undeleted message **in that room**, and `assigneeId` must be a member of it —
+assigning to a non-member produces a task that assignee can never see, since their
+digest filters on `assignee_id` within a room they cannot open.
+
+`PATCH` returns **404** for a task in a room you are not in, rather than 403, so
+it does not confirm the id exists.
+
+Creating or updating a task emits **`task:updated`** to the task's room.
+
+⚠️ That event only reaches sockets that have joined that room, and joining is
+on-demand — so the **top-level cross-room Tasks page will not update live**, only
+on reload. The response body carries the updated task, so the client that made the
+change is not left stale.
+
+## Notifications — not implemented
 
 Both return **501 Not Implemented**. They are not 200s with a placeholder body,
 so do not treat a success-shaped response as real data.
 
-| Method | Path                  | Status | Planned                                                      |
-| ------ | --------------------- | ------ | ------------------------------------------------------------ |
-| POST   | /tasks                | 501    | `{ roomId, title, assigneeId?, dueDate?, sourceMessageId? }` |
-| GET    | /tasks/room/:roomId   | 501    | Room-scoped list                                             |
-| PATCH  | /tasks/:taskId/status | 501    | `{ status }` ∈ `open \| in_progress \| done`                 |
-| GET    | /notifications        | 501    | List + unread count                                          |
-| PATCH  | /notifications/seen   | 501    | Mark one or all seen                                         |
+| Method | Path                | Status | Planned              |
+| ------ | ------------------- | ------ | -------------------- |
+| GET    | /notifications      | 501    | List + unread count  |
+| PATCH  | /notifications/seen | 501    | Mark one or all seen |
 
 ## Not built yet
 
@@ -213,6 +258,7 @@ an existing DM by user id, home summary, or a global cross-room search. See
 
 Server → client, as documented at the top of `backend/src/sockets/index.js`:
 `receive-message`, `user-online`, `user-offline`, `room-presence`,
-`room-typing`, `typing`, `stop-typing`, `message-read`, and `error:message`.
+`room-typing`, `typing`, `stop-typing`, `message-read`, `task:updated`,
+`notification`, and `error:message`.
 Errors are emitted on **`error:message`**, not `error` — Socket.IO reserves
 `error` for its own internals.

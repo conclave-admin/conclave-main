@@ -67,8 +67,9 @@ const EXPECTED_ROUTES = [
   // digest
   ['GET', '/api/digest', true],
   ['GET', '/api/digest/room/:roomId', true],
-  // tasks — implemented as 501 stubs, but they must still be routable
+  // tasks — implemented, but must be auth-guarded
   ['POST', '/api/tasks', true],
+  ['GET', '/api/tasks', true],
   ['GET', '/api/tasks/room/:roomId', true],
   ['PATCH', '/api/tasks/:taskId/status', true],
   // notifications — 501 stubs
@@ -243,10 +244,10 @@ test('CORS allows the configured client origin with credentials', async () => {
   assert.equal(res.headers.get('access-control-allow-credentials'), 'true');
 });
 
-test('the tasks and notifications stubs answer 501, not a fake success', async () => {
+test('the notifications stubs answer 501, not a fake success', async () => {
   // A 200/201 with a placeholder body is read by the client as real data, which
   // is worse than an explicit failure. BACKEND_TASKS.md Bug 14.
-  const res = await fetch(`${baseUrl}/api/tasks/room/00000000-0000-0000-0000-000000000001`, {
+  const res = await fetch(`${baseUrl}/api/notifications`, {
     method: 'GET',
     headers: { Authorization: 'Bearer not-a-real-jwt' },
   });
@@ -262,13 +263,11 @@ test('unimplemented controllers throw 501 rather than returning fake data', asyn
   // upload.uploadFile is deliberately absent: it is implemented now that
   // POST /upload exists, so it no longer belongs in this list. It is covered by
   // tests/upload.test.js instead.
-  const tasks = require('../src/controllers/tasks.controller');
+  // tasks.* is deliberately absent: implemented now that POST /tasks and
+  // PATCH /tasks/:taskId/status exist. Covered by tests/integration.test.js.
   const notifications = require('../src/controllers/notifications.controller');
 
   const cases = [
-    ['tasks.createTask', tasks.createTask],
-    ['tasks.listTasks', tasks.listTasks],
-    ['tasks.updateTaskStatus', tasks.updateTaskStatus],
     ['notifications.listNotifications', notifications.listNotifications],
     ['notifications.markSeen', notifications.markSeen],
   ];
