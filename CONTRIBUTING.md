@@ -28,9 +28,9 @@ lane removes that crossing. It is now Michael's outright, not shared.
 Conclave from a chat clone, and they are the least built. This is the
 highest-leverage work available.
 
-**Current state: mostly done.** Decisions, digest, tasks, notifications and upload
-are all implemented. You also own `message.service.js` and the socket layer, so the
-write path and everything emitted from it are yours.
+**Current state: mostly done.** Decisions, digest, tasks, notifications, upload and
+structured mentions are all implemented. You also own `message.service.js` and the
+socket layer, so the write path and everything emitted from it are yours.
 
 **Owns going forward, in priority order:**
 
@@ -55,15 +55,25 @@ write path and everything emitted from it are yours.
    `room_invite` through the service and emits it — that row had existed since
    PR1, unreadable. `createMessage` writes and emits `mention` rows, excluding the
    sender. `new_message` is deliberately not implemented: fanning out to every room
-   member on every message is a product call about noise, and item H is about to
-   change how mentions are identified.
-4. **Item H — Structured mentions.** The regex mention matcher is correct but
-   it is still text matching, and a display name is not an identity: renaming a
-   user changes who gets mentioned. Add `message_mentions(message_id, user_id)`,
-   parse from a client-supplied `mentionedUserIds`, and use it for the digest and
-   notifications. This is a new migration — the next number is `012`
-   (`009` is the notification actor column, `010` is file uploads, `011` is the
-   tasks status constraint).
+   member on every message is a product call about noise.
+4. **Item H — Structured mentions.** DONE. `message_mentions(message_id, user_id)`
+   (migration 012) records who was mentioned, by id, and both the digest and
+   notifications read it. A rename no longer moves a mention, and two members who
+   share a display name are now distinguishable — `display_name` is not unique, so
+   text genuinely could not tell them apart.
+
+   `createMessage` takes `mentionedUserIds`, filters them to room members
+   (silently dropping the rest so a stale id cannot fail a valid send), and writes
+   the rows inside the message transaction. `mentioned_user_ids` is on the payload
+   from `createMessage`, `listMessages` and `searchMessages`.
+
+   **One temporary fallback remains.** A client that sends no `mentionedUserIds`
+   still gets mentions inferred from the text, because the only send path —
+   `client/src/hooks/useMessages.js` — does not send ids yet. **Delete
+   `services/mention.service.js` and the fallback branch in `resolveMentionIds`
+   when that hook starts sending them.** The digest has no such fallback on
+   purpose: re-deriving mentions from text there would reintroduce the rename bug
+   on historical rows.
 5. **Item I — Message edit, delete, reactions.** `edited_at` and `deleted_at` ship
    in every payload and `message_reactions` has a table but no routes. The read
    side already handles soft-deleted rows (content withheld, `is_deleted` set), so

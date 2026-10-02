@@ -12,7 +12,7 @@ const PAGE_SIZE = 50;
 // write through message.service.createMessage so history stays consistent.
 const sendMessage = asyncHandler(async (req, res) => {
   const { roomId } = req.body;
-  const { content, replyToId, attachments } = req.body;
+  const { content, replyToId, attachments, mentionedUserIds } = req.body;
 
   if (!roomId) {
     throw new ApiError(400, "roomId is required");
@@ -24,6 +24,7 @@ const sendMessage = asyncHandler(async (req, res) => {
     content,
     replyToId,
     attachments,
+    mentionedUserIds,
   });
 
   return ok(res, message, 201);
@@ -74,7 +75,19 @@ const listMessages = asyncHandler(async (req, res) => {
           )
         ) FILTER (WHERE a.id IS NOT NULL),
         '[]'
-      ) AS attachments
+      ) AS attachments,
+      -- Who this message mentions, by id. Lets the client style a real mention
+      -- instead of regex-matching the text, which cannot distinguish two members
+      -- who share a display name. Empty array, never null, so the client can map
+      -- over it unconditionally.
+      COALESCE(
+        (
+          SELECT json_agg(mm.user_id)
+          FROM message_mentions mm
+          WHERE mm.message_id = m.id
+        ),
+        '[]'
+      ) AS mentioned_user_ids
     FROM messages m
     INNER JOIN users u ON u.id = m.sender_id
     LEFT JOIN attachments a ON a.message_id = m.id
@@ -163,6 +176,15 @@ const searchMessages = asyncHandler(async (req, res) => {
          ) FILTER (WHERE a.id IS NOT NULL),
          '[]'
        ) AS attachments,
+       -- Same shape as listMessages, so search and history agree.
+       COALESCE(
+         (
+           SELECT json_agg(mm.user_id)
+           FROM message_mentions mm
+           WHERE mm.message_id = m.id
+         ),
+         '[]'
+       ) AS mentioned_user_ids,
        ts_rank(
          to_tsvector('english', m.content),
          plainto_tsquery('english', $2)

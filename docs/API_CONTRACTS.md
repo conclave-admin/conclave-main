@@ -61,7 +61,7 @@ on it.
 
 | Method | Path                          | Body                                             | Returns                    | Notes                                                                                                                                                                                                                                                                                                                |
 | ------ | ----------------------------- | ------------------------------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | /messages                     | `{ roomId, content?, replyToId?, attachments? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. `attachments[]` is `{ url }` only, max 10 files. Send the `url` returned by `POST /upload`; `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. |
+| POST   | /messages                     | `{ roomId, content?, replyToId?, attachments?, mentionedUserIds? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. `attachments[]` is `{ url }` only, max 10 files. Send the `url` returned by `POST /upload`; `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. `mentionedUserIds[]` is the ids of users the message mentions — see below. |
 | GET    | /messages/room/:roomId        | `?before=<cursor>`                               | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. Feed it into "load older"; it is currently discarded client-side.                                                                                                                                                         |
 | GET    | /messages/room/:roomId/search | `?q=`                                            | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns `attachments` too.                                                                                                                                                                                                                                        |
 
@@ -88,12 +88,28 @@ A message row is:
       "mime_type": "application/pdf",
       "url": "https://…"
     }
-  ]
+  ],
+  "mentioned_user_ids": ["uuid"]
 }
 ```
 
 ⚠️ A soft-deleted message is **kept in the timeline** with `content: null` and
 `is_deleted: true`, so ordering and replies hold. Render a tombstone.
+
+⚠️ `mentioned_user_ids` is always an array — `[]` when nobody is mentioned, never
+`null`, so you can map over it unconditionally. Use it to style a real mention
+rather than regex-matching `content`: `display_name` is **not unique** (only
+`email` is), so two members can share a name and text cannot tell them apart.
+
+**Send `mentionedUserIds` when a client mentions somebody.** Only the client knows
+who the user picked from autocomplete. Ids that are not members of the room are
+silently dropped — the message still sends — and the sender is excluded from their
+own mentions.
+
+⚠️ Omitting `mentionedUserIds` currently falls back to inferring mentions from
+`content` by display name. **This is temporary** and preserves the old behaviour so
+existing clients keep working, but it means renaming a user still misdirects
+mentions for messages sent without ids. Send the ids and that stops applying.
 
 The socket `receive-message` event returns this **same shape** — including flat
 `sender_name`, and `attachments` as the array above.
@@ -153,6 +169,13 @@ A decision row:
 ⚠️ `type` is the only display hint the backend sends. The type→label/colour
 mapping belongs in the client. **Handle an unknown `type` without throwing** — a
 single unrecognised value should not take the page down.
+
+`type: "mention"` items come from the `message_mentions` table, joined by id —
+the digest does **not** match message text. A message sent by a client that
+omitted `mentionedUserIds` before the structured-mention contract existed has no
+mention rows and will not appear here. There is deliberately no text fallback:
+re-deriving mentions from `content` would reintroduce the rename bug on historical
+rows, where a name may have changed since the message was sent.
 
 ## File upload
 
@@ -303,3 +326,12 @@ Server → client, as documented at the top of `backend/src/sockets/index.js`:
 `notification`, `notification:seen`, and `error:message`.
 Errors are emitted on **`error:message`**, not `error` — Socket.IO reserves
 `error` for its own internals.
+
+Client → server payloads: `join-room { roomId }`, `leave-room { roomId }`,
+`send-message { roomId, content, replyToId?, attachments?, mentionedUserIds? }`,
+`typing { roomId }`, `stop-typing { roomId }`, `message-read { roomId, messageId }`,
+`heartbeat {}`.
+
+`send-message` takes the same body as `POST /messages` and returns the same
+message row on `receive-message`. Pass `mentionedUserIds` — see the warning above
+for what omitting it costs.

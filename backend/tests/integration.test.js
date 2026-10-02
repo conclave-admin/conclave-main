@@ -1405,7 +1405,9 @@ dbTest('addMember notifies the invitee and records who invited them', async () =
   assert.equal(data.notifications[0].context.room_name, 'Invite Test Room');
 });
 
-dbTest('a mention notifies the named member but not the sender', async () => {
+dbTest('FALLBACK: a text mention notifies the named member but not the sender', async () => {
+  // This is the no-mentionedUserIds path — the temporary bridge for clients that
+  // do not send ids. It still works; it is just no longer the primary path.
   const sender = await authedAccount('mention-sender@test.com');
   const target = await authedAccount('mention-target@test.com');
   const bystander = await authedAccount('mention-bystander@test.com');
@@ -1456,7 +1458,7 @@ dbTest('a mention notifies the named member but not the sender', async () => {
   assert.equal(bystanderList.unreadCount, 0, 'a room member who was not named gets nothing');
 });
 
-dbTest('mention matching respects word boundaries', async () => {
+dbTest('FALLBACK: mention matching respects word boundaries', async () => {
   const sender = await authedAccount('boundary-sender@test.com');
   const al = await authedAccount('boundary-al@test.com');
 
@@ -1601,11 +1603,10 @@ dbTest('mention:seen carries a count, not a phantom notification row', async () 
   });
 });
 
-dbTest('mention matching is case-insensitive, agreeing with the digest', async () => {
-  // The digest matches with Postgres `~*`, which ignores case. If the
-  // notification path is case-sensitive then "@amina" appears in Amina's digest
-  // but sends her no notification — sharing the pattern string was not enough,
-  // the two matchers have to agree on semantics too.
+dbTest('FALLBACK: mention matching is case-insensitive', async () => {
+  // Case-insensitivity is load-bearing for the fallback path, which is the only
+  // place it now applies. The digest no longer matches text at all, so this
+  // assertion is about the fallback alone and the digest's `~*` is gone.
   const { mentionPattern, isMentioned } = require('../src/services/mention.service');
 
   for (const text of ['hey @Amina', 'hey @amina', 'HEY @AMINA', '@Amina']) {
@@ -1623,8 +1624,8 @@ dbTest('mention matching is case-insensitive, agreeing with the digest', async (
   assert.equal(mentionPattern('Amina'), '@Amina([^A-Za-z0-9_]|$)');
 });
 
-dbTest('a lowercased mention reaches the notification, not just the digest', async () => {
-  // End-to-end version of the case-sensitivity regression.
+dbTest('FALLBACK: a lowercased mention reaches the notification', async () => {
+  // End-to-end version of the case-sensitivity regression, on the fallback path.
   const sender = await authedAccount('case-sender@test.com');
   const target = await authedAccount('case-target@test.com');
 
@@ -1650,6 +1651,365 @@ dbTest('a lowercased mention reaches the notification, not just the digest', asy
   ).data;
   assert.equal(list.unreadCount, 1, 'a lowercased @mention must still notify');
   assert.equal(list.notifications[0].type, 'mention');
+});
+
+// --- Structured mentions (item H) --------------------------------------------
+
+/** Two users in a fresh room, plus their auth tokens. */
+async function mentionFixture(prefix) {
+  const sender = await authedAccount(`${prefix}-sender@test.com`);
+  const target = await authedAccount(`${prefix}-target@test.com`);
+  const room = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ($1, 'group', $2, $3) RETURNING id`,
+      [`Mention ${prefix}`, sender.userId, `mention-${prefix}-${Math.floor(Math.random() * 1e9)}`],
+    )
+  ).rows[0];
+  for (const uid of [sender.userId, target.userId]) {
+    await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [room.id, uid]);
+  }
+  return { sender, target, roomId: room.id };
+}
+
+dbTest('message_mentions records ids and cascades on message delete', async () => {
+  const { sender, target, roomId } = await mentionFixture('schema');
+  const { createMessage } = require('../src/services/message.service');
+
+  const message = await createMessage({
+    roomId, senderId: sender.userId, content: 'hi @you', mentionedUserIds: [target.userId],
+  });
+
+  const rows = (
+    await query('SELECT user_id FROM message_mentions WHERE message_id = $1', [message.id])
+  ).rows.map((r) => r.user_id);
+  assert.deepEqual(rows, [target.userId]);
+
+  // ON DELETE CASCADE: a deleted message leaves nothing for the digest to join.
+  await query('DELETE FROM messages WHERE id = $1', [message.id]);
+  const after = (await query('SELECT COUNT(*)::int n FROM message_mentions WHERE message_id = $1', [message.id])).rows[0].n;
+  assert.equal(after, 0, 'deleting a message must clear its mention rows');
+});
+
+dbTest('mentions follow the id, not the display name', async () => {
+  // The whole point of item H. Renaming a user must not change who was mentioned
+  // in a message that already named them by id — and must not stop the
+  // notification either.
+  const { sender, target, roomId } = await mentionFixture('rename');
+  const { createMessage } = require('../src/services/message.service');
+
+  const original = 'Renameme';
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', [original, target.userId]);
+
+  const message = await createMessage({
+    roomId, senderId: sender.userId,
+    content: 'no @-token at all, the id says who',
+    mentionedUserIds: [target.userId],
+  });
+
+  // Rename after the message is written.
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Somethingelse', target.userId]);
+
+  const rows = (
+    await query('SELECT user_id FROM message_mentions WHERE message_id = $1', [message.id])
+  ).rows.map((r) => r.user_id);
+  assert.deepEqual(rows, [target.userId], 'the recorded mention is by id and survives a rename');
+
+  const notified = (
+    await query(`SELECT COUNT(*)::int n FROM notifications WHERE recipient_id = $1 AND type = 'mention'`, [target.userId])
+  ).rows[0].n;
+  assert.equal(notified, 1, 'the notification must follow the id, not the name');
+});
+
+dbTest('two users sharing a display name are distinguishable', async () => {
+  // display_name is not unique — only email is — so text matching genuinely cannot
+  // tell these two apart. Ids can.
+  const { sender, target, roomId } = await mentionFixture('twin');
+  const twin = await authedAccount('twin-second@test.com');
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [roomId, twin.userId]);
+
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Twin', target.userId]);
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Twin', twin.userId]);
+
+  const { createMessage } = require('../src/services/message.service');
+  const message = await createMessage({
+    roomId, senderId: sender.userId, content: 'only the second one',
+    mentionedUserIds: [twin.userId],
+  });
+
+  const rows = (
+    await query('SELECT user_id FROM message_mentions WHERE message_id = $1 ORDER BY user_id', [message.id])
+  ).rows.map((r) => r.user_id);
+  assert.equal(rows.length, 1, 'exactly one of the twins is mentioned');
+  assert.equal(rows[0], twin.userId);
+
+  const targetGot = (
+    await query(`SELECT COUNT(*)::int n FROM notifications WHERE recipient_id = $1 AND type = 'mention'`, [target.userId])
+  ).rows[0].n;
+  assert.equal(targetGot, 0, 'the twin that was not named must not be notified');
+});
+
+dbTest('an id for someone outside the room is dropped, not rejected', async () => {
+  // A stale or hostile id list must not fail an otherwise-valid send. The message
+  // is fine; the person is simply not mentionable here.
+  const { sender, roomId } = await mentionFixture('outsider');
+  const stranger = await authedAccount('mention-stranger@test.com');
+  const { createMessage } = require('../src/services/message.service');
+
+  const message = await createMessage({
+    roomId, senderId: sender.userId, content: 'hello',
+    mentionedUserIds: [stranger.userId],
+  });
+
+  assert.ok(message.id, 'the message must still be created');
+  const rows = (await query('SELECT COUNT(*)::int n FROM message_mentions WHERE message_id = $1', [message.id])).rows[0].n;
+  assert.equal(rows, 0, 'a non-member cannot be recorded as mentioned');
+
+  const notified = (
+    await query(`SELECT COUNT(*)::int n FROM notifications WHERE recipient_id = $1 AND type = 'mention'`, [stranger.userId])
+  ).rows[0].n;
+  assert.equal(notified, 0, 'and must not be notified');
+});
+
+dbTest('the sender cannot mention themselves', async () => {
+  const { sender, roomId } = await mentionFixture('selfmention');
+  const { createMessage } = require('../src/services/message.service');
+
+  const message = await createMessage({
+    roomId, senderId: sender.userId, content: 'note to self',
+    mentionedUserIds: [sender.userId],
+  });
+
+  const rows = (await query('SELECT COUNT(*)::int n FROM message_mentions WHERE message_id = $1', [message.id])).rows[0].n;
+  assert.equal(rows, 0, 'no self-mention row');
+
+  const notified = (
+    await query(`SELECT COUNT(*)::int n FROM notifications WHERE recipient_id = $1 AND type = 'mention'`, [sender.userId])
+  ).rows[0].n;
+  assert.equal(notified, 0, 'and no self-notification');
+});
+
+dbTest('mentioning the same person twice records them once', async () => {
+  // The composite primary key makes a duplicate a no-op rather than a 500.
+  const { sender, target, roomId } = await mentionFixture('dupe');
+  const { createMessage } = require('../src/services/message.service');
+
+  const message = await createMessage({
+    roomId, senderId: sender.userId, content: '@you @you again',
+    mentionedUserIds: [target.userId, target.userId],
+  });
+
+  const rows = (await query('SELECT COUNT(*)::int n FROM message_mentions WHERE message_id = $1', [message.id])).rows[0].n;
+  assert.equal(rows, 1, 'one row, not two');
+
+  const notified = (
+    await query(`SELECT COUNT(*)::int n FROM notifications WHERE recipient_id = $1 AND type = 'mention'`, [target.userId])
+  ).rows[0].n;
+  assert.equal(notified, 1, 'and one notification, not two');
+});
+
+dbTest('an empty mentionedUserIds array falls back to text matching', async () => {
+  // Explicitly empty is treated the same as absent, so a client that sends the
+  // field but has nothing picked behaves like one that omits it.
+  const { sender, target, roomId } = await mentionFixture('emptyids');
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Fallback', target.userId]);
+
+  const { createMessage } = require('../src/services/message.service');
+  const message = await createMessage({
+    roomId, senderId: sender.userId, content: 'hey @Fallback', mentionedUserIds: [],
+  });
+
+  const rows = (
+    await query('SELECT user_id FROM message_mentions WHERE message_id = $1', [message.id])
+  ).rows.map((r) => r.user_id);
+  assert.deepEqual(rows, [target.userId], 'the fallback still records a row');
+});
+
+dbTest('ids win over text when both are present', async () => {
+  // The names in the text and the ids disagree; ids are authoritative, because
+  // only the client knows who was actually picked.
+  const { sender, target, roomId } = await mentionFixture('conflict');
+  const bystander = await authedAccount('conflict-bystander@test.com');
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [roomId, bystander.userId]);
+
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Bystander', bystander.userId]);
+
+  const { createMessage } = require('../src/services/message.service');
+  const message = await createMessage({
+    roomId, senderId: sender.userId,
+    content: 'this text names @Bystander',
+    mentionedUserIds: [target.userId],
+  });
+
+  const rows = (
+    await query('SELECT user_id FROM message_mentions WHERE message_id = $1', [message.id])
+  ).rows.map((r) => r.user_id);
+  assert.deepEqual(rows, [target.userId], 'the id list wins; the text is not consulted');
+});
+
+dbTest('the per-room digest finds a structured mention', async () => {
+  const { sender, target, roomId } = await mentionFixture('digest');
+  const { createMessage } = require('../src/services/message.service');
+
+  await createMessage({
+    roomId, senderId: sender.userId,
+    content: 'the needle can be found in the digest too',
+    mentionedUserIds: [target.userId],
+  });
+
+  // Back the window up so last_seen_at does not exclude the message.
+  await query(
+    `UPDATE room_members SET last_seen_at = NOW() - interval '1 day'
+     WHERE room_id = $1 AND user_id = $2`,
+    [roomId, target.userId],
+  );
+
+  const res = await fetch(`${baseUrl}/api/digest/room/${roomId}`, {
+    headers: { authorization: `Bearer ${target.token}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const items = JSON.parse(body).data.items;
+  assert.ok(
+    items.some((i) => i.type === 'mention'),
+    'the mentioned user must see it in their digest',
+  );
+});
+
+dbTest('the digest does not fall back to text matching', async () => {
+  // The asymmetry with createMessage is deliberate. Re-deriving mentions from
+  // text here would reintroduce the rename bug on historical rows, which is
+  // where it matters most — a name may have changed since the message was sent.
+  const { sender, target, roomId } = await mentionFixture('nofallback');
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Ghostname', target.userId]);
+
+  // A message that NAMES the user in text but records no mention rows, as if an
+  // older client had sent it.
+  const message = (
+    await query(
+      `INSERT INTO messages (room_id, sender_id, content)
+       VALUES ($1, $2, 'hey @Ghostname with no mention row') RETURNING id`,
+      [roomId, sender.userId],
+    )
+  ).rows[0];
+
+  await query(
+    `UPDATE room_members SET last_seen_at = NOW() - interval '1 day'
+     WHERE room_id = $1 AND user_id = $2`,
+    [roomId, target.userId],
+  );
+
+  const res = await fetch(`${baseUrl}/api/digest/room/${roomId}`, {
+    headers: { authorization: `Bearer ${target.token}` },
+  });
+  const items = JSON.parse(await res.text()).data.items;
+  assert.ok(
+    !items.some((i) => i.type === 'mention' && i.id === message.id),
+    'text alone must not produce a digest mention',
+  );
+});
+
+dbTest('the cross-room digest finds a structured mention', async () => {
+  const { sender, target, roomId } = await mentionFixture('xdigest');
+  const { createMessage } = require('../src/services/message.service');
+
+  await createMessage({
+    roomId, senderId: sender.userId,
+    content: 'a cross room needle indeed',
+    mentionedUserIds: [target.userId],
+  });
+  await query(
+    `UPDATE room_members SET last_seen_at = NOW() - interval '1 day'
+     WHERE room_id = $1 AND user_id = $2`,
+    [roomId, target.userId],
+  );
+
+  const res = await fetch(`${baseUrl}/api/digest`, {
+    headers: { authorization: `Bearer ${target.token}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const items = JSON.parse(body).data.items;
+  assert.ok(
+    items.some((i) => i.type === 'mention' && i.room_id === roomId),
+    'the cross-room digest must include the mention',
+  );
+});
+
+dbTest('listMessages and searchMessages expose mentioned_user_ids', async () => {
+  const { sender, target, roomId } = await mentionFixture('payload');
+  const { createMessage } = require('../src/services/message.service');
+  const needle = `payloadneedle${Date.now()}`;
+
+  const withMention = await createMessage({
+    roomId, senderId: sender.userId, content: `${needle} and @you`,
+    mentionedUserIds: [target.userId],
+  });
+  const withoutMention = await createMessage({
+    roomId, senderId: sender.userId, content: `${needle} with nobody`,
+  });
+
+  const res = await fetch(`${baseUrl}/api/messages/room/${roomId}`, {
+    headers: { authorization: `Bearer ${sender.token}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const { messages } = JSON.parse(body).data;
+
+  const mentioned = messages.find((m) => m.id === withMention.id);
+  assert.deepEqual(
+    mentioned.mentioned_user_ids, [target.userId],
+    'the mentioned ids must be on the payload',
+  );
+
+  const plain = messages.find((m) => m.id === withoutMention.id);
+  assert.deepEqual(
+    plain.mentioned_user_ids, [],
+    'a message with no mentions must yield [], never null, so the client can map over it',
+  );
+
+  // And the search shape agrees, or the client sees two different message shapes.
+  const search = await fetch(`${baseUrl}/api/messages/room/${roomId}/search?q=${needle}`, {
+    headers: { authorization: `Bearer ${sender.token}` },
+  });
+  const searchBody = await search.text();
+  assert.equal(search.status, 200, searchBody);
+  const found = JSON.parse(searchBody).data.messages.find((m) => m.id === withMention.id);
+  assert.deepEqual(found.mentioned_user_ids, [target.userId], 'search must expose the same field');
+});
+
+dbTest('createMessage returns mentioned_user_ids so the sender can confirm them', async () => {
+  const { sender, target, roomId } = await mentionFixture('confirm');
+  const { createMessage } = require('../src/services/message.service');
+
+  const message = await createMessage({
+    roomId, senderId: sender.userId, content: 'hi', mentionedUserIds: [target.userId],
+  });
+  assert.deepEqual(message.mentioned_user_ids, [target.userId]);
+
+  const none = await createMessage({ roomId, senderId: sender.userId, content: 'hi again' });
+  assert.deepEqual(none.mentioned_user_ids, [], 'no mentions must be an empty array');
+});
+
+dbTest('a failed send leaves no mention rows behind', async () => {
+  const { sender, target, roomId } = await mentionFixture('rollback');
+  const { createMessage } = require('../src/services/message.service');
+
+  const before = (await query('SELECT COUNT(*)::int n FROM message_mentions')).rows[0].n;
+
+  // An attachment URL that was never uploaded fails inside the transaction,
+  // after the mention ids were resolved.
+  await assert.rejects(
+    () => createMessage({
+      roomId, senderId: sender.userId, content: '@you @too',
+      attachments: [{ url: 'https://x/never-uploaded-for-mentions.pdf' }],
+      mentionedUserIds: [target.userId],
+    }),
+    (err) => err.status === 400,
+  );
+
+  const after = (await query('SELECT COUNT(*)::int n FROM message_mentions')).rows[0].n;
+  assert.equal(after, before, 'the mention insert must be inside the same transaction as the message');
 });
 
 // --- Decisions search (Bug 5) ------------------------------------------------

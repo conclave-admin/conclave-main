@@ -10,7 +10,8 @@ const presence = require('../services/presence.service');
 // Client -> Server:
 //   join-room        { roomId }
 //   leave-room       { roomId }
-//   send-message     { roomId, content, replyToId?, attachments? }
+//   send-message     { roomId, content, replyToId?, attachments?,
+//                      mentionedUserIds? }
 //   typing            { roomId }
 //   stop-typing       { roomId }
 //   message-read      { roomId, messageId }
@@ -162,7 +163,10 @@ function registerSocketHandlers(io) {
     });
 
     // --- send-message: persist to DB, then broadcast the saved row ---
-    socket.on('send-message', async ({ roomId, content, replyToId, attachments }) => {
+    // mentionedUserIds is how a client says who was mentioned. Optional for now:
+    // omitting it falls back to matching display names in the text, which is
+    // temporary — see resolveMentionIds in services/message.service.js.
+    socket.on('send-message', async ({ roomId, content, replyToId, attachments, mentionedUserIds }) => {
       try {
         const message = await createMessage({
           roomId,
@@ -170,6 +174,7 @@ function registerSocketHandlers(io) {
           content,
           replyToId,
           attachments,
+          mentionedUserIds,
         });
 
         // Auto-clear typing indicator when a message is sent

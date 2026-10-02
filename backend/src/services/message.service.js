@@ -66,12 +66,15 @@ function serializeAttachment(row) {
  * @param {string} params.content   - message body text
  * @param {string} [params.replyToId] - UUID of the message being replied to
  * @param {Array}  [params.attachments] - array of { url } from POST /upload
+ * @param {Array}  [params.mentionedUserIds] - ids of users this message mentions.
+ *   When omitted, mentions are inferred from the text — see resolveMentionIds
+ *   for why that fallback exists and when it goes away.
  * @param {object} [params.io] - Socket.IO instance, used only to push mention
  *   notifications. Optional: the notification row is written either way, and
  *   without it the mentions simply are not pushed live.
  * @returns {object} The inserted message row enriched with sender info and attachments
  */
-async function createMessage({ roomId, senderId, content, replyToId, attachments, io }) {
+async function createMessage({ roomId, senderId, content, replyToId, attachments, mentionedUserIds, io }) {
   const cleanAttachments = validateAttachments(attachments);
   const hasContent = typeof content === 'string' && content.trim().length > 0;
 
@@ -108,7 +111,13 @@ async function createMessage({ roomId, senderId, content, replyToId, attachments
     }
   }
 
-  // 3. Insert message + attachments in a transaction
+  // 3. Work out who is mentioned, before the insert, so the rows can be written
+  //    in the same transaction as the message.
+  const mentionedIds = await resolveMentionIds({
+    roomId, senderId, content, mentionedUserIds,
+  });
+
+  // 4. Insert message + attachments in a transaction
   const client = await pool.connect();
   let message;
   let savedAttachments = [];
@@ -166,6 +175,17 @@ async function createMessage({ roomId, senderId, content, replyToId, attachments
       savedAttachments.push(attResult.rows[0]);
     }
 
+    for (const mentionedId of mentionedIds) {
+      await client.query(
+        `INSERT INTO message_mentions (message_id, user_id)
+         VALUES ($1, $2)
+         -- Already claimed by an earlier attachment-free path or a retry; the
+         -- composite primary key means a duplicate mention is not an error.
+         ON CONFLICT DO NOTHING`,
+        [message.id, mentionedId],
+      );
+    }
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -174,79 +194,114 @@ async function createMessage({ roomId, senderId, content, replyToId, attachments
     client.release();
   }
 
-  // 4. Fetch sender display_name + avatar for the broadcast
+  // 6. Fetch sender display_name + avatar for the broadcast
   const sender = await query(
     `SELECT display_name, avatar_url FROM users WHERE id = $1`,
     [senderId],
   );
 
-  // 5. Notify anyone whose name appears in the message. After the commit, so a
-  //    mention is never announced for a message that rolled back.
+  // 7. Notify the people recorded as mentioned. After the commit, so a mention is
+  //    never announced for a message that rolled back.
+  //
+  //    Driven by `mentionedIds` — the same list written to message_mentions — not
+  //    by a second pass over the room members. Resolving mentions twice is how the
+  //    two would come to disagree.
   //
   //    Runs whether or not `io` was supplied. The notification ROW is the source
   //    of truth — it is what the list endpoint reads and what survives until
   //    seen — while the socket push is only delivery. Gating the whole thing on
-  //    `io` would mean a mention sent over a path that passes no socket (or
-  //    before server.js has published one) is silently never recorded, which is
-  //    exactly the class of bug that left room_invite unreadable for two items.
-  //    notifyAndEmit already treats a missing io as "write only".
+  //    `io` would mean a mention sent over a path that passes no socket is
+  //    silently never recorded, which is exactly the class of bug that left
+  //    room_invite unreadable for two items.
   //
   //    Best-effort: a notification failure must not fail the send. The message is
-  //    the user's actual intent and it is already durable at this point, so
-  //    losing a bell entry is strictly better than reporting a failed send for a
-  //    message that exists.
-  await notifyMentions({ message, content, senderId, io });
+  //    the user's actual intent and is already durable at this point, so losing a
+  //    bell entry is strictly better than reporting a failed send for a message
+  //    that exists.
+  await notifyMentions({ message, mentionedIds, senderId, io });
 
   return {
     ...message,
     sender_name: sender.rows[0]?.display_name || null,
     sender_avatar: sender.rows[0]?.avatar_url || null,
     attachments: savedAttachments.map(serializeAttachment),
+    // Exposed so the client can style a real mention rather than regex-matching
+    // the text, and so a client can learn which ids a send actually resolved to.
+    mentioned_user_ids: mentionedIds,
   };
 }
 
 /**
- * Create and push a `mention` notification for each room member named in the
- * message body.
+ * Decide which users a message mentions, as ids.
  *
- * The sender is excluded in the query rather than relying on createNotification
- * throwing when actorId === recipientId — a self-mention is not an error here, it
- * is just not something to notify anyone about.
+ * Preferred path: the client sends `mentionedUserIds`, because only the client
+ * knows who the user actually picked from autocomplete. A display name is not an
+ * identity — it is not even unique — so text cannot express "this person".
  *
- * Display-name matching is a stopgap (BACKEND_TASKS.md Bug 9); item H replaces it
- * with a message_mentions table driven by client-supplied ids.
+ * TEMPORARY FALLBACK: when no ids are sent, mentions are inferred from the text
+ * with the old regex. This exists only so existing clients keep working; the sole
+ * client send path (client/src/hooks/useMessages.js) does not send ids yet.
+ *
+ * Remove the fallback when that hook passes `mentionedUserIds`. Until then a
+ * rename still misdirects mentions for messages sent without ids — that is the
+ * bug item H exists to fix, and the fallback is what keeps it alive in a
+ * time-boxed way rather than a permanent one. The digest does NOT have this
+ * fallback: it reads message_mentions only, so history never re-derives mentions
+ * from text.
+ *
+ * Ids that are not room members are dropped rather than rejected. A stale or
+ * hostile id list must not fail an otherwise-valid send — the message itself is
+ * fine, and someone merely removed from the room should not receive mentions.
+ * The sender is excluded for the same reason createNotification would reject a
+ * self-mention: an unread row in your own bell for your own message.
+ *
+ * @returns {Promise<string[]>} de-duplicated ids, empty if none
  */
-async function notifyMentions({ message, content, senderId, io }) {
-  const text = typeof content === 'string' ? content.trim() : '';
-  // Cheap pre-check: nothing to match without an @, and this skips a query on
-  // every ordinary message.
-  if (!text.includes('@')) return [];
+async function resolveMentionIds({ roomId, senderId, content, mentionedUserIds }) {
+  let candidates = null;
 
-  let members;
-  try {
-    const found = await query(
+  if (Array.isArray(mentionedUserIds) && mentionedUserIds.length > 0) {
+    candidates = mentionedUserIds.filter(
+      (id) => typeof id === 'string' && id !== senderId,
+    );
+  } else {
+    // Fallback: text matching against the room's members.
+    const text = typeof content === 'string' ? content.trim() : '';
+    // Cheap pre-check, and it skips a query on every ordinary message.
+    if (!text.includes('@')) return [];
+
+    const members = await query(
       `SELECT rm.user_id, u.display_name
        FROM room_members rm
        INNER JOIN users u ON u.id = rm.user_id AND u.deleted_at IS NULL
        WHERE rm.room_id = $1 AND rm.user_id <> $2`,
-      [message.room_id, senderId],
+      [roomId, senderId],
     );
-    members = found.rows;
-  } catch (err) {
-    console.error('Mention lookup failed', err);
-    return [];
+    candidates = members.rows
+      .filter((m) => isMentioned(text, m.display_name))
+      .map((m) => m.user_id);
   }
 
-  // Matched in JS rather than in SQL. The pattern is per-member (it embeds that
-  // member's display name), so it cannot be one parameterised `~` comparison —
-  // Postgres would need the expression rebuilt per row. The room membership
-  // check still happens in SQL, so an unauthorised room cannot be probed here.
-  const recipients = members
-    .filter((m) => isMentioned(text, m.display_name))
-    .map((m) => m.user_id);
+  if (candidates.length === 0) return [];
 
+  // One membership check for the whole list. `= ANY($1::uuid[])` rather than one
+  // query per id, and it is what turns an unverifiable id into silence.
+  const members = await query(
+    `SELECT user_id
+     FROM room_members
+     WHERE room_id = $1 AND user_id = ANY($2::uuid[])`,
+    [roomId, candidates],
+  );
+
+  return [...new Set(members.rows.map((r) => r.user_id))];
+}
+
+/**
+ * Create and push a `mention` notification for each id resolved for this message.
+ */
+async function notifyMentions({ message, mentionedIds, senderId, io }) {
   const notified = [];
-  for (const recipientId of recipients) {
+  for (const recipientId of mentionedIds) {
     try {
       await notifyAndEmit({
         recipientId,

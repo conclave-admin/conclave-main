@@ -23,7 +23,7 @@ Legend: DONE = shipped and verified. PARTIAL = shipped with a known problem. FIX
 | Notifications                           | DONE (list, unread count, mark-seen; invites and mentions emitted)    |
 | File upload (Cloudinary)                | DONE (real round trip verified; attachments are server-owned)         |
 | Migrations                              | DONE (runner is re-runnable; all 11 verified against a real Postgres) |
-| Tests                                   | DONE (82 tests: 15 no-database smoke, 67 on a real DB + Cloudinary)   |
+| Tests                                   | DONE (99 tests: 15 no-database smoke, 84 on a real DB + Cloudinary)   |
 
 ### Verification status
 
@@ -38,7 +38,7 @@ What that verification found and changed:
 - **The `rooms.slug` backfill produces correct values on real data**, including the two cases most likely to break: a duplicate room name (`Product & Engineering` → `product-engineering` and `product-engineering-2`) and a name with nothing sluggable (`日本語` → `room`).
 - The `(created_at, id)` tuple cursor pages through tied timestamps without skipping; the per-room digest window returns only the unread room, where a single shared `MAX(last_seen_at)` would have returned nothing; `22P02`/`23503`/`23505` map as documented.
 
-**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all eleven migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. `backend/tests/upload.test.js` does the same for the Cloudinary path, including a real upload round trip, and skips when credentials are absent. `npm test` runs both alongside the no-database smoke suite — 82 tests total.
+**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all twelve migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. `backend/tests/upload.test.js` does the same for the Cloudinary path, including a real upload round trip, and skips when credentials are absent. `npm test` runs both alongside the no-database smoke suite — 99 tests total.
 
 One thing that verification still cannot prove: behaviour under real production data volume. The queries were verified for correctness, not for query plans at scale.
 
@@ -59,8 +59,7 @@ Nine files, applied in filename order and recorded in `schema_migrations`. 001�
 | `009_add_notification_actor.sql`         | adds `notifications.actor_id`                                                    | a room invite could not say who invited you                    |
 | `010_add_file_uploads.sql`               | adds `file_uploads`, `UNIQUE` on `file_url`, partial index on unclaimed          | any member could persist an arbitrary string as a file URL     |
 | `011_tasks_status_check.sql`             | `CHECK (status IN ('open','in_progress','done'))` on `tasks`                     | migration 002 only documented the values in a comment          |
-
-Item H (`message_mentions`) is the next migration and takes number `012`.
+| `012_add_message_mentions.sql`           | adds `message_mentions`, composite PK, index leading on `user_id`                 | a display name is not an identity, so a rename redirected mentions |
 
 Three of these are worth knowing about before you touch them:
 
@@ -182,7 +181,9 @@ Was `content ILIKE '%@' || display_name || '%'`, which had three problems: `%` a
 
 Now matches a regex-escaped display name with an explicit non-word boundary after it, via the `mentionPattern` helper. "Al" no longer matches "@Alice", and metacharacters in a name are inert.
 
-**Still a stopgap.** This is text matching and cannot be correct — a display name is not an identity, and renaming a user changes who gets mentioned. The `message_mentions` table (item H) is the real fix.
+**Real fix landed in item H.** `message_mentions` now records who was mentioned, by id, and both the digest and notifications read it. A rename no longer moves a mention.
+
+The matcher itself still exists as a temporary fallback in `createMessage`, for clients that send no `mentionedUserIds` — see item H for the removal condition. The digest no longer uses it at all, so history never re-derives mentions from text.
 
 ### Bug 10. `migrate.js` is not re-runnable (medium): FIXED
 
@@ -351,9 +352,23 @@ The sidebar has an "Invite members" link and the login copy says invite-only. De
 
 This is also the open half of Bug 11 — registration is fully open today while the login screen claims otherwise, and `role_id` is still never checked.
 
-### H. Structured mentions (OPEN)
+### H. Structured mentions (DONE, with one temporary fallback)
 
-Add a `message_mentions(message_id, user_id)` table, parse `@` mentions at send time from a client-supplied `mentionedUserIds`, and use it for both the digest and `mention` notifications. This replaces the regex stopgap in Bug 9, which is correct but still text matching — a display name is not an identity, and renaming a user changes who gets mentioned.
+`message_mentions(message_id, user_id)` exists (migration 012), and both the digest and `mention` notifications read it instead of matching message text.
+
+- **Composite primary key** `(message_id, user_id)` — a client that mentions someone twice records them once rather than erroring. Both FKs `ON DELETE CASCADE`, so a deleted message or account leaves nothing for the digest to join. The index leads with `user_id` because both digest queries read by recipient.
+- **`createMessage` accepts `mentionedUserIds`** and writes the rows inside the message transaction, so a failed send leaves no mention rows behind. Notifications are driven by that same resolved list rather than a second pass over room members — resolving twice is how the two would come to disagree.
+- **Ids that are not room members are silently dropped**, not rejected. A stale or hostile id list must not fail an otherwise-valid send. The sender is excluded, so nobody is notified of their own message.
+- **`mentioned_user_ids` is on the payload** from `createMessage`, `listMessages` and `searchMessages`, as `[]` rather than `null` when empty. This is what `client/src/components/chat/MessageTimeline.jsx` needs to replace its `/(^|\s)@\w+/` heuristic — two members can share a display name (`display_name` is not unique, only `email` is), so text genuinely cannot tell them apart.
+- **`send-message` on the socket accepts `mentionedUserIds`** as well, so the realtime path does not fall behind REST.
+
+**The rename bug is fixed and tested.** A message records who was mentioned by id; renaming someone afterwards does not move the mention or suppress the notification. Verified end to end, including a message whose text contains no `@token` at all.
+
+**One temporary fallback remains, deliberately time-boxed.** When a client sends no `mentionedUserIds`, `createMessage` still infers mentions from the text using the old regex (`services/mention.service.js`). This exists solely because the only client send path — `client/src/hooks/useMessages.js` — does not send ids yet, and removing mentions for every existing message would be a worse failure than keeping a known flaw.
+
+**Remove it when that hook passes `mentionedUserIds`.** The removal condition is specific and one line of client work. Until then, renaming a user still misdirects mentions for messages sent without ids — which is exactly the bug this item fixes, alive only in the bridge.
+
+**The digest deliberately has no such fallback.** It reads `message_mentions` only, so a message from an older client simply has no rows and does not appear. Re-deriving mentions from text in the digest would reintroduce the rename bug on historical rows, which is where it matters most: a name may have changed since those messages were written. That asymmetry with `createMessage` is intentional.
 
 ### I. Message edit, delete and reactions (OPEN)
 
