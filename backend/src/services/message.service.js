@@ -1,5 +1,7 @@
 const { pool, query } = require('../config/db');
 const ApiError = require('../utils/ApiError');
+const { notifyAndEmit } = require('./notification.service');
+const { isMentioned } = require('./mention.service');
 
 // Kept in step with the multer limit in routes/upload.routes.js.
 const MAX_ATTACHMENTS = 10;
@@ -64,9 +66,12 @@ function serializeAttachment(row) {
  * @param {string} params.content   - message body text
  * @param {string} [params.replyToId] - UUID of the message being replied to
  * @param {Array}  [params.attachments] - array of { url } from POST /upload
+ * @param {object} [params.io] - Socket.IO instance, used only to push mention
+ *   notifications. Optional: the notification row is written either way, and
+ *   without it the mentions simply are not pushed live.
  * @returns {object} The inserted message row enriched with sender info and attachments
  */
-async function createMessage({ roomId, senderId, content, replyToId, attachments }) {
+async function createMessage({ roomId, senderId, content, replyToId, attachments, io }) {
   const cleanAttachments = validateAttachments(attachments);
   const hasContent = typeof content === 'string' && content.trim().length > 0;
 
@@ -175,12 +180,90 @@ async function createMessage({ roomId, senderId, content, replyToId, attachments
     [senderId],
   );
 
+  // 5. Notify anyone whose name appears in the message. After the commit, so a
+  //    mention is never announced for a message that rolled back.
+  //
+  //    Runs whether or not `io` was supplied. The notification ROW is the source
+  //    of truth — it is what the list endpoint reads and what survives until
+  //    seen — while the socket push is only delivery. Gating the whole thing on
+  //    `io` would mean a mention sent over a path that passes no socket (or
+  //    before server.js has published one) is silently never recorded, which is
+  //    exactly the class of bug that left room_invite unreadable for two items.
+  //    notifyAndEmit already treats a missing io as "write only".
+  //
+  //    Best-effort: a notification failure must not fail the send. The message is
+  //    the user's actual intent and it is already durable at this point, so
+  //    losing a bell entry is strictly better than reporting a failed send for a
+  //    message that exists.
+  await notifyMentions({ message, content, senderId, io });
+
   return {
     ...message,
     sender_name: sender.rows[0]?.display_name || null,
     sender_avatar: sender.rows[0]?.avatar_url || null,
     attachments: savedAttachments.map(serializeAttachment),
   };
+}
+
+/**
+ * Create and push a `mention` notification for each room member named in the
+ * message body.
+ *
+ * The sender is excluded in the query rather than relying on createNotification
+ * throwing when actorId === recipientId — a self-mention is not an error here, it
+ * is just not something to notify anyone about.
+ *
+ * Display-name matching is a stopgap (BACKEND_TASKS.md Bug 9); item H replaces it
+ * with a message_mentions table driven by client-supplied ids.
+ */
+async function notifyMentions({ message, content, senderId, io }) {
+  const text = typeof content === 'string' ? content.trim() : '';
+  // Cheap pre-check: nothing to match without an @, and this skips a query on
+  // every ordinary message.
+  if (!text.includes('@')) return [];
+
+  let members;
+  try {
+    const found = await query(
+      `SELECT rm.user_id, u.display_name
+       FROM room_members rm
+       INNER JOIN users u ON u.id = rm.user_id AND u.deleted_at IS NULL
+       WHERE rm.room_id = $1 AND rm.user_id <> $2`,
+      [message.room_id, senderId],
+    );
+    members = found.rows;
+  } catch (err) {
+    console.error('Mention lookup failed', err);
+    return [];
+  }
+
+  // Matched in JS rather than in SQL. The pattern is per-member (it embeds that
+  // member's display name), so it cannot be one parameterised `~` comparison —
+  // Postgres would need the expression rebuilt per row. The room membership
+  // check still happens in SQL, so an unauthorised room cannot be probed here.
+  const recipients = members
+    .filter((m) => isMentioned(text, m.display_name))
+    .map((m) => m.user_id);
+
+  const notified = [];
+  for (const recipientId of recipients) {
+    try {
+      await notifyAndEmit({
+        recipientId,
+        type: 'mention',
+        referenceId: message.id,
+        actorId: senderId,
+        io,
+      });
+      notified.push(recipientId);
+    } catch (err) {
+      // One recipient failing must not abort the others — a duplicate key or a
+      // member removed between the lookup and the write should cost one bell
+      // entry, not all of them.
+      console.error('Mention notification failed', err);
+    }
+  }
+  return notified;
 }
 
 module.exports = { createMessage };

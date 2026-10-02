@@ -1122,6 +1122,536 @@ dbTest('undated tasks sort after dated ones rather than first', async () => {
   );
 });
 
+// --- Notifications endpoints (item B) -----------------------------------------
+
+// A notification for the fixture user, seeded directly so the list/seen tests do
+// not depend on whichever write path happens to be under test.
+async function seedNotification({ recipientId, type = 'mention', referenceId = null, actorId = null, seen = false, createdAt = null }) {
+  const row = (
+    await query(
+      `INSERT INTO notifications (recipient_id, type, reference_id, actor_id, seen, created_at)
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()))
+       RETURNING id, recipient_id, type, reference_id, actor_id, seen, created_at`,
+      [recipientId, type, referenceId, actorId, seen, createdAt],
+    )
+  ).rows[0];
+  return row;
+}
+
+dbTest('GET /notifications returns notifications, an unread count and a cursor', async () => {
+  const { token: myToken, userId: me } = await authedAccount('notif-list@test.com');
+  const { token: otherToken } = await authedAccount('notif-other@test.com');
+
+  await seedNotification({ recipientId: me, actorId: null });
+  await seedNotification({ recipientId: me, seen: true });
+
+  const res = await fetch(`${baseUrl}/api/notifications`, {
+    headers: { authorization: `Bearer ${myToken}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const data = JSON.parse(body).data;
+
+  assert.ok(Array.isArray(data.notifications));
+  assert.equal(typeof data.unreadCount, 'number');
+  assert.ok('nextCursor' in data, 'the shape must include nextCursor even when null');
+  assert.equal(data.notifications.length, 2);
+  assert.equal(data.unreadCount, 1, 'only the unseen row counts');
+
+  // The list is scoped to the caller: another account's rows must not appear.
+  const otherRes = await fetch(`${baseUrl}/api/notifications`, {
+    headers: { authorization: `Bearer ${otherToken}` },
+  });
+  const otherData = JSON.parse(await otherRes.text()).data;
+  assert.equal(otherData.notifications.length, 0, "must not list another user's notifications");
+  assert.equal(otherData.unreadCount, 0);
+});
+
+dbTest('the unread count is the total, not a count of the current page', async () => {
+  // Counting the returned rows would silently cap the bell badge at PAGE_SIZE.
+  const { token: myToken, userId: me } = await authedAccount('notif-count@test.com');
+  for (let i = 0; i < 55; i += 1) {
+    await seedNotification({ recipientId: me });
+  }
+
+  const res = await fetch(`${baseUrl}/api/notifications`, {
+    headers: { authorization: `Bearer ${myToken}` },
+  });
+  const data = JSON.parse(await res.text()).data;
+  assert.equal(data.notifications.length, 50, 'a page is capped at PAGE_SIZE');
+  assert.equal(data.unreadCount, 55, 'the count must exceed the page size');
+  assert.ok(data.nextCursor, 'a full page must hand back a cursor');
+});
+
+dbTest('unseenOnly filters the list', async () => {
+  const { token: myToken, userId: me } = await authedAccount('notif-unseen@test.com');
+  await seedNotification({ recipientId: me });
+  await seedNotification({ recipientId: me, seen: true });
+
+  const res = await fetch(`${baseUrl}/api/notifications?unseenOnly=true`, {
+    headers: { authorization: `Bearer ${myToken}` },
+  });
+  const data = JSON.parse(await res.text()).data;
+  assert.equal(data.notifications.length, 1);
+  assert.equal(data.notifications[0].seen, false);
+});
+
+dbTest('notification pagination pages through without skipping tied timestamps', async () => {
+  const { token: myToken, userId: me } = await authedAccount('notif-page@test.com');
+  const at = new Date('2026-01-01T10:00:00.000Z');
+
+  // Three rows sharing one created_at, then one a second later. A bare
+  // `created_at < cursor` would drop the ties, so the id has to break them.
+  for (let i = 0; i < 3; i += 1) {
+    await seedNotification({ recipientId: me, createdAt: at });
+  }
+  await seedNotification({ recipientId: me, createdAt: new Date(at.getTime() + 1000) });
+
+  // Walk the whole list with the cursor, one row at a time, and prove nothing is
+  // skipped or repeated. A bare `created_at < cursor` would silently drop the
+  // three rows that share a timestamp.
+  const seen = [];
+  let cursor = null;
+  for (let guard = 0; guard < 10; guard += 1) {
+    const url = cursor
+      ? `${baseUrl}/api/notifications?before=${encodeURIComponent(cursor)}`
+      : `${baseUrl}/api/notifications`;
+    const page = JSON.parse(
+      await (await fetch(url, { headers: { authorization: `Bearer ${myToken}` } })).text(),
+    ).data;
+
+    for (const n of page.notifications) {
+      assert.ok(!seen.includes(n.id), `${n.id} was returned twice`);
+      seen.push(n.id);
+    }
+    cursor = page.nextCursor;
+    if (!cursor) break;
+  }
+
+  assert.equal(seen.length, 4, 'every row must be reachable exactly once');
+  assert.equal(new Set(seen).size, 4);
+  assert.equal(cursor, null, 'the walk must terminate');
+});
+
+dbTest("you cannot mark somebody else's notification as seen", async () => {
+  // Without recipient_id in the WHERE clause, any authenticated user could
+  // silence somebody else's bell by guessing a UUID.
+  const { userId: victim } = await authedAccount('notif-victim@test.com');
+  const { token: attackerToken } = await authedAccount('notif-attacker@test.com');
+  const theirs = await seedNotification({ recipientId: victim });
+
+  const res = await fetch(`${baseUrl}/api/notifications/seen`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${attackerToken}` },
+    body: JSON.stringify({ notificationId: theirs.id }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 404, `expected 404, got ${res.status}: ${body}`);
+
+  const still = (await query('SELECT seen FROM notifications WHERE id = $1', [theirs.id])).rows[0];
+  assert.equal(still.seen, false, "the victim's notification must be untouched");
+});
+
+dbTest('markSeen updates one notification and reports the count', async () => {
+  const { token: myToken, userId: me } = await authedAccount('notif-mark@test.com');
+  const target = await seedNotification({ recipientId: me });
+  await seedNotification({ recipientId: me });
+
+  const res = await fetch(`${baseUrl}/api/notifications/seen`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${myToken}` },
+    body: JSON.stringify({ notificationId: target.id }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  assert.equal(JSON.parse(body).data.updated, 1);
+
+  const after = (await query('SELECT seen FROM notifications WHERE id = $1', [target.id])).rows[0];
+  assert.equal(after.seen, true);
+});
+
+dbTest('markSeen with all:true only touches the caller, and is idempotent', async () => {
+  const { token: myToken, userId: me } = await authedAccount('notif-all@test.com');
+  const { userId: theirs } = await authedAccount('notif-all-other@test.com');
+
+  await seedNotification({ recipientId: me });
+  await seedNotification({ recipientId: me });
+  await seedNotification({ recipientId: me, seen: true });
+  const untouched = await seedNotification({ recipientId: theirs });
+
+  const first = await fetch(`${baseUrl}/api/notifications/seen`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${myToken}` },
+    body: JSON.stringify({ all: true }),
+  });
+  assert.equal(JSON.parse(await first.text()).data.updated, 2, 'only the two unseen rows');
+
+  // Repeating it changes nothing and reports nothing, so the client can trust
+  // `updated` as "rows this call changed".
+  const second = await fetch(`${baseUrl}/api/notifications/seen`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${myToken}` },
+    body: JSON.stringify({ all: true }),
+  });
+  assert.equal(JSON.parse(await second.text()).data.updated, 0);
+
+  const otherStill = (await query('SELECT seen FROM notifications WHERE id = $1', [untouched.id])).rows[0];
+  assert.equal(otherStill.seen, false, "another account's row must not be touched");
+});
+
+dbTest('markSeen rejects a body naming neither one nor all', async () => {
+  const { token: myToken } = await authedAccount('notif-badbody@test.com');
+  for (const body of [{}, { notificationId: 'not-a-uuid' }, { all: 'yes' }]) {
+    const res = await fetch(`${baseUrl}/api/notifications/seen`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${myToken}` },
+      body: JSON.stringify(body),
+    });
+    assert.equal(res.status, 400, `should reject ${JSON.stringify(body)}`);
+  }
+});
+
+dbTest('a notification resolves to readable text, and a deleted message to a tombstone', async () => {
+  const { token: myToken, userId: me } = await authedAccount('notif-resolve@test.com');
+  const { userId: authorId } = await authedAccount('notif-author@test.com');
+
+  const room = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ('Notify Room', 'group', $1, 'notify-room') RETURNING id`,
+      [authorId],
+    )
+  ).rows[0];
+
+  const message = (
+    await query(
+      `INSERT INTO messages (room_id, sender_id, content)
+       VALUES ($1, $2, 'the original text') RETURNING id`,
+      [room.id, authorId],
+    )
+  ).rows[0];
+
+  await seedNotification({ recipientId: me, type: 'mention', referenceId: message.id, actorId: authorId });
+
+  const res = await fetch(`${baseUrl}/api/notifications`, {
+    headers: { authorization: `Bearer ${myToken}` },
+  });
+  const { notifications } = JSON.parse(await res.text()).data;
+  assert.equal(notifications[0].context.actor_name, 'Task Tester', 'the actor name resolves');
+  assert.equal(notifications[0].context.room_name, 'Notify Room');
+  assert.equal(notifications[0].context.message_preview, 'the original text');
+
+  // Soft-delete the subject: the notification survives, but the preview goes.
+  await query('UPDATE messages SET deleted_at = NOW() WHERE id = $1', [message.id]);
+
+  const after = JSON.parse(
+    (await (await fetch(`${baseUrl}/api/notifications`, {
+      headers: { authorization: `Bearer ${myToken}` },
+    })).text()),
+  ).data.notifications;
+  assert.equal(after.length, 1, 'a notification is never dropped because its subject is gone');
+  assert.equal(after[0].context.message_preview, null, 'retracted text must not resurface');
+});
+
+dbTest('a notification survives a hard-deleted message as nulls, not a 500', async () => {
+  // reference_id has no FK by design, so this is the dangling case the resolver
+  // has to tolerate.
+  const { token: myToken, userId: me } = await authedAccount('notif-dangling@test.com');
+  await seedNotification({
+    recipientId: me,
+    type: 'mention',
+    referenceId: '11111111-2222-3333-4444-555555555555',
+  });
+
+  const res = await fetch(`${baseUrl}/api/notifications`, {
+    headers: { authorization: `Bearer ${myToken}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const { notifications } = JSON.parse(body).data;
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].context.message_preview, null);
+  assert.equal(notifications[0].context.room_name, null);
+});
+
+dbTest('addMember notifies the invitee and records who invited them', async () => {
+  // The room_invite row existed since PR1 but nothing ever emitted it. This
+  // exercises the service path and the resolved context.
+  const inviter = await authedAccount('invite-inviter@test.com');
+  const invitee = await authedAccount('invite-invitee@test.com');
+
+  const room = await fetch(`${baseUrl}/api/rooms`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${inviter.token}` },
+    body: JSON.stringify({ name: 'Invite Test Room' }),
+  });
+  const roomId = JSON.parse(await room.text()).data.id;
+
+  const res = await fetch(`${baseUrl}/api/rooms/${roomId}/members`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${inviter.token}` },
+    body: JSON.stringify({ userId: invitee.userId }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 201, body);
+
+  const list = await fetch(`${baseUrl}/api/notifications`, {
+    headers: { authorization: `Bearer ${invitee.token}` },
+  });
+  const data = JSON.parse(await list.text()).data;
+  assert.equal(data.unreadCount, 1, 'the invitee should have exactly one unread');
+  assert.equal(data.notifications[0].type, 'room_invite');
+  assert.equal(data.notifications[0].context.actor_name, 'Task Tester', 'must name the inviter');
+  assert.equal(data.notifications[0].context.room_name, 'Invite Test Room');
+});
+
+dbTest('a mention notifies the named member but not the sender', async () => {
+  const sender = await authedAccount('mention-sender@test.com');
+  const target = await authedAccount('mention-target@test.com');
+  const bystander = await authedAccount('mention-bystander@test.com');
+
+  const room = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ('Mention Room', 'group', $1, 'mention-room') RETURNING id`,
+      [sender.userId],
+    )
+  ).rows[0];
+  for (const uid of [sender.userId, target.userId, bystander.userId]) {
+    await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [room.id, uid]);
+  }
+
+  // Distinct display names, since mention matching is by name.
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Amina', target.userId]);
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Victor', bystander.userId]);
+
+  const { createMessage } = require('../src/services/message.service');
+  await createMessage({
+    roomId: room.id,
+    senderId: sender.userId,
+    content: 'hey @Amina can you review this?',
+  });
+
+  const targetList = JSON.parse(
+    (await (await fetch(`${baseUrl}/api/notifications`, {
+      headers: { authorization: `Bearer ${target.token}` },
+    })).text()),
+  ).data;
+  assert.equal(targetList.unreadCount, 1, 'the mentioned member gets one');
+  assert.equal(targetList.notifications[0].type, 'mention');
+  assert.equal(targetList.notifications[0].context.actor_name, 'Task Tester', 'the sender is the actor');
+
+  const senderList = JSON.parse(
+    (await (await fetch(`${baseUrl}/api/notifications`, {
+      headers: { authorization: `Bearer ${sender.token}` },
+    })).text()),
+  ).data;
+  assert.equal(senderList.unreadCount, 0, 'the sender must not be notified of their own message');
+
+  const bystanderList = JSON.parse(
+    (await (await fetch(`${baseUrl}/api/notifications`, {
+      headers: { authorization: `Bearer ${bystander.token}` },
+    })).text()),
+  ).data;
+  assert.equal(bystanderList.unreadCount, 0, 'a room member who was not named gets nothing');
+});
+
+dbTest('mention matching respects word boundaries', async () => {
+  const sender = await authedAccount('boundary-sender@test.com');
+  const al = await authedAccount('boundary-al@test.com');
+
+  const room = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ('Boundary Room', 'group', $1, 'boundary-room') RETURNING id`,
+      [sender.userId],
+    )
+  ).rows[0];
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [room.id, sender.userId]);
+  await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [room.id, al.userId]);
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Al', al.userId]);
+
+  const { createMessage } = require('../src/services/message.service');
+  await createMessage({ roomId: room.id, senderId: sender.userId, content: 'cc @Alice and @Alison' });
+
+  const list = JSON.parse(
+    (await (await fetch(`${baseUrl}/api/notifications`, {
+      headers: { authorization: `Bearer ${al.token}` },
+    })).text()),
+  ).data;
+  assert.equal(list.unreadCount, 0, '"@Alison" must not count as a mention of "Al"');
+});
+
+dbTest('a message without an @ writes no notification rows', async () => {
+  const { createMessage } = require('../src/services/message.service');
+  const room = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ('Quiet Room', 'group', $1, 'quiet-room') RETURNING id`,
+      [user.id],
+    )
+  ).rows[0];
+  await query(
+    `INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'admin')
+     ON CONFLICT DO NOTHING`,
+    [room.id, user.id],
+  );
+
+  // A mention row that existed beforehand, to prove the count is being watched
+  // and not simply read as zero.
+  await query(
+    `INSERT INTO notifications (recipient_id, type, reference_id, actor_id)
+     VALUES ($1, 'mention', NULL, NULL)`,
+    [user.id],
+  );
+  const seeded = (await query('SELECT COUNT(*)::int n FROM notifications')).rows[0].n;
+  assert.ok(seeded > 0);
+
+  await createMessage({ roomId: room.id, senderId: user.id, content: 'an ordinary message' });
+
+  const after = (await query('SELECT COUNT(*)::int n FROM notifications')).rows[0].n;
+  assert.equal(after, seeded, 'an ordinary message must not notify anyone');
+});
+
+dbTest('a mention notification is written even when no socket is passed', async () => {
+  // The row is the source of truth and the socket is only delivery. Gating the
+  // write on `io` would mean a mention is silently lost on any path that does
+  // not supply one — the same failure that left room_invite unreadable.
+  const sender = await authedAccount('noio-sender@test.com');
+  const target = await authedAccount('noio-target@test.com');
+
+  const room = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ('No IO Room', 'group', $1, 'no-io-room') RETURNING id`,
+      [sender.userId],
+    )
+  ).rows[0];
+  for (const uid of [sender.userId, target.userId]) {
+    await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [room.id, uid]);
+  }
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Noio', target.userId]);
+
+  const { createMessage } = require('../src/services/message.service');
+  // No io argument at all — deliberately.
+  await createMessage({ roomId: room.id, senderId: sender.userId, content: 'hey @Noio' });
+
+  const rows = (
+    await query('SELECT COUNT(*)::int n FROM notifications WHERE recipient_id = $1', [target.userId])
+  ).rows[0].n;
+  assert.equal(rows, 1, 'the row must exist without a socket to push it');
+});
+
+dbTest('mention:seen carries a count, not a phantom notification row', async () => {
+  // Regression test. `notification` always carries a full row and clients append
+  // it straight to their list, so emitting a bare { updated } under that name
+  // inserted a row with no id, type or created_at. mark-seen now has its own
+  // event; this asserts the two names stay distinct.
+  const notif = require('../src/services/notification.service');
+  const { token: myToken, userId: me } = await authedAccount('seen-event@test.com');
+  const target = await seedNotification({ recipientId: me });
+
+  // Capture what each emitter actually puts on the wire.
+  const captured = [];
+  const fakeIo = {
+    to(room) {
+      return {
+        emit(event, payload) {
+          captured.push({ room, event, payload });
+        },
+      };
+    },
+  };
+
+  const presented = await notif.presentNotification(target);
+  assert.equal(notif.emitNotification(fakeIo, me, presented), true);
+  notif.emitNotificationsSeen(fakeIo, me, 1);
+
+  const byEvent = Object.fromEntries(captured.map((c) => [c.event, c]));
+  assert.deepEqual(
+    Object.keys(byEvent).sort(),
+    ['notification', 'notification:seen'],
+    'mark-seen must not reuse the notification event name',
+  );
+
+  assert.equal(
+    byEvent['notification'].room,
+    `user:${me}`,
+    'both go to the recipient\'s personal room',
+  );
+
+  // The full-row event must still be a complete notification.
+  const row = byEvent['notification'].payload.notification;
+  assert.ok(row.id, 'notification must carry an id');
+  assert.equal(typeof row.type, 'string');
+  assert.ok(row.context, 'notification must carry context');
+  assert.ok(!('updated' in row), 'the row event must not carry a count');
+
+  // The mark-seen event is a bare count and nothing else.
+  assert.deepEqual(byEvent['notification:seen'].payload, { updated: 1 });
+
+  // And with no socket it is a no-op rather than a throw.
+  assert.equal(notif.emitNotificationsSeen(undefined, me, 1), false);
+  assert.equal(notif.emitNotificationsSeen(fakeIo, undefined, 1), false);
+
+  await fetch(`${baseUrl}/api/notifications/seen`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${myToken}` },
+    body: JSON.stringify({ notificationId: target.id }),
+  });
+});
+
+dbTest('mention matching is case-insensitive, agreeing with the digest', async () => {
+  // The digest matches with Postgres `~*`, which ignores case. If the
+  // notification path is case-sensitive then "@amina" appears in Amina's digest
+  // but sends her no notification — sharing the pattern string was not enough,
+  // the two matchers have to agree on semantics too.
+  const { mentionPattern, isMentioned } = require('../src/services/mention.service');
+
+  for (const text of ['hey @Amina', 'hey @amina', 'HEY @AMINA', '@Amina']) {
+    assert.ok(isMentioned(text, 'Amina'), `"${text}" should count as a mention of Amina`);
+  }
+
+  // Still bounded: case-insensitivity must not cost the word boundary, in
+  // either case.
+  assert.ok(!isMentioned('@Aminaish', 'Amina'), '"@Aminaish" is not a mention of Amina');
+  assert.ok(!isMentioned('@aminaish', 'Amina'), '"@aminaish" is not a mention of Amina');
+  assert.ok(!isMentioned('hello @Al', 'Alice'), '"@Al" must not match Alice');
+  assert.ok(!isMentioned('@Al_', 'Alice'), '"@Al_" must not match Alice');
+
+  // And the two entry points must build the same pattern.
+  assert.equal(mentionPattern('Amina'), '@Amina([^A-Za-z0-9_]|$)');
+});
+
+dbTest('a lowercased mention reaches the notification, not just the digest', async () => {
+  // End-to-end version of the case-sensitivity regression.
+  const sender = await authedAccount('case-sender@test.com');
+  const target = await authedAccount('case-target@test.com');
+
+  const room = (
+    await query(
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ('Case Room', 'group', $1, 'case-room') RETURNING id`,
+      [sender.userId],
+    )
+  ).rows[0];
+  for (const uid of [sender.userId, target.userId]) {
+    await query(`INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, 'member')`, [room.id, uid]);
+  }
+  await query('UPDATE users SET display_name = $1 WHERE id = $2', ['Casely', target.userId]);
+
+  const { createMessage } = require('../src/services/message.service');
+  await createMessage({ roomId: room.id, senderId: sender.userId, content: 'hey @casely can you look?' });
+
+  const list = JSON.parse(
+    (await (await fetch(`${baseUrl}/api/notifications`, {
+      headers: { authorization: `Bearer ${target.token}` },
+    })).text()),
+  ).data;
+  assert.equal(list.unreadCount, 1, 'a lowercased @mention must still notify');
+  assert.equal(list.notifications[0].type, 'mention');
+});
+
 // --- Decisions search (Bug 5) ------------------------------------------------
 
 dbTest('decision tags are searchable, and title/body are still ranked', async () => {

@@ -230,6 +230,26 @@ function emitNotification(io, recipientId, presented) {
 }
 
 /**
+ * Tell the recipient's other tabs how many of their notifications were just
+ * marked seen.
+ *
+ * Deliberately a DIFFERENT event name from `notification`. That event always
+ * carries a full notification row, and clients insert it straight into their
+ * list — so emitting `{ updated: n }` under it would insert a phantom row with
+ * no id, type or created_at. Sharing the name was a bug; this is the fix.
+ *
+ * The count is enough because the client that made the request already holds
+ * the rows. Its other tabs already have them too — they were rendered from the
+ * same list, or delivered by `notification` — so re-sending them would be
+ * redundant payload to every open tab.
+ */
+function emitNotificationsSeen(io, recipientId, updated) {
+  if (!io || !recipientId) return false;
+  io.to(personalRoom(recipientId)).emit('notification:seen', { updated });
+  return true;
+}
+
+/**
  * Create, resolve and push in one call — the common path for a REST handler
  * that wants the recipient told immediately.
  */
@@ -249,6 +269,7 @@ module.exports = {
   presentNotifications,
   presentNotification,
   emitNotification,
+  emitNotificationsSeen,
   notifyAndEmit,
   preview,
 };

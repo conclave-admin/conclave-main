@@ -20,10 +20,10 @@ Legend: DONE = shipped and verified. PARTIAL = shipped with a known problem. FIX
 | Digest                                  | DONE (now genuinely time-bounded per room)                            |
 | Sockets and presence                    | DONE (membership guards, no blocking KEYS, no phantom events)         |
 | Tasks                                   | DONE (three endpoints; `status` constrained in the schema)            |
-| Notifications                           | OPEN (both handlers are stubs; now return 501)                        |
+| Notifications                           | DONE (list, unread count, mark-seen; invites and mentions emitted)    |
 | File upload (Cloudinary)                | DONE (real round trip verified; attachments are server-owned)         |
 | Migrations                              | DONE (runner is re-runnable; all 11 verified against a real Postgres) |
-| Tests                                   | DONE (69 tests: 17 no-database smoke, 52 on a real DB + Cloudinary)   |
+| Tests                                   | DONE (82 tests: 15 no-database smoke, 67 on a real DB + Cloudinary)   |
 
 ### Verification status
 
@@ -38,7 +38,7 @@ What that verification found and changed:
 - **The `rooms.slug` backfill produces correct values on real data**, including the two cases most likely to break: a duplicate room name (`Product & Engineering` → `product-engineering` and `product-engineering-2`) and a name with nothing sluggable (`日本語` → `room`).
 - The `(created_at, id)` tuple cursor pages through tied timestamps without skipping; the per-room digest window returns only the unread room, where a single shared `MAX(last_seen_at)` would have returned nothing; `22P02`/`23503`/`23505` map as documented.
 
-**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all eleven migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. `backend/tests/upload.test.js` does the same for the Cloudinary path, including a real upload round trip, and skips when credentials are absent. `npm test` runs both alongside the no-database smoke suite — 69 tests total.
+**This is now automated, not a one-off.** `backend/tests/integration.test.js` applies all eleven migrations to a throwaway `conclave_test` database, asserts the above, and drops the database afterwards, so it cannot touch development data. `backend/tests/upload.test.js` does the same for the Cloudinary path, including a real upload round trip, and skips when credentials are absent. `npm test` runs both alongside the no-database smoke suite — 82 tests total.
 
 One thing that verification still cannot prove: behaviour under real production data volume. The queries were verified for correctness, not for query plans at scale.
 
@@ -254,7 +254,16 @@ The remaining risk is process, not code: do not include `.env` in future shared 
 **Still open.**
 
 - `listUsers` lets any authenticated user list every user with their email. Consider scoping to shared rooms or hiding the address. This is a product/privacy call.
-- `addMember` reads the room and caller role in one query, then inserts in a separate transaction, so there is a small race window. It also creates a notification but never emits it on the socket — that needs the notification event from item B.
+- `addMember` reads the room and caller role in one query, then inserts in a separate transaction, so there is a small race window. (It no longer creates a notification silently — item B routes it through `createNotification` and emits it after the commit.)
+- **A malformed `?before=` cursor is a 500.** Both `listMessages` and `listNotifications` accept an opaque `"<created_at>|<id>"` cursor and pass it straight to Postgres, so `?before=not-a-date|not-a-uuid` raises `22007`/`22008`. Neither SQLSTATE is in the `PG_ERRORS` map in `middlewares/error.middleware.js`, so it falls through to the generic 500. Two lines fix it for every paginated endpoint at once:
+
+  ```js
+  '22007': { status: 400, message: 'Invalid timestamp' },
+  '22008': { status: 400, message: 'Invalid date or time value' },
+  ```
+
+  Not done here because it is pre-existing and reaches further than item B — it belongs in the same pass as any other error-mapping work.
+- **Body-supplied ids bypass `validateUuidParams`.** That middleware only inspects `req.params`, so a UUID arriving in a request body is unvalidated — `PATCH /notifications/seen` takes `notificationId` in the body. It currently degrades correctly to a 400 via Postgres `22P02`, but that is an accident of the error mapper rather than deliberate validation, and any endpoint whose body id is not compared against a uuid column would get no protection at all. Extending the middleware to cover a named set of body fields, or validating at each handler, would make it intentional.
 - `getRoom` builds the member list for the whole room with no cap.
 - `listMessages` uses `LEFT JOIN attachments` with a `GROUP BY` over every message column. It works, but a lateral subquery would be simpler and faster.
 - `Dockerfile` and `docker-compose.yml` only cover Postgres and Redis; the backend service is not in the compose file.
@@ -281,14 +290,24 @@ Ordered by what blocks the most.
 
 **Still open:** no notification is created when a task is assigned, and `assignee_id` is unindexed. `idx_tasks_room_status` covers the room filter, so that is adequate at current scale but is the first thing to add if the board grows.
 
-### B. Notifications endpoints (OPEN, blocks the bell and the Notifications page)
+### B. Notifications endpoints (DONE)
 
-- `GET /notifications` newest first with pagination, plus an unread count.
-- `PATCH /notifications/seen` for one or all.
-- The table stores `type` and `reference_id` only. The list needs a join or a resolver so the client gets readable text (room name, sender name) without a second request.
-- Create notifications for `new_message` and `mention` (only `room_invite` exists today), and emit `notification` on the socket.
+`GET /notifications` and `PATCH /notifications/seen` are implemented, and both `room_invite` and `mention` rows are now written **and emitted**.
 
-`addMember` already writes a `room_invite` row but never emits it, so this is the natural place to close that loop.
+- `GET /notifications` returns `{ notifications, unreadCount, nextCursor }`, newest first, with an optional `?unseenOnly=true`. Rows go through `presentNotifications`, so each one carries resolved context — room name, actor name, a 120-char message preview — with no second request. Because the resolver is shared with the emit path, the list payload and the socket payload are byte-identical, which is what lets the client drop an incoming notification straight into the list.
+- Pagination reuses the compound `"<created_at>|<id>"` cursor from `listMessages`, including the tie-break that stops rows sharing a timestamp being skipped.
+- `unreadCount` is a separate `COUNT` filtered only on unseen. Counting the returned rows would cap the bell badge at the page size.
+- `PATCH /notifications/seen` takes `{ notificationId }` or `{ all: true }` and returns `{ updated }` — rows **this call** changed, so the client can adjust its badge without a refetch. Repeating it returns `updated: 0`.
+- The single-notification `UPDATE` is scoped `WHERE id = $1 AND recipient_id = $2`. Without that, any authenticated user could silence someone else's bell by guessing a UUID. A miss is a **404**, not a 403, so the endpoint does not confirm the id exists.
+- `addMember` now writes through `createNotification({ db: client })` instead of raw SQL — one type-validated path into the table, enlisted in the membership transaction — and emits after the commit. This row existed since PR1 and was never sent to anyone; that is now closed.
+- `createMessage` creates a `mention` notification per named room member and pushes it. The sender is excluded in the query, so nobody is notified of their own message.
+
+Two deliberate choices:
+
+- **`new_message` is not implemented.** Notifying every member of a room on every message is a product decision about noise, not a technical one, and item H is about to change how mentions are identified. Building the fan-out now means building it twice. `file_uploaded` and `member_joined` are likewise still unwritten.
+- **Mention matching is the existing stopgap**, now shared from `services/mention.service.js` rather than duplicated out of the digest controller — two copies of that regex would eventually disagree. Matching happens in JS, not SQL: the pattern embeds each member's display name, so it cannot be a single parameterised `~` comparison. Room membership is still enforced in SQL so an unauthorised room cannot be probed.
+
+**Notification rows are written whether or not a socket is available.** The row is the source of truth and the socket is only delivery; gating the write on `io` is how `room_invite` stayed unreadable for two items. `notifyAndEmit` treats a missing `io` as write-only.
 
 ### C. File upload (DONE)
 

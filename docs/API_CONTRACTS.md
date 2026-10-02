@@ -236,15 +236,56 @@ on-demand — so the **top-level cross-room Tasks page will not update live**, o
 on reload. The response body carries the updated task, so the client that made the
 change is not left stale.
 
-## Notifications — not implemented
+## Notifications
 
-Both return **501 Not Implemented**. They are not 200s with a placeholder body,
-so do not treat a success-shaped response as real data.
+| Method | Path                | Status | Body / query                            | Returns                                      |
+| ------ | ------------------- | ------ | --------------------------------------- | -------------------------------------------- |
+| GET    | /notifications      | 200    | `?before=`, `?unseenOnly=true`          | `{ notifications, unreadCount, nextCursor }` |
+| PATCH  | /notifications/seen | 200    | `{ notificationId }` or `{ all: true }` | `{ updated }`                                |
 
-| Method | Path                | Status | Planned              |
-| ------ | ------------------- | ------ | -------------------- |
-| GET    | /notifications      | 501    | List + unread count  |
-| PATCH  | /notifications/seen | 501    | Mark one or all seen |
+Auth required. Each row resolves its subject, so nothing needs a second request:
+
+```json
+{
+  "id": "uuid",
+  "type": "mention",
+  "reference_id": "uuid",
+  "seen": false,
+  "created_at": "ISO",
+  "context": {
+    "room_id": "uuid",
+    "room_name": "Product Engineering",
+    "room_slug": "…",
+    "actor_name": "Victor",
+    "message_preview": "first 120 characters…"
+  }
+}
+```
+
+`actor_name` and `room_name` are `null` when the subject no longer exists, and
+`message_preview` is `null` when the message was soft-deleted — render a
+tombstone rather than text the author retracted. A notification is never dropped
+because its subject is gone.
+
+Newest first. `unreadCount` is your **total** unseen count, not a count of the
+current page. `nextCursor` is an opaque `"<created_at>|<id>"` string, or `null`
+on the last page — pass it back as `?before=`.
+
+The same shape arrives over the socket as `notification { notification }`, so an
+incoming event can be inserted into the list directly. ⚠️ `notification` **always**
+carries a complete row — never a count. Marking rows seen emits the separate
+`notification:seen { updated }`, so a client can safely append every
+`notification` payload to its list without checking it first.
+
+`PATCH` returns `updated`, the number of rows **this call** changed — subtract it
+from your badge. A repeated `all: true` returns `0`.
+
+Errors: **400** neither `notificationId` nor `all: true` · **404** no such
+notification of yours.
+
+Types currently written: `room_invite` (on being added to a room) and `mention`.
+`new_message`, `file_uploaded` and `member_joined` are accepted by the service but
+nothing writes them yet.
 
 ## Not built yet
 
@@ -259,6 +300,6 @@ an existing DM by user id, home summary, or a global cross-room search. See
 Server → client, as documented at the top of `backend/src/sockets/index.js`:
 `receive-message`, `user-online`, `user-offline`, `room-presence`,
 `room-typing`, `typing`, `stop-typing`, `message-read`, `task:updated`,
-`notification`, and `error:message`.
+`notification`, `notification:seen`, and `error:message`.
 Errors are emitted on **`error:message`**, not `error` — Socket.IO reserves
 `error` for its own internals.

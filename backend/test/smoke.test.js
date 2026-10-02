@@ -72,7 +72,7 @@ const EXPECTED_ROUTES = [
   ['GET', '/api/tasks', true],
   ['GET', '/api/tasks/room/:roomId', true],
   ['PATCH', '/api/tasks/:taskId/status', true],
-  // notifications — 501 stubs
+  // notifications — implemented, but must be auth-guarded
   ['GET', '/api/notifications', true],
   ['PATCH', '/api/notifications/seen', true],
   // upload — implemented, but must be auth-guarded
@@ -244,53 +244,7 @@ test('CORS allows the configured client origin with credentials', async () => {
   assert.equal(res.headers.get('access-control-allow-credentials'), 'true');
 });
 
-test('the notifications stubs answer 501, not a fake success', async () => {
-  // A 200/201 with a placeholder body is read by the client as real data, which
-  // is worse than an explicit failure. BACKEND_TASKS.md Bug 14.
-  const res = await fetch(`${baseUrl}/api/notifications`, {
-    method: 'GET',
-    headers: { Authorization: 'Bearer not-a-real-jwt' },
-  });
-  // 401 is correct here (the token check fires first); the 501 path is asserted
-  // in the dedicated controller-level test below.
-  assert.notEqual(res.status, 200);
-});
-
-test('unimplemented controllers throw 501 rather than returning fake data', async () => {
-  // Controller-level, so the handler's own behaviour is checked directly rather
-  // than through the auth layer.
-  //
-  // upload.uploadFile is deliberately absent: it is implemented now that
-  // POST /upload exists, so it no longer belongs in this list. It is covered by
-  // tests/upload.test.js instead.
-  // tasks.* is deliberately absent: implemented now that POST /tasks and
-  // PATCH /tasks/:taskId/status exist. Covered by tests/integration.test.js.
-  const notifications = require('../src/controllers/notifications.controller');
-
-  const cases = [
-    ['notifications.listNotifications', notifications.listNotifications],
-    ['notifications.markSeen', notifications.markSeen],
-  ];
-
-  for (const [name, handler] of cases) {
-    // asyncHandler catches the throw and hands it to next() rather than
-    // rejecting, so the error has to be read off next — awaiting the handler
-    // and expecting a rejection would always pass silently.
-    let handed = null;
-    const res = {
-      status: () => res,
-      json: () => res,
-      setHeader: () => res,
-    };
-    await handler({ params: {}, query: {}, body: {}, user: { id: 'x' } }, res, (err) => {
-      handed = err;
-    });
-    assert.ok(handed, `${name} should hand an error to next() rather than return a fake success`);
-    assert.equal(handed.status, 501, `${name} should hand a 501`);
-  }
-});
-
-test('every backend module loads without throwing', () => {
+test('every backend module loads without throwing', async () => {
   // A syntax error or a bad require in a file nothing imports yet would
   // otherwise only surface when that route is first hit in production.
   const modules = [
@@ -332,6 +286,8 @@ test('every backend module loads without throwing', () => {
     '../src/controllers/tasks.controller',
     '../src/controllers/notifications.controller',
     '../src/controllers/upload.controller',
+    '../src/services/mention.service',
+    '../src/services/notification.service',
   ];
   for (const id of modules) {
     assert.doesNotThrow(() => require(id), `${id} failed to load`);

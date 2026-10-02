@@ -2,6 +2,7 @@ const { query } = require('../config/db');
 const asyncHandler = require('../utils/asyncHandler');
 const { ok } = require('../utils/apiResponse');
 const ApiError = require('../utils/ApiError');
+const { mentionPattern } = require('../services/mention.service');
 
 // Catch-up Digest — per-room summary since the user's last visit:
 // new decisions, mentions, files, and high-activity messages.
@@ -13,19 +14,9 @@ const ApiError = require('../utils/ApiError');
 // v2: hand that same query result to the Claude API as context and ask
 // for a short narrative summary instead of a raw list.
 
-// Stopgap mention matching (BACKEND_TASKS.md Bug 9). Matching raw text with
-// ILIKE is wrong in two ways: '%' and '_' inside a display name act as
-// wildcards, and a plain substring match means a user named "Al" matches
-// "@Alice". Escape the name for POSIX regex and require a non-word
-// character after it, which gives a real word boundary.
-//
-// Replaced entirely by the message_mentions table (BACKEND_TASKS.md item H).
-function mentionPattern(displayName) {
-  const escaped = displayName.replace(/[.*+?^${}()|[\]\\\-]/g, '\\$&');
-  // Postgres uses POSIX regex, which has no lookahead, so express the
-  // boundary as "a non-word character, or end of string".
-  return `@${escaped}([^A-Za-z0-9_]|$)`;
-}
+// Mention matching lives in services/mention.service.js — createMessage needs it
+// too, to notify someone when their name is used, and two copies of this regex
+// would eventually disagree.
 
 // The caller's display_name, needed to build the mention pattern.
 async function loadDisplayName(userId) {

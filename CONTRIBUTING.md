@@ -28,31 +28,35 @@ lane removes that crossing. It is now Michael's outright, not shared.
 Conclave from a chat clone, and they are the least built. This is the
 highest-leverage work available.
 
-**Current state: mixed.** Decisions and digest are implemented. Tasks,
-notifications and upload are 501 stubs. You also own `message.service.js` and the
-socket layer, so the write path and everything emitted from it are yours.
+**Current state: mostly done.** Decisions, digest, tasks, notifications and upload
+are all implemented. You also own `message.service.js` and the socket layer, so the
+write path and everything emitted from it are yours.
 
 **Owns going forward, in priority order:**
 
-1. **Item C — File upload.** Unblocks the composer's attach button, and is the
-   prerequisite for closing a real security hole: `message.service.js` currently
-   takes the attachment `url` straight from the request body, so any room member
-   can persist an arbitrary string as a file URL — and the code says so at
-   `message.service.js:11`, _"this checks shape, not provenance."_ Once uploads
-   exist, look the URL up from the upload record instead. Stream to
-   `cloudinary.uploader.upload_stream`, allowlist mime types, return
-   `{ filename, url, mime_type, size }`.
+1. **Item C — File upload.** DONE. `POST /upload` streams to
+   `cloudinary.uploader.upload_stream` behind a 22-type allowlist and returns
+   `{ filename, url, mime_type, size }`. `message.service` no longer takes an
+   attachment `url` on trust: it claims the upload inside the message transaction
+   with a conditional `UPDATE`, so an upload can be attached exactly once and only
+   by whoever uploaded it, and `filename`/`mime_type`/`size` come from the record
+   rather than the request. This closed the hole the old code described as _"this
+   checks shape, not provenance."_
 2. **Item A — Tasks endpoints.** DONE. `POST /tasks`, `GET /tasks` (cross-room,
    the page is top-level), and `PATCH /tasks/:taskId/status` limited to
    `open | in_progress | done`. `status` is constrained by a `CHECK` in migration
    011, not just validated in the controller, and `updated_at` is set explicitly
    because the digest's whole window depends on it. Emits `task:updated` to the
    room.
-3. **Item B — Notifications.** `GET /notifications` with an unread count, and
-   `PATCH /notifications/seen`. The table stores only `type` and `reference_id`,
-   so the list needs a join to return readable text. Create `new_message` and
-   `mention` rows and emit `notification` — `addMember` already writes a
-   `room_invite` row and never emits it, which is the natural place to close that.
+3. **Item B — Notifications.** DONE. `GET /notifications` returns
+   `{ notifications, unreadCount, nextCursor }` and `PATCH /notifications/seen`
+   takes one id or `all`. Rows are resolved through `notification.service`, so the
+   list payload and the socket payload are identical. `addMember` now writes its
+   `room_invite` through the service and emits it — that row had existed since
+   PR1, unreadable. `createMessage` writes and emits `mention` rows, excluding the
+   sender. `new_message` is deliberately not implemented: fanning out to every room
+   member on every message is a product call about noise, and item H is about to
+   change how mentions are identified.
 4. **Item H — Structured mentions.** The regex mention matcher is correct but
    it is still text matching, and a display name is not an identity: renaming a
    user changes who gets mentioned. Add `message_mentions(message_id, user_id)`,

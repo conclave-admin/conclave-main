@@ -27,6 +27,10 @@ const presence = require('../services/presence.service');
 //   message-read       { roomId, messageId, userId }
 //   task:updated       { task }     emitted by POST /tasks and
 //                                   PATCH /tasks/:taskId/status
+//   notification       { notification }  a full row; clients append it to their
+//                                   list directly, so it is never a bare count
+//   notification:seen  { updated }  how many rows the caller just marked seen,
+//                                   for the same user's OTHER tabs
 //   error:message      { message }   (see note below)
 //
 // Rooms the server joins for you, without the client asking:
@@ -37,8 +41,9 @@ const presence = require('../services/presence.service');
 //
 // Not yet implemented, so deliberately absent from this list rather than
 // advertised and never sent (BACKEND_TASKS.md Bug 13): upload-progress and
-// decision:created. The notifications endpoints are still 501 stubs, but
-// `notification` is already live via notification.service.
+// decision:created. `notification` is live — emitted by notification.service for
+// room invites and mentions. Marking notifications seen emits the separate
+// `notification:seen`, never `notification` with a count in place of a row.
 //
 // Limitation worth knowing: task:updated is emitted to the task's room, and
 // sockets only join a room on demand (client/src/hooks/useMessages.js emits
