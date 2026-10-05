@@ -118,7 +118,10 @@ let baseUrl;
 
 test.before(async () => {
   server = app.listen(0);
-  await new Promise((resolve) => server.once('listening', resolve));
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
 

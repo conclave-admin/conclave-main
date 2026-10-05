@@ -193,7 +193,7 @@ and `GET /api/decisions/search`.
 
 - **Create the missing services.** `decisions.service.js`, `tasks.service.js`,
   `digest.service.js` and `notifications.service.js` do not exist. The backend
-  endpoints for the first three are already live.
+  endpoints for decisions and digest are implemented; task endpoints remain stubs.
 - **`CatchUpDigestPage.jsx` will crash on an unknown item type.**
   `ITEM_TYPES[type]` destructures with no default — one unexpected `type` from
   the backend throws and takes the page down.
@@ -254,6 +254,10 @@ because they are the rules that keep three people from colliding:
   most of the backend uses single quotes, but `messages.controller.js` and
   `rooms.controller.js` use double. Pick one and enforce it in a separate commit
   that changes nothing else.
+- **Commit one coherent change at a time.** Include its tests and API contract
+  updates together. Keep docs cleanup, dependency upgrades and unrelated fixes
+  in separate commits. Run relevant checks before committing and report the
+  commit hash/message. File count alone does not define a useful commit boundary.
 
 ## Verifying your work
 

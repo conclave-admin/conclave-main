@@ -1,15 +1,19 @@
 # Deploying Conclave
 
-Target: free tiers, today. Stack: **Vercel** (client) + **Render** (backend) +
-**Supabase** (Postgres) + a free Redis.
+Deployment configuration is committed. Provider provisioning and a public
+instance have not been verified from this workspace. See the
+[backend backlog](docs/BACKEND_TASKS.md) for product gaps and release priorities.
 
-Read section 1 before touching anything, and section 4 (pre-flight) before you
-deploy — there is a real chance the first deploy fails on the database, and it is
-not a configuration mistake when it does.
+The configuration is ready for a staging deployment. Before inviting users,
+complete the access-policy, rate-limiting and live acceptance checks below.
 
----
+## Deployment shape
 
-## 1. The architecture, and why it isn't all on Vercel
+- Vercel: the static React build from `client/`.
+- Render: the persistent Express + Socket.IO process from `backend/`.
+- Supabase: PostgreSQL, using a session-pooler connection.
+- Redis: a compatible TCP Redis service, configured through `REDIS_URL`.
+- Cloudinary: optional until uploads are implemented.
 
 ```
   Browser
@@ -122,13 +126,11 @@ anything about migrations. `tests/` is the one that can.
 
 ---
 
-## 5. Supabase — Postgres
+Sources: [Render WebSockets](https://render.com/docs/websocket),
+[Render free services](https://render.com/docs/free),
+[Render Blueprint reference](https://render.com/docs/blueprint-spec).
 
-1. **New project.** Pick the region closest to where Render runs. Set a strong
-   database password and **save it in your password manager** — you cannot read
-   it back from the dashboard.
-2. **Database → Connection string.** Use the **Session mode (port 5432)**
-   connection string, not Transaction mode.
+## Before publishing
 
    This matters and is a common failure. The _direct_ connection
    (`db.<ref>.supabase.co:5432`) is **IPv6-only** on the free tier. Render's
@@ -136,35 +138,12 @@ anything about migrations. `tests/` is the one that can.
    **session-mode** string (`aws-<region>.pooler.supabase.com:5432`) is IPv4 and
    built for exactly this — a long-running backend on an IPv4 network.
 
-   Use session mode, not transaction mode: your app uses multi-statement
-   transactions (`rooms.controller.js` does explicit `BEGIN`/`COMMIT` around room
-   creation, and `message.service.js` does the same), and transaction-mode pooling
-   hands out a different backend connection per statement, which breaks them.
+## Local checks and CI
 
-   The dashboard gives you the URL-encoded string ready to paste. Don't hand-build
-   it — Supabase passwords frequently contain `@` and `/`, which silently
-   truncate a hand-written connection string.
+Use Node 22 (`.nvmrc`), which matches Render, Docker, and the new GitHub workflow.
+Run `npm ci` in both `backend/` and `client/`, then:
 
-3. **Database → Connection pooling.** Leave the default. The app uses a `pg.Pool`
-   with no explicit `max`, so it defaults to 10 connections. That is well within
-   the free tier.
-
-4. **Network → Restrictions.** Supabase allows connections from anywhere by
-   default. You can restrict it, but Render assigns dynamic outbound IPs, so a
-   static allowlist is impractical on a free account. Leave it open; the password
-   is the control.
-
-5. Save the string as `DATABASE_URL`.
-
----
-
-## 6. Run the migrations — against Supabase, from your laptop
-
-You do not need Docker or `psql` for this. You have Node and the backend's
-dependencies, so you can run the project's own migration runner against Supabase
-directly. This also exercises `migrate.js` itself, which is currently unproven.
-
-```bash
+```sh
 cd backend
 npm install
 
@@ -307,38 +286,36 @@ dashboard. If you see the field, set it to:
 npm run migrate
 ```
 
-If you don't, put it in the Build Command instead:
+The GitHub workflow also starts a disposable PostgreSQL 16 instance and runs
+migrations twice, testing both the initial schema and the migration ledger.
+That workflow has been added but has not been executed remotely in this session.
 
-```
-npm ci && npm run migrate
-```
+## Database and Redis
 
-(That runs migrations at build time, which is mildly unorthodox, but it is
-idempotent and it works. The alternative — running them by hand against Supabase
-once, as in section 6 — is also fine and arguably better, since you then control
-exactly when the schema changes.)
+Create a Supabase project and copy its **session pooler** connection string from
+the Connect panel. Use the provider's TLS settings and properly encoded password.
+Keep this URL only in server-side secrets as `DATABASE_URL`.
 
-**Environment variables** (Render → Environment):
+Session pooling works with this persistent Node server and the migration runner's
+session advisory lock. Transaction pooling *does* support transactions, but it
+must not be used for this runner because session locks require connection affinity.
+See [Supabase connection guidance](https://supabase.com/docs/guides/database/connecting-to-postgres).
 
-```
-NODE_ENV=production
-DATABASE_URL=postgresql://postgres.<ref>:<PASSWORD>@aws-<region>.pooler.supabase.com:5432/postgres
-REDIS_URL=rediss://default:<token>@<region>.upstash.io:6379
-JWT_ACCESS_SECRET=<64 random hex chars>
-JWT_REFRESH_SECRET=<64 different random hex chars>
-CLIENT_ORIGIN=https://conclave-xyz.vercel.app
-CLOUDINARY_CLOUD_NAME=
-CLOUDINARY_API_KEY=
-CLOUDINARY_API_SECRET=
-```
+Before using a new database, point `DATABASE_URL` at a disposable database and run
+`npm run migrate` twice from `backend/`. The second run should report that the
+database is up to date. Never use `--baseline` unless all recorded migrations
+have actually been applied already. Do not delete an existing production database
+as a troubleshooting step.
 
-Generate the secrets:
+Configure `REDIS_URL` with a Redis TCP URL (`rediss://` for a TLS service).
+An HTTP REST Redis endpoint is not compatible with the existing client and
+Socket.IO adapter. Confirm the selected service supports Pub/Sub and its command
+budget fits presence heartbeats plus three Redis connections per API instance.
 
-```bash
-node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
-```
+## Render API
 
-**Three things to be careful about here:**
+Import the root `render.yaml` as a Render Blueprint. It explicitly selects the
+free web-service plan and creates only the API service, with these settings:
 
 1. **`CLIENT_ORIGIN` is not optional and not decorative.** It feeds CORS, and
    Socket.IO reads it too. Until it is set to your Vercel URL, the browser will
@@ -349,16 +326,22 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 3. **`PORT` is injected by Render** — don't set it. `config/env.js` reads
    `process.env.PORT` first, so Render's value wins.
 
-Set `NODE_ENV=production`. This switches morgan from `dev` to `combined` logging
-and marks the environment correctly. Note that `morgan` in `combined` mode logs
-every request line to stdout, which on a free instance that sleeps and restarts
-will be the first thing you want when debugging.
+Supply these values in Render's environment settings:
 
----
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | Supabase session-pooler URL |
+| `REDIS_URL` | Redis TCP connection URL |
+| `CLIENT_ORIGIN` | Exact frontend HTTPS origin, without a trailing slash |
 
-## 9. Vercel — the client
+The Blueprint generates separate JWT signing secrets automatically. Keep them
+stable between deployments; changing them invalidates existing sessions. Render
+provides `PORT`. Never put backend secrets in `VITE_*` variables.
 
-Dashboard: **New Project → import the repo.**
+The start script applies pending migrations before starting Node. The migration
+runner serializes overlapping runners with an advisory lock. Server startup
+checks Postgres and connects Redis before listening. `/health` is a liveness
+check, not continuous database/cache readiness monitoring.
 
 | Setting          | Value           |
 | ---------------- | --------------- |
@@ -367,14 +350,16 @@ Dashboard: **New Project → import the repo.**
 | Build Command    | `npm run build` |
 | Output Directory | `dist`          |
 
-A `client/vercel.json` is included with an SPA rewrite. **Without it, refreshing
-`/rooms/<id>` returns Vercel's 404** rather than your app, because there is no
-file at that path and no rewrite to hand it to `index.html`. Every in-app link
-uses client-side routing, so this only bites on hard refresh and on shared links
-— which is to say, exactly when someone sends you a link to a room.
+Import the repository with root directory `client`, framework Vite, build command
+`npm run build`, and output directory `dist`. Use Node 22. The included
+`client/vercel.json` handles direct links and refreshes on SPA routes.
 
-**Environment variables:**
+Set these **build-time** variables, replacing the example hostname:
 
+```dotenv
+VITE_API_URL=https://YOUR-API.onrender.com/api
+VITE_SOCKET_URL=https://YOUR-API.onrender.com
+VITE_DEV_AUTH_BYPASS=false
 ```
 VITE_API_URL=https://conclave-xyz.onrender.com/api
 VITE_SOCKET_URL=https://conclave-xyz.onrender.com
@@ -497,15 +482,21 @@ about it.
 
 ## 13. If you need to start over
 
-Supabase: delete the project and create a new one. It is the fastest way to undo
-a bad schema, and for a pre-launch database there is nothing worth preserving.
+Redeploy the client after changing these values. Set Render's `CLIENT_ORIGIN` to
+the final Vercel origin and restart the API. Production builds do not permit the
+local auth-preview bypass.
 
-Render: the service can be deleted and recreated; nothing is stored on it.
+## Acceptance before sharing
 
-Vercel: redeploys are cheap and the client is a static build with no server state.
+- `/health` returns 200; `/api/nope` returns JSON 404; anonymous `/api/rooms` returns 401.
+- Register/login with the intended access policy; confirm login contains no password hash.
+- Create a room and add a second tester using the existing API.
+- Open two separate browser sessions and confirm messages appear live in both.
+- Refresh a nested room URL and confirm Vercel serves the SPA.
+- Reconnect a browser and restart the API; confirm room subscription recovery.
+- Exercise access-token expiry and refresh rotation, including a second refresh.
+- Verify members can read decisions/digests and nonmembers cannot.
+- Confirm backups and record the actual frontend/API URLs and provider projects.
 
-**Secrets are not recoverable.** Once a JWT secret is set and users have tokens
-signed with it, changing it invalidates every session. Set it once, correctly.
-And confirm `backend/.env` has never been committed — `docs/BACKEND_TASKS.md`
-Bug 12 records that it was checked on this repo and is clean, but re-check any
-archives or other branches you have shared.
+Do not describe tasks, notifications, or uploads as working: their APIs still
+return 501. Several frontend screens remain fixtures or empty placeholders.

@@ -70,6 +70,8 @@ async function shutdown(signal) {
 }
 
 async function main() {
+  // Do not advertise a healthy API when PostgreSQL is unreachable.
+  await pool.query('SELECT 1');
   await connectRedis();
 
   httpServer = http.createServer(app);

@@ -123,7 +123,9 @@ const login = asyncHandler(async (req, res) => {
   const matches = await bcrypt.compare(req.body.password, user.password_hash);
   if (!matches) throw new ApiError(401, 'Invalid email or password');
 
-  return ok(res, await issueSession(user));
+  // The database row also contains the credential used above. Never serialize it.
+  const { password_hash, ...publicUser } = user;
+  return ok(res, await issueSession(publicUser));
 });
 
 const refresh = asyncHandler(async (req, res) => {
