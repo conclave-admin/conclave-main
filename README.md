@@ -1,8 +1,9 @@
 # Conclave — Private Collaboration Platform
 
 A team messaging and collaboration platform with **Decisions**, **Action Items**,
-and **Catch-up Digests** that survive the scroll. Invite-only access is the intended
-model; registration is currently open until invitations are implemented.
+and **Catch-up Digests** that survive the scroll. Registration is open to everyone.
+Group invitations and public/private group preferences govern collaboration;
+public group discovery and joining still need implementation.
 
 Full product/architecture context: [`docs/PKB_Project_Architecture_Brief.docx`](docs/PKB_Project_Architecture_Brief.docx).
 

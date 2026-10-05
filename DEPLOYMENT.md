@@ -5,7 +5,8 @@ instance have not been verified from this workspace. See the
 [backend backlog](docs/BACKEND_TASKS.md) for product gaps and release priorities.
 
 The configuration is ready for a staging deployment. Before inviting users,
-complete the access-policy, rate-limiting and live acceptance checks below.
+complete the rate-limiting and live acceptance checks below. Registration is
+intentionally open; group visibility does not yet provide public discovery/joining.
 
 ## Deployment shape
 
@@ -26,8 +27,9 @@ Sources: [Render WebSockets](https://render.com/docs/websocket),
 
 ## Before publishing
 
-1. Decide registration policy. The UI says invite-only, but the API currently
-   allows anyone to register. Do not assume making the URL public enforces invitations.
+1. Registration is open to everyone (Victor’s decision). Group invitations and
+   public/private group preferences govern collaboration. Existing room APIs
+   remain membership-restricted; public discovery/joining is not implemented.
 2. Add auth rate limiting. The repository leaves the implementation choice open.
 3. Confirm provider accounts and connect the GitHub repository
    `conclave-admin/conclave-main`. Push the reviewed local changes before importing

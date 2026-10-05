@@ -27,11 +27,11 @@ all implemented and hardened.
 
 **Owns going forward:**
 
-- **Item G — Invites.** The open half of a known inconsistency: the login screen
-  says "Conclave is invite-only" while `POST /auth/register` is completely open.
-  Decide the model (invite links, email invites, admin-created accounts), then
-  add the endpoints and gate registration. **This is a product decision — get it
-  signed off before building.**
+- **Item G — Group access.** Victor has chosen open registration for everyone.
+  Invitations belong to private group collaboration, with public/private group
+  preferences controlled by users/admins. Implement group discovery/joining and
+  invitation permissions without gating account registration. Anonymous group
+  reads are not yet specified; existing room reads remain membership-restricted.
 - **Item F — Rooms management.** Update room name, leave room, remove member,
   delete room, promote member to admin. Also `POST /rooms/dm { userId }` to find
   or create a DM, which the `/dms` screen needs — `createRoom` dedupes but

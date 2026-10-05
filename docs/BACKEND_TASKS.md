@@ -71,9 +71,11 @@ Answers should link to their source messages.
 
 ## Work to coordinate, not take over
 
-- **Michael — G, invitations:** choose invite links, email invites or admin-created
-  accounts. Registration is open despite invite-only UI wording. Gate it before
-  describing the deployment as invite-only.
+- **Michael — G, group access:** registration is intentionally open to everyone
+  (Victor’s decision). Add invitations for private collaborations and public group
+  discovery/joining according to user/admin preferences. Room reads currently
+  require membership, including rooms with type `public`. Anonymous read access
+  has not been specified; do not infer it from public signup.
 - **Michael — auth rate limiting:** agree the library/store choice; none is wired.
 - **Michael — F, room management:** room editing, leave/remove/promote/delete and
   find-or-create DMs. Room creation APIs exist but their onboarding UI does not.
@@ -129,7 +131,7 @@ Git history; this index preserves their meaning without duplicating old reports.
 | Bug 8 | Attachment-only messages accepted; URL ownership remains |
 | Bug 9 | Regex mention matching improved; replace with user IDs in H |
 | Bug 10 | Migration ledger and session advisory lock added |
-| Bug 11 | Credential validation, token rotation, unique JWT IDs, safe login responses and client refresh added; invites/rate limiting remain |
+| Bug 11 | Credential validation, token rotation, unique JWT IDs, safe login responses and client refresh added; group access/rate limiting remain |
 | Bug 12 | Env files ignored; exclude credentials from shared archives |
 | Bug 13 | Membership checks, per-user socket counts, SCAN cleanup, error handling and reconnect fixes added; visibility/read receipts remain |
 | Bug 14 | Standard error envelopes, UUID validation and upload/body limits added |
