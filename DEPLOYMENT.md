@@ -1,8 +1,11 @@
 # Deploying Conclave
 
-Updated 5 October 2026. Deployment is prepared locally; no public instance has
-been provisioned or verified in this session. See [launch review](docs/LAUNCH_REVIEW.md)
-for known product gaps and the release priorities.
+Deployment configuration is committed. Provider provisioning and a public
+instance have not been verified from this workspace. See the
+[backend backlog](docs/BACKEND_TASKS.md) for product gaps and release priorities.
+
+The configuration is ready for a staging deployment. Before inviting users,
+complete the access-policy, rate-limiting and live acceptance checks below.
 
 ## Deployment shape
 

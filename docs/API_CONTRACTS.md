@@ -19,8 +19,9 @@ after the fact.
 | Method | Path | Notes |
 |---|---|---|
 | GET | /users/me | ✅ implemented |
-| PATCH | /users/me | TODO |
-| GET | /users | TODO |
+| PATCH | /users/me | Implemented: profile fields |
+| DELETE | /users/me | Implemented: soft-delete account |
+| GET | /users | Implemented: user directory |
 
 ## Rooms
 | Method | Path | Body | Notes |
@@ -29,8 +30,30 @@ after the fact.
 | GET | /rooms | — | ✅ implemented — lists rooms user is a member of |
 | GET | /rooms/:roomId | — | ✅ implemented — room details + members, membership check |
 | POST | /rooms/:roomId/members | `{ userId }` | ✅ implemented — adds member, caller must be admin |
+| POST | /rooms/:roomId/seen | — | Implemented: update caller's last-seen timestamp |
 
-## Messages / Decisions / Tasks / Digest / Notifications / Upload
+## Other route status
 
-TODO — one row per endpoint, same format as above, filled in as each
-person builds their assigned area. See the PKB §8 for ownership.
+| Method | Path | State |
+| --- | --- | --- |
+| POST | /messages | Implemented |
+| GET | /messages/room/:roomId | Implemented: paginated history |
+| GET | /messages/room/:roomId/search | Implemented |
+| POST | /decisions | Implemented |
+| GET | /decisions | Implemented: cross-room listing |
+| GET | /decisions/search | Implemented: cross-room search |
+| GET | /decisions/room/:roomId | Implemented |
+| GET | /decisions/room/:roomId/search | Implemented |
+| GET | /digest | Implemented: cross-room digest |
+| GET | /digest/room/:roomId | Implemented |
+| POST | /tasks | 501: unimplemented |
+| GET | /tasks/room/:roomId | 501: unimplemented |
+| PATCH | /tasks/:taskId/status | 501: unimplemented |
+| GET | /notifications | 501: unimplemented |
+| PATCH | /notifications/seen | 501: unimplemented |
+| POST | /upload | 501: unimplemented |
+
+Responses use `{ success: true, data }` or
+`{ success: false, message }`. Listed implementation status does not imply
+frontend integration or live database verification. Detailed payload contracts
+for older message/decision/digest routes still need documentation.

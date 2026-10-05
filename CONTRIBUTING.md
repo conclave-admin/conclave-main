@@ -123,21 +123,14 @@ endpoints the client never calls.
   `room_members.last_seen_at` only advances on socket `leave-room`, and
   `GET /api/digest` keeps reporting everything since the user joined. The entire
   digest feature is inert without this one call.
-- **Add the 401 interceptor** in `lib/api.js`. Access tokens last 15 minutes and
-  nothing refreshes them, so users get signed out every 15 minutes. The backend
-  endpoint is ready — and it now **rotates**: `POST /auth/refresh` returns a new
-  `refreshToken` alongside the access token, and the interceptor must persist it
-  or the user is signed out on the *following* refresh. `auth.service.js` already
-  has `saveSession()`.
-- **Wire a socket token-update path.** `lib/socket.js` captures the token once at
-  connect, so a refreshed token never reaches a reconnecting socket. These two
-  fixes are coupled — do them together.
+- **Session refresh and socket reconnect credentials are now wired.** Follow up
+  on coordination across browser tabs and complete a live expiry/reconnect check.
 
 **Then the feature work:**
 
 - **Create the missing services.** `decisions.service.js`, `tasks.service.js`,
   `digest.service.js` and `notifications.service.js` do not exist. The backend
-  endpoints for the first three are already live.
+  endpoints for decisions and digest are implemented; task endpoints remain stubs.
 - **`CatchUpDigestPage.jsx` will crash on an unknown item type.**
   `ITEM_TYPES[type]` destructures with no default — one unexpected `type` from
   the backend throws and takes the page down.
@@ -198,12 +191,16 @@ because they are the rules that keep three people from colliding:
   most of the backend uses single quotes, but `messages.controller.js` and
   `rooms.controller.js` use double. Pick one and enforce it in a separate commit
   that changes nothing else.
+- **Commit one coherent change at a time.** Include its tests and API contract
+  updates together. Keep docs cleanup, dependency upgrades and unrelated fixes
+  in separate commits. Run relevant checks before committing and report the
+  commit hash/message. File count alone does not define a useful commit boundary.
 
 ## Verifying your work
 
 ```bash
 cd backend
-npm test          # 17 smoke tests: route table, auth wiring, error envelopes
+npm test          # smoke and regression tests; no external services required
 node --check src/**/*.js
 ```
 
