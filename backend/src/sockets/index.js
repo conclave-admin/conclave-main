@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 const { query } = require('../config/db');
 const { createMessage } = require('../services/message.service');
+const { personalRoom } = require('../services/notification.service');
 const presence = require('../services/presence.service');
 
 // Event names match what was scoped in the original planning conversation.
@@ -9,7 +10,8 @@ const presence = require('../services/presence.service');
 // Client -> Server:
 //   join-room        { roomId }
 //   leave-room       { roomId }
-//   send-message     { roomId, content, replyToId?, attachments? }
+//   send-message     { roomId, content, replyToId?, attachments?,
+//                      mentionedUserIds? }
 //   typing            { roomId }
 //   stop-typing       { roomId }
 //   message-read      { roomId, messageId }
@@ -24,12 +26,40 @@ const presence = require('../services/presence.service');
 //   typing             { roomId, userId }
 //   stop-typing        { roomId, userId }
 //   message-read       { roomId, messageId, userId }
+//   task:updated       { task }     emitted by POST /tasks and
+//                                   PATCH /tasks/:taskId/status
+//   message:updated    { message }  the whole edited row, from
+//                                   PATCH /messages/:messageId
+//   message:deleted    { message }  the whole tombstone row, from
+//                                   DELETE /messages/:messageId
+//   message:reaction   { message }  the whole row with reactions recomputed,
+//                                   from PUT/DELETE .../reactions. A reaction by
+//                                   anyone changes `reacted` for the viewer, so
+//                                   the message is re-read per change rather than
+//                                   a delta being pushed.
+//   notification       { notification }  a full row; clients append it to their
+//                                   list directly, so it is never a bare count
+//   notification:seen  { updated }  how many rows the caller just marked seen,
+//                                   for the same user's OTHER tabs
 //   error:message      { message }   (see note below)
 //
+// Rooms the server joins for you, without the client asking:
+//   user:{userId}     every socket joins its own on connect. This is the
+//                      delivery target for per-user events such as
+//                      `notification`, which are addressed to one person rather
+//                      than to a chat room.
+//
 // Not yet implemented, so deliberately absent from this list rather than
-// advertised and never sent (BACKEND_TASKS.md Bug 13): notification,
-// upload-progress, decision:created and task:updated all belong to the
-// tasks/notifications/upload endpoints, which are still stubs.
+// advertised and never sent (BACKEND_TASKS.md Bug 13): upload-progress and
+// decision:created. `notification` is live — emitted by notification.service for
+// room invites and mentions. Marking notifications seen emits the separate
+// `notification:seen`, never `notification` with a count in place of a row.
+//
+// Limitation worth knowing: task:updated is emitted to the task's room, and
+// sockets only join a room on demand (client/src/hooks/useMessages.js emits
+// join-room when a room view mounts). A user sitting on the top-level cross-room
+// Tasks page has not joined the rooms it lists, so that page will not update
+// live — only on reload.
 
 // Membership check for events that only relay state. createMessage already
 // authorises send-message; these three did not, so a client could spoof read
@@ -88,6 +118,11 @@ function registerSocketHandlers(io) {
       socket.broadcast.emit('user-online', { userId });
     }
 
+    // Join a per-user room so events addressed to one person (notifications)
+    // can reach every tab they have open. Chat rooms are joined by raw room
+    // UUID via join-room, so this prefixed name cannot collide with one.
+    socket.join(personalRoom(userId));
+
     // --- join-room: verify membership, track per-room presence ---
     socket.on('join-room', async ({ roomId }) => {
       if (!roomId) return;
@@ -137,7 +172,10 @@ function registerSocketHandlers(io) {
     });
 
     // --- send-message: persist to DB, then broadcast the saved row ---
-    socket.on('send-message', async ({ roomId, content, replyToId, attachments }) => {
+    // mentionedUserIds is how a client says who was mentioned. Optional for now:
+    // omitting it falls back to matching display names in the text, which is
+    // temporary — see resolveMentionIds in services/message.service.js.
+    socket.on('send-message', async ({ roomId, content, replyToId, attachments, mentionedUserIds }) => {
       try {
         const message = await createMessage({
           roomId,
@@ -145,6 +183,7 @@ function registerSocketHandlers(io) {
           content,
           replyToId,
           attachments,
+          mentionedUserIds,
         });
 
         // Auto-clear typing indicator when a message is sent
