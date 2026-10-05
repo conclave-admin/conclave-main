@@ -12,7 +12,7 @@ in [DEPLOYMENT.md](../DEPLOYMENT.md). Keep endpoint payloads in
 | Auth, users, rooms | Implemented; invitations, auth rate limiting and room management remain | Michael |
 | Messaging | Implemented; pagination UI and send acknowledgements remain | Michael / Victor / Isaac by layer |
 | Decisions and digest | APIs implemented; frontend integration remains | Victor / Isaac |
-| Tasks | API stubs return 501 | Victor |
+| Tasks | Create/list/status APIs implemented and database-tested; UI/notifications remain | Victor / Isaac |
 | Notifications and uploads | API stubs return 501 | Victor |
 | Frontend | Room chat wired; several other screens are fixtures/placeholders | Isaac |
 | Deployment | Configuration committed; no live deployment verified here | Victor coordinates |
@@ -21,12 +21,14 @@ in [DEPLOYMENT.md](../DEPLOYMENT.md). Keep endpoint payloads in
 
 ### A. Tasks
 
-Implement create, cross-room and per-room listing, and status updates. Require
-room membership, validate assignees against the room, and reject source messages
-from other rooms or deleted messages. Return assignee and room metadata, provide
-pagination and filters, maintain `updated_at`, and emit `task:updated` after
-successful writes. Assignment notifications belong with item B. Isaac owns the
-board integration; changing the backend alone does not finish the Tasks screen.
+Create, cross-room/per-room listing, and status updates are implemented. The API
+checks room membership, active assignees and source-message room/deletion state.
+It returns metadata, date strings, filters and precise pagination cursors. Only
+the creator, assignee or room admin may change status. Committed writes emit
+`task:created` / `task:updated`; no-op updates do not rebroadcast.
+
+Remaining: assignment notifications (item B) and Isaac’s board integration.
+Contracts and database test instructions are in [API_CONTRACTS.md](API_CONTRACTS.md).
 
 ### B. Notifications
 
@@ -90,8 +92,9 @@ Answers should link to their source messages.
 
 ## Remaining technical risks
 
-- Migrations and query behavior still need a real PostgreSQL check. Migration
-  008's backfill may collide for existing names such as `Room`, `Room`, `Room-2`;
+- Fresh migrations and task queries now pass against temporary PostgreSQL 18.4.
+  Other API queries and provider connectivity still need coverage. Migration
+  008's populated backfill may collide for existing names such as `Room`, `Room`, `Room-2`;
   a fresh-schema check does not cover populated upgrades.
 - Presence announcements currently reach sockets outside shared rooms. Decide
   the visibility policy and then scope broadcasts. Check multi-tab room presence.
@@ -104,11 +107,18 @@ Answers should link to their source messages.
 
 ## Verification status
 
-The launch-hardening commit passed 24 backend tests, 6 client session tests and
-the production frontend build locally on Node 18.19.1. Node 22 is configured for
-CI/hosting. CI also applies migrations twice against disposable PostgreSQL 16;
-remote results and live PostgreSQL/Redis/browser checks have not been verified
-from this workspace. No hosting credentials are configured here.
+The backend unit/regression suite passes 27 tests. All eight migrations applied
+successfully to a fresh temporary PostgreSQL 18.4 database; a second run was a
+no-op. Task integration checks cover creation, authorization, filters, exact
+pagination, due-date serialization, status events and the existing room digest.
+The frontend build passes after the open-signup copy change; the earlier six
+session tests also passed in the launch-hardening commit.
+
+Local checks used Node 18.19.1. Node 22 and PostgreSQL 16 are configured in CI;
+remote CI results, Redis integration, two-browser live delivery, other API flows
+and provider deployment have not been verified here. Task event tests capture
+server emissions; they do not test a Redis-backed transport. No provider
+credentials are configured in this workspace.
 
 The last production dependency audit reported zero backend findings and two
 moderate frontend entries (React Router and its DOM package). This is a dated

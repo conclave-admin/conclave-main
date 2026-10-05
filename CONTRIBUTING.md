@@ -60,8 +60,8 @@ all implemented and hardened.
 **Why this lane:** decisions, tasks and digest are what separates Conclave from a
 chat clone, and they are the least built. This is the highest-leverage work.
 
-**Current state: mixed.** Decisions and digest are implemented. Tasks,
-notifications and upload are 501 stubs.
+**Current state: mixed.** Decisions, digest and task APIs are implemented.
+Notifications and upload remain 501 stubs.
 
 **Owns going forward, in priority order:**
 
@@ -71,11 +71,9 @@ notifications and upload are 501 stubs.
    can persist an arbitrary string as a file URL. Once uploads exist, look the
    URL up from the upload record instead. Stream to `cloudinary.uploader.upload_stream`,
    allowlist mime types, return `{ filename, url, mime_type, size }`.
-2. **Item A — Tasks endpoints.** Unblocks the Tasks page *and* the digest's task
-   section, which is permanently empty until something writes to `tasks`.
-   `POST /tasks`, `GET /tasks` (cross-room, the page is top-level), and
-   `PATCH /tasks/:taskId/status` limited to `open | in_progress | done`, updating
-   `updated_at` (nothing maintains that column today) and emitting `task:updated`.
+2. **Item A — Tasks integration.** Create/list/status APIs, membership checks,
+   pagination and socket events are implemented and database-tested. Pair with
+   Isaac on the board; assignment notifications remain part of item B.
 3. **Item B — Notifications.** `GET /notifications` with an unread count, and
    `PATCH /notifications/seen`. The table stores only `type` and `reference_id`,
    so the list needs a join to return readable text. Create `new_message` and
@@ -130,7 +128,7 @@ endpoints the client never calls.
 
 - **Create the missing services.** `decisions.service.js`, `tasks.service.js`,
   `digest.service.js` and `notifications.service.js` do not exist. The backend
-  endpoints for decisions and digest are implemented; task endpoints remain stubs.
+  endpoints for decisions, tasks and digest are implemented.
 - **`CatchUpDigestPage.jsx` will crash on an unknown item type.**
   `ITEM_TYPES[type]` destructures with no default — one unexpected `type` from
   the backend throws and takes the page down.
@@ -204,14 +202,11 @@ npm test          # smoke and regression tests; no external services required
 node --check src/**/*.js
 ```
 
-The smoke tests boot the real Express app and assert the route table, that
-protected routes are actually protected, and that errors return the documented
-JSON envelope. They run **no SQL and connect to nothing**, so they cannot catch a
-bad query.
+The default suite covers routing, auth, errors, sockets and input validation
+without external services. Run `npm run test:integration` with
+`TEST_DATABASE_URL` pointing at a migrated disposable PostgreSQL database for
+task permissions, queries and digest integration. CI runs both suites.
 
-**The single biggest risk in this repo right now:** per `docs/BACKEND_TASKS.md`,
-no SQL has ever been executed — the backend was built where Docker was
-unavailable. Every migration and every query string is unverified against a real
-Postgres. Before anything ships, run the migrations and exercise auth, room
-membership, message create/list and the digest queries against a real database.
-A test suite that boots the app is not a substitute.
+Fresh migrations and task flows have passed locally against real PostgreSQL.
+Auth/room/message end-to-end flows, Redis-backed live delivery and provider
+connectivity still need verification before inviting users.

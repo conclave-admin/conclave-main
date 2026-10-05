@@ -8,7 +8,8 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "migrate": "node database/migrate.js",
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "test:integration": "node --test integration/"
   },
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",

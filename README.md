@@ -64,7 +64,7 @@ docker-compose.yml   Postgres + Redis for local dev
 ## Where to start
 
 - **Auth flow (register/login/refresh) is already wired up** in `backend/src/controllers/auth.controller.js` — use it as the pattern for everything else.
-- Rooms, messages, decisions, and digest APIs are implemented. Tasks, notifications, and uploads still return 501. See [the backend backlog](docs/BACKEND_TASKS.md) for current gaps and Victor's priorities, and [CONTRIBUTING.md](CONTRIBUTING.md) for ownership.
+- Rooms, messages, decisions, tasks, and digest APIs are implemented. Notifications and uploads still return 501. See [the backend backlog](docs/BACKEND_TASKS.md) for current gaps and Victor's priorities, and [CONTRIBUTING.md](CONTRIBUTING.md) for ownership.
 - Socket event names and payloads are documented in `backend/src/sockets/index.js`.
 - Database schema lives in `backend/database/migrations/` as plain SQL — run in order.
 - Deployment instructions and the Render Blueprint are in [DEPLOYMENT.md](DEPLOYMENT.md) and [render.yaml](render.yaml). Use Node 22 for hosting and CI.
