@@ -14,10 +14,8 @@
 #
 # Safe to run on every start: migrate.js records applied filenames in
 # schema_migrations and skips them, so this is a no-op once the database is
-# current. It is NOT safe to run from several replicas at once — the ledger has
-# no advisory lock, so two concurrent runners can apply the same file. For a
-# single instance this is fine; see the deployment notes for the multi-replica
-# case.
+# current. A session advisory lock serializes overlapping migration runners.
+# Use a direct or session-pooled PostgreSQL connection for the lock.
 set -e
 
 echo "[entrypoint] applying migrations"

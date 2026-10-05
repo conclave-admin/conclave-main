@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
 
 # Build deps and app dependencies are installed, then the build deps are
@@ -6,9 +6,8 @@ WORKDIR /app
 # would leave python3/make/g++ in an earlier layer even after apk del, since
 # layers are immutable and only the final filesystem is squashed.
 #
-# They are needed at all because bcrypt is a native module with no prebuilt
-# musl binaries — Alpine uses musl libc, so it falls back to compiling via
-# node-gyp, which needs python3, make and a C++ toolchain.
+# Keep build tools available for native-module fallback compilation when a
+# prebuilt binary is unavailable for the target platform.
 COPY package*.json ./
 RUN apk add --no-cache --virtual .build-deps python3 make g++ \
  && npm ci --omit=dev \

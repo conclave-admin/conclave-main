@@ -7,6 +7,12 @@ export function AuthProvider({ children }) {
   const [isLoading, setIsLoading] = useState(!isDevAuthBypass);
   useEffect(() => {
     if (isDevAuthBypass) return;
+    const endSession = () => setUser(null);
+    window.addEventListener('conclave:session-ended', endSession);
+    return () => window.removeEventListener('conclave:session-ended', endSession);
+  }, []);
+  useEffect(() => {
+    if (isDevAuthBypass) return;
     let active = true;
     async function restore() {
       if (!authService.getAccessToken()) {

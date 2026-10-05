@@ -27,7 +27,13 @@ async function migrate() {
     .sort();
 
   const client = await pool.connect();
+  let locked = false;
   try {
+    // Use the same session for the lock and migrations. Rolling deploys may
+    // briefly start two runners; only one may inspect/apply the ledger at once.
+    await client.query("SET lock_timeout = '60s'");
+    await client.query('SELECT pg_advisory_lock(1835102825, 1)');
+    locked = true;
     // Bootstrap the tracking table. CREATE TABLE IF NOT EXISTS makes this
     // safe on a database that has never been migrated and on one that has.
     await client.query(`
@@ -94,8 +100,12 @@ async function migrate() {
 
     console.log("All migrations complete.");
   } finally {
-    client.release();
-    await pool.end();
+    try {
+      if (locked) await client.query('SELECT pg_advisory_unlock(1835102825, 1)');
+    } finally {
+      client.release();
+      await pool.end();
+    }
   }
 }
 

@@ -3,6 +3,7 @@ const env = require('../config/env');
 const { query } = require('../config/db');
 const { createMessage } = require('../services/message.service');
 const presence = require('../services/presence.service');
+const socketHandler = require('../utils/socketHandler');
 
 // Event names match what was scoped in the original planning conversation.
 //
@@ -76,20 +77,36 @@ function registerSocketHandlers(io) {
     return next();
   });
 
-  io.on('connection', async (socket) => {
+  io.on('connection', (socket) => {
     const { id: userId } = socket.user;
+    const onEvent = (event, handler) => socket.on(event, socketHandler(socket, async (...args) => {
+      const initialized = await ready;
+      if (event !== 'disconnect' && (!initialized || !socket.connected)) return;
+      return handler(...args);
+    }, {
+      payload: !['heartbeat', 'disconnect'].includes(event),
+    }));
 
     // --- Presence: mark user online + start heartbeat ---
     // Only announce user-online for the user's first socket; a second tab
     // joining should not re-announce someone already online.
-    const openSockets = await presence.socketConnected(userId, socket.id);
-    await presence.userConnected(userId);
-    if (openSockets === 1) {
-      socket.broadcast.emit('user-online', { userId });
-    }
+    // Register listeners synchronously. Clients can emit join-room immediately
+    // after connecting, before these Redis calls finish.
+    const ready = (async () => {
+      try {
+        const openSockets = await presence.socketConnected(userId, socket.id);
+        await presence.userConnected(userId);
+        if (socket.connected && openSockets === 1) socket.broadcast.emit('user-online', { userId });
+        return true;
+      } catch (error) {
+        console.error('Could not initialize socket presence', error);
+        socket.disconnect(true);
+        return false;
+      }
+    })();
 
     // --- join-room: verify membership, track per-room presence ---
-    socket.on('join-room', async ({ roomId }) => {
+    onEvent('join-room', async ({ roomId }) => {
       if (!roomId) return;
 
       // Verify the user is actually a member of this room
@@ -118,7 +135,7 @@ function registerSocketHandlers(io) {
       socket.emit('room-typing', { roomId, typingUserIds });
     });
 
-    socket.on('leave-room', async ({ roomId }) => {
+    onEvent('leave-room', async ({ roomId }) => {
       if (!roomId) return;
 
       socket.leave(roomId);
@@ -137,39 +154,31 @@ function registerSocketHandlers(io) {
     });
 
     // --- send-message: persist to DB, then broadcast the saved row ---
-    socket.on('send-message', async ({ roomId, content, replyToId, attachments }) => {
-      try {
-        const message = await createMessage({
-          roomId,
-          senderId: userId,
-          content,
-          replyToId,
-          attachments,
-        });
+    onEvent('send-message', async ({ roomId, content, replyToId, attachments }) => {
+      const message = await createMessage({
+        roomId,
+        senderId: userId,
+        content,
+        replyToId,
+        attachments,
+      });
 
-        // Auto-clear typing indicator when a message is sent
-        await presence.clearTyping(roomId, userId);
-        socket.to(roomId).emit('stop-typing', { roomId, userId });
+      // Auto-clear typing indicator when a message is sent
+      await presence.clearTyping(roomId, userId);
+      socket.to(roomId).emit('stop-typing', { roomId, userId });
 
-        io.to(roomId).emit('receive-message', { message });
-      } catch (err) {
-        // 'error' is reserved by Socket.IO and collides with its internals;
-        // use a namespaced event instead.
-        socket.emit('error:message', {
-          message: err.message || 'Failed to send message',
-        });
-      }
+      io.to(roomId).emit('receive-message', { message });
     });
 
     // --- typing indicators: Redis-backed with auto-expiry ---
-    socket.on('typing', async ({ roomId }) => {
+    onEvent('typing', async ({ roomId }) => {
       if (!roomId) return;
       if (!(await isMember(roomId, userId))) return;
       await presence.setTyping(roomId, userId);
       socket.to(roomId).emit('typing', { roomId, userId });
     });
 
-    socket.on('stop-typing', async ({ roomId }) => {
+    onEvent('stop-typing', async ({ roomId }) => {
       if (!roomId) return;
       if (!(await isMember(roomId, userId))) return;
       await presence.clearTyping(roomId, userId);
@@ -181,19 +190,19 @@ function registerSocketHandlers(io) {
     // client named, letting a user spoof read receipts into rooms they are not
     // in. It still only broadcasts; nothing is persisted (see BACKEND_TASKS.md
     // item I for a real read-receipt store).
-    socket.on('message-read', async ({ roomId, messageId }) => {
+    onEvent('message-read', async ({ roomId, messageId }) => {
       if (!roomId || !messageId) return;
       if (!(await isMember(roomId, userId))) return;
       socket.to(roomId).emit('message-read', { roomId, messageId, userId });
     });
 
     // --- heartbeat: refresh the user's presence TTL ---
-    socket.on('heartbeat', async () => {
+    onEvent('heartbeat', async () => {
       await presence.refreshHeartbeat(userId);
     });
 
     // --- disconnect: clean up all presence state ---
-    socket.on('disconnect', async () => {
+    onEvent('disconnect', async () => {
       // If the user still has another tab open, they are not offline — do not
       // tear down their presence or announce them as gone.
       const remainingSockets = await presence.socketDisconnected(userId, socket.id);

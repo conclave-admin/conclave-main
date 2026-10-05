@@ -61,6 +61,7 @@ docker-compose.yml   Postgres + Redis for local dev
 ## Where to start
 
 - **Auth flow (register/login/refresh) is already wired up** in `backend/src/controllers/auth.controller.js` — use it as the pattern for everything else.
-- Every other route (`rooms`, `messages`, `decisions`, `tasks`, `digest`, `notifications`, `upload`) is scaffolded with `TODO`s in its controller — that's the starting point for each person's assigned area. See `docs/PKB_Project_Architecture_Brief.docx` §8 for who owns what.
+- Rooms, messages, decisions, and digest APIs are implemented. Tasks, notifications, and uploads still return 501. See [the launch review](docs/LAUNCH_REVIEW.md) for current gaps and Victor's priorities, and [CONTRIBUTING.md](CONTRIBUTING.md) for ownership.
 - Socket event names and payloads are documented in `backend/src/sockets/index.js`.
 - Database schema lives in `backend/database/migrations/` as plain SQL — run in order.
+- Deployment instructions and the Render Blueprint are in [DEPLOYMENT.md](DEPLOYMENT.md) and [render.yaml](render.yaml). Use Node 22 for hosting and CI.
