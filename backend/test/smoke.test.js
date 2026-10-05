@@ -6,10 +6,9 @@
 //     app boots, the route table is intact, middleware is wired in the right
 //     order, and error handling produces the documented envelope. That is the
 //     class of breakage that is otherwise only found in production.
-//   - It does NOT prove queries are valid SQL. Nothing here has ever been run
-//     against a real Postgres, so the migrations and every query string remain
-//     unverified and still need a real database before merge.
-//     See docs/BACKEND_TASKS.md, "Verification status".
+//   - It does NOT prove queries are valid SQL. Separate integration tests use
+//     a real Postgres; see docs/BACKEND_TASKS.md, "Verification status" for
+//     current coverage and remaining checks.
 //
 // Run with: npm test
 
@@ -67,8 +66,9 @@ const EXPECTED_ROUTES = [
   // digest
   ['GET', '/api/digest', true],
   ['GET', '/api/digest/room/:roomId', true],
-  // tasks — implemented as 501 stubs, but they must still be routable
+  // tasks
   ['POST', '/api/tasks', true],
+  ['GET', '/api/tasks', true],
   ['GET', '/api/tasks/room/:roomId', true],
   ['PATCH', '/api/tasks/:taskId/status', true],
   // notifications — 501 stubs
@@ -246,29 +246,23 @@ test('CORS allows the configured client origin with credentials', async () => {
   assert.equal(res.headers.get('access-control-allow-credentials'), 'true');
 });
 
-test('the tasks and notifications stubs answer 501, not a fake success', async () => {
+test('task listing requires valid authentication', async () => {
   // A 200/201 with a placeholder body is read by the client as real data, which
   // is worse than an explicit failure. BACKEND_TASKS.md Bug 14.
   const res = await fetch(`${baseUrl}/api/tasks/room/00000000-0000-0000-0000-000000000001`, {
     method: 'GET',
     headers: { Authorization: 'Bearer not-a-real-jwt' },
   });
-  // 401 is correct here (the token check fires first); the 501 path is asserted
-  // in the dedicated controller-level test below.
-  assert.notEqual(res.status, 200);
+  assert.equal(res.status, 401);
 });
 
 test('unimplemented controllers throw 501 rather than returning fake data', async () => {
   // Controller-level, so the handler's own behaviour is checked directly rather
   // than through the auth layer.
-  const tasks = require('../src/controllers/tasks.controller');
   const notifications = require('../src/controllers/notifications.controller');
   const upload = require('../src/controllers/upload.controller');
 
   const cases = [
-    ['tasks.createTask', tasks.createTask],
-    ['tasks.listTasks', tasks.listTasks],
-    ['tasks.updateTaskStatus', tasks.updateTaskStatus],
     ['notifications.listNotifications', notifications.listNotifications],
     ['notifications.markSeen', notifications.markSeen],
     ['upload.uploadFile', upload.uploadFile],

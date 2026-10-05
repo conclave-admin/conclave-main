@@ -25,12 +25,13 @@ const socketHandler = require('../utils/socketHandler');
 //   typing             { roomId, userId }
 //   stop-typing        { roomId, userId }
 //   message-read       { roomId, messageId, userId }
+//   task:created       { task }     (REST task creation, to room subscribers)
+//   task:updated       { task }     (REST status change, to room subscribers)
 //   error:message      { message }   (see note below)
 //
 // Not yet implemented, so deliberately absent from this list rather than
 // advertised and never sent (BACKEND_TASKS.md Bug 13): notification,
-// upload-progress, decision:created and task:updated all belong to the
-// tasks/notifications/upload endpoints, which are still stubs.
+// upload-progress and decision:created are not yet emitted.
 
 // Membership check for events that only relay state. createMessage already
 // authorises send-message; these three did not, so a client could spoof read

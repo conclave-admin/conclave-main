@@ -8,6 +8,7 @@ const router = Router();
 router.use(requireAuth);
 router.use(validateUuidParams);
 router.post('/', createTask);
+router.get('/', listTasks);
 router.get('/room/:roomId', listTasks);
 router.patch('/:taskId/status', updateTaskStatus);
 

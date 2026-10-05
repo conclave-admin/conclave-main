@@ -86,6 +86,8 @@ async function main() {
   subClient = redisClient.duplicate();
   await Promise.all([pubClient.connect(), subClient.connect()]);
   io.adapter(createAdapter(pubClient, subClient));
+  // REST task mutations broadcast through the same room-aware Socket.IO server.
+  app.set('io', io);
 
   registerSocketHandlers(io);
 
