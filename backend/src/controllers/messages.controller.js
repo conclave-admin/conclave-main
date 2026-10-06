@@ -32,6 +32,7 @@ const sendMessage = asyncHandler(async (req, res) => {
     replyToId,
     attachments,
     mentionedUserIds,
+    io: req.app.get("io"),
   });
 
   return ok(res, message, 201);

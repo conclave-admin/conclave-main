@@ -2640,3 +2640,61 @@ dbTest('task due dates remain calendar dates across API responses in a non-UTC t
   assert.equal(undated.status, 201);
   assert.equal((await undated.json()).data.due_date, null);
 });
+
+
+dbTest('REST and socket sends emit persisted mentions to the recipient personal room', async (t) => {
+  const recipient = await authedAccount('live-mention-recipient@test.com');
+  await query(`INSERT INTO room_members (room_id, user_id) VALUES ($1, $2)`, [room.id, recipient.userId]);
+  const captured = [];
+  let connect;
+  const io = {
+    use() {},
+    on(event, handler) { if (event === 'connection') connect = handler; },
+    to(target) { return { emit(event, payload) { captured.push({ target, event, payload }); } }; },
+  };
+  const app = require('../src/app');
+  const previousIo = app.get('io');
+  app.set('io', io);
+  t.after(() => app.set('io', previousIo));
+
+  const payload = { roomId: room.id, content: 'Please review', mentionedUserIds: [recipient.userId] };
+  const rest = await fetch(`${baseUrl}/api/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${tokenForFixtureUser()}` },
+    body: JSON.stringify(payload),
+  });
+  assert.equal(rest.status, 201);
+  const restMessage = (await rest.json()).data;
+
+  const presence = require('../src/services/presence.service');
+  t.mock.method(presence, 'startHeartbeatSweep', () => {});
+  t.mock.method(presence, 'socketConnected', async () => 1);
+  t.mock.method(presence, 'userConnected', async () => {});
+  t.mock.method(presence, 'clearTyping', async () => {});
+  require('../src/sockets')(io);
+  const handlers = new Map();
+  const errors = [];
+  const joined = [];
+  connect({
+    id: 'mention-test-socket', user: { id: user.id }, connected: true,
+    on(event, handler) { handlers.set(event, handler); },
+    join(target) { joined.push(target); },
+    emit(event, body) { if (event === 'error:message') errors.push(body); },
+    broadcast: { emit() {} },
+    to() { return { emit() {} }; },
+  });
+  assert.ok(joined.includes(`user:${user.id}`));
+  await handlers.get('send-message')(payload);
+  assert.deepEqual(errors, []);
+  const socketMessage = captured.find(({ event }) => event === 'receive-message')?.payload.message;
+  assert.ok(socketMessage, 'socket send must broadcast the committed message');
+
+  const notifications = captured.filter(({ event }) => event === 'notification');
+  assert.equal(notifications.length, 2, 'both send paths must push a mention');
+  assert.deepEqual(notifications.map(({ target }) => target), Array(2).fill(`user:${recipient.userId}`));
+  assert.deepEqual(notifications.map(({ payload }) => payload.notification.reference_id).sort(),
+    [restMessage.id, socketMessage.id].sort());
+  const persisted = await query('SELECT id FROM notifications WHERE recipient_id = $1', [recipient.userId]);
+  assert.deepEqual(notifications.map(({ payload }) => payload.notification.id).sort(),
+    persisted.rows.map(({ id }) => id).sort());
+});

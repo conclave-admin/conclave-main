@@ -200,6 +200,7 @@ function registerSocketHandlers(io) {
         replyToId,
         attachments,
         mentionedUserIds,
+        io,
       });
 
       // Auto-clear typing indicator when a message is sent
