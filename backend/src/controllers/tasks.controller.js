@@ -25,7 +25,7 @@ const STATUSES = ['open', 'in_progress', 'done'];
 // drop those rows from the board rather than showing them with a blank assignee.
 const TASK_COLUMNS = `
   t.id, t.room_id, t.source_message_id, t.title,
-  t.assignee_id, t.status, t.due_date,
+  t.assignee_id, t.status, to_char(t.due_date, 'YYYY-MM-DD') AS due_date,
   t.created_by, t.created_at, t.updated_at,
   r.name AS room_name,
   r.slug AS room_slug,

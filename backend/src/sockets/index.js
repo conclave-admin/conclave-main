@@ -192,16 +192,16 @@ function registerSocketHandlers(io) {
     // mentionedUserIds is how a client says who was mentioned. Optional for now:
     // omitting it falls back to matching display names in the text, which is
     // temporary — see resolveMentionIds in services/message.service.js.
-    socket.on('send-message', async ({ roomId, content, replyToId, attachments, mentionedUserIds }) => {
-      try {
-        const message = await createMessage({
-          roomId,
-          senderId: userId,
-          content,
-          replyToId,
-          attachments,
-          mentionedUserIds,
-        });
+    onEvent('send-message', async ({ roomId, content, replyToId, attachments, mentionedUserIds }) => {
+      const message = await createMessage({
+        roomId,
+        senderId: userId,
+        content,
+        replyToId,
+        attachments,
+        mentionedUserIds,
+        io,
+      });
 
       // Auto-clear typing indicator when a message is sent
       await presence.clearTyping(roomId, userId);

@@ -125,11 +125,10 @@ all implemented and hardened. You also own `token.service.js` and
   there's still no way to _find_ one.
 - **Item D — Home page data.** `GET /home/summary`, or `unread_count` on
   `listRooms`. Now unblocked because `last_seen_at` actually moves.
-- **Item G — Invites.** The open half of a known inconsistency: the login screen
-  says "Conclave is invite-only" while `POST /auth/register` is completely open.
-  Decide the model (invite links, email invites, admin-created accounts), then
-  add the endpoints and gate registration. **This is a product decision — get it
-  signed off before building.**
+- **Item G — Group access.** Registration is open to everyone (Victor's decision).
+  Invitations belong to group collaboration. Implement public discovery/joining
+  and private invitations according to user/admin preferences. Existing room reads
+  require membership; anonymous group reading has not been specified.
 - **Rate limiting on `/auth/*`.** Needs a dependency choice
   (`express-rate-limit` vs hand-rolled on Redis) — raise it, don't just pick.
 - **`role_id` is never checked anywhere.** Decide what it's for or drop it.
@@ -166,8 +165,8 @@ reviewable, but most of it is currently reading fixtures rather than endpoints.
 **three of the eight** — `Decisions`, `CatchUpDigestPage` and `Tasks` — still
 render entirely from `config/devPreview.js` even though their backend endpoints
 are live and implemented. `Home` also reads fixtures, and has no endpoint behind
-it at all (item D, Victor's lane). Four live endpoints are never called:
-`DELETE /api/users/me`, `POST /api/rooms/:roomId/seen`, `POST /api/auth/refresh`,
+it at all (item D, Victor's lane). These live endpoints are not wired into their screens:
+`DELETE /api/users/me`, `POST /api/rooms/:roomId/seen`,
 and `GET /api/decisions/search`.
 
 **Highest-leverage first — these are backend fixes the client never picked up:**
@@ -179,21 +178,14 @@ and `GET /api/decisions/search`.
   `room_members.last_seen_at` only advances on socket `leave-room`, and
   `GET /api/digest` keeps reporting everything since the user joined. The entire
   digest feature is inert without this one call.
-- **Add the 401 interceptor** in `lib/api.js`. Access tokens last 15 minutes and
-  nothing refreshes them, so users get signed out every 15 minutes. The backend
-  endpoint is ready — and it now **rotates**: `POST /auth/refresh` returns a new
-  `refreshToken` alongside the access token, and the interceptor must persist it
-  or the user is signed out on the _following_ refresh. `auth.service.js` already
-  has `saveSession()`.
-- **Wire a socket token-update path.** `lib/socket.js` captures the token once at
-  connect, so a refreshed token never reaches a reconnecting socket. These two
-  fixes are coupled — do them together.
+- **Session refresh and socket reconnect credentials are wired.** Follow up on
+  coordination across browser tabs and live expiry/reconnect verification.
 
 **Then the feature work:**
 
 - **Create the missing services.** `decisions.service.js`, `tasks.service.js`,
   `digest.service.js` and `notifications.service.js` do not exist. The backend
-  endpoints for decisions and digest are implemented; task endpoints remain stubs.
+  endpoints for decisions, tasks, digest and notifications are implemented.
 - **`CatchUpDigestPage.jsx` will crash on an unknown item type.**
   `ITEM_TYPES[type]` destructures with no default — one unexpected `type` from
   the backend throws and takes the page down.
@@ -213,8 +205,7 @@ and `GET /api/decisions/search`.
   overview" while Decisions/Tasks/Digest correctly set their own.
 - **`Settings` and `Notifications` are 9-line TODO stubs**, and both use
   `text-gray-500` — a stock Tailwind colour, not a Foundations token (`muted`).
-  Their backend endpoints are 501, so be honest about that in the UI rather than
-  calling them and rendering a placeholder as data.
+  Notifications have a working API; connect it when replacing the placeholder.
 
 **Constraints — read `docs/CLAUDE.md` before touching any component.** It is
 binding, not advisory:
@@ -261,28 +252,24 @@ because they are the rules that keep three people from colliding:
 
 ## Verifying your work
 
+Use Node 22, as configured in `.nvmrc` and CI.
+
 ```bash
 cd backend
-npm test          # 39 tests: 17 smoke + 22 integration
-npm run test:db   # just the integration suite
+npm test          # smoke/regression tests without PostgreSQL or Redis
+npm run test:db   # API/database tests plus upload validation
+cd ../client
+npm test
+npm run build
 ```
 
-Two suites, and the split matters when something breaks:
+The database suite needs a **disposable PostgreSQL server** with a user allowed
+to create databases. Set `DATABASE_URL` to its `postgres` admin database.
+Each suite creates a uniquely named database and drops only its own database.
+Connection/setup failures fail `test:db`; they cannot silently skip the SQL checks.
+Do not point it at a shared or production server.
+Cloudinary round-trip tests additionally require credentials and create real assets.
+`npm run test:integration` is an alias for `test:db`.
 
-- `backend/test/` — **runs no SQL, connects to nothing.** Boots the real Express
-  app and asserts the route table, that protected routes are actually protected,
-  and that errors return the documented JSON envelope. Fast, and it catches the
-  class of breakage otherwise only found in production.
-- `backend/tests/` — **needs Postgres.** Creates a throwaway `conclave_test`
-  database, applies all eight migrations to it, runs 22 assertions against the
-  real query paths, then drops the database. It cannot touch your dev data, and
-  it skips itself if Postgres is unreachable.
-
-All eight migrations have now been applied to a real PostgreSQL 16 and pass, and
-the second suite asserts that on every run. That verification has already earned
-its keep: migration `007` was wrong and failed on its first real execution
-(`array_to_string` is STABLE, not IMMUTABLE, so it cannot appear in an index
-expression), and nothing syntax-checks its way to finding that.
-
-If you touch a query string, `npm test` is the check that matters — the smoke
-suite will happily pass a broken `SELECT`.
+CI applies migrations twice and runs the database suite. Redis-backed delivery,
+live provider connectivity and browser acceptance still require staging checks.

@@ -28,6 +28,10 @@ on it.
 
 ## Auth
 
+Registration is open to everyone. Invitations control group collaboration, not
+account creation. Public group discovery/joining is not implemented; existing
+room reads require membership.
+
 | Method | Path           | Body                               | Returns                               | Notes                                                                                                                                                            |
 | ------ | -------------- | ---------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | POST   | /auth/register | `{ email, password, displayName }` | `{ user, accessToken, refreshToken }` | Validates email format, password 8–72 bytes. Email is stored lowercased.                                                                                         |
@@ -254,6 +258,9 @@ same handler. Every task row has the same shape from all three endpoints:
 ```
 
 `assignee_name` is `null` for an unassigned task — those rows are still returned.
+`due_date` is a `YYYY-MM-DD` calendar-date string or null, independent of the
+server timezone. Create, list and status-update responses use the same shape.
+
 Ordering is `due_date` ascending with undated tasks **last**, then newest first.
 
 `POST /tasks` requires you to be in the room. `sourceMessageId`, if given, must be

@@ -6,9 +6,8 @@
 //     app boots, the route table is intact, middleware is wired in the right
 //     order, and error handling produces the documented envelope. That is the
 //     class of breakage that is otherwise only found in production.
-//   - It does NOT prove queries are valid SQL. Nothing here has ever been run
-//     against a real Postgres, so the migrations and every query string remain
-//     unverified and still need a real database before merge.
+//   - It does NOT prove queries are valid SQL. The tests/ suite runs against
+//     real PostgreSQL to verify migrations and query behavior.
 //     See docs/BACKEND_TASKS.md, "Verification status".
 //
 // Run with: npm test
