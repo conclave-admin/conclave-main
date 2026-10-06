@@ -2601,3 +2601,42 @@ dbTest('mention matching escapes wildcards and respects word boundaries', () => 
   assert.equal(hits('at @50 percent', '50%'), false, 'a % in a name is not a wildcard');
   assert.equal(hits('@a_b', 'aXb'), false, 'an _ in the text is not a wildcard');
 });
+
+
+dbTest('task due dates remain calendar dates across API responses in a non-UTC timezone', async (t) => {
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = 'Africa/Lagos';
+  t.after(() => {
+    if (previousTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTimezone;
+  });
+  const headers = {
+    authorization: `Bearer ${tokenForFixtureUser()}`,
+    'content-type': 'application/json',
+  };
+  const created = await fetch(`${baseUrl}/api/tasks`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ roomId: room.id, title: 'Leap-day deadline', dueDate: '2028-02-29' }),
+  });
+  assert.equal(created.status, 201);
+  const { data: task } = await created.json();
+  assert.equal(task.due_date, '2028-02-29');
+
+  const listed = await fetch(`${baseUrl}/api/tasks/room/${room.id}`, { headers });
+  assert.equal(listed.status, 200);
+  const { data: { tasks } } = await listed.json();
+  assert.equal(tasks.find(({ id }) => id === task.id).due_date, '2028-02-29');
+
+  const updated = await fetch(`${baseUrl}/api/tasks/${task.id}/status`, {
+    method: 'PATCH', headers, body: JSON.stringify({ status: 'done' }),
+  });
+  assert.equal(updated.status, 200);
+  assert.equal((await updated.json()).data.due_date, '2028-02-29');
+
+  const undated = await fetch(`${baseUrl}/api/tasks`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ roomId: room.id, title: 'No deadline' }),
+  });
+  assert.equal(undated.status, 201);
+  assert.equal((await undated.json()).data.due_date, null);
+});
