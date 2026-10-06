@@ -14,29 +14,28 @@
 //   - mention matching respects word boundaries and escapes wildcards
 //   - Postgres SQLSTATEs map to the documented status codes
 //
-// SAFETY: it never touches your development database. It creates a throwaway
-// database named by TEST_DB_NAME (default conclave_test), migrates it, and drops
-// it afterwards. If Postgres is unreachable the whole suite skips rather than
-// failing, so `npm test` still works on a machine with no database.
-//
-// Run with: npm run test:db     (or just `npm test`, which includes it)
+// Uses a uniquely named disposable database. DATABASE_URL must identify a test
+// PostgreSQL server where the caller has CREATEDB. Database failures fail this
+// explicit suite; npm test runs the separate smoke/regression suite without SQL.
+// Run with: npm run test:db
 
 'use strict';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Client } = require('pg');
+const { randomBytes } = require('node:crypto');
 
 // --- Locate a Postgres to talk to, before anything reads env.js ---------------
 require('dotenv').config({ quiet: true });
 
 const ADMIN_URL = process.env.DATABASE_URL || 'postgres://app:app@127.0.0.1:5432/postgres';
-const TEST_DB = process.env.TEST_DB_NAME || 'conclave_test';
+// A unique name per suite/run: never drop a pre-existing database.
+const TEST_DB = `conclave_test_${randomBytes(12).toString('hex')}`;
 
-const adminUrl = new URL(ADMIN_URL);
-const TEST_DB_URL =
-  `postgresql://${adminUrl.username}:${adminUrl.password}` +
-  `@${adminUrl.hostname}:${adminUrl.port || 5432}/${TEST_DB}`;
+const testUrl = new URL(ADMIN_URL);
+testUrl.pathname = `/${TEST_DB}`;
+const TEST_DB_URL = testUrl.toString();
 
 // Must be set before src/config/db is required, since env.js reads it at load.
 process.env.DATABASE_URL = TEST_DB_URL;
@@ -60,8 +59,7 @@ let user;
 let room;
 
 async function dropTestDb() {
-  // Pool from a previous run may still hold connections; terminate them first or
-  // DROP DATABASE blocks.
+  // Close any remaining connections to this run's database before dropping it.
   await admin.query(
     `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
       WHERE datname = $1 AND pid <> pg_backend_pid()`,
@@ -75,20 +73,14 @@ test.before(async () => {
   try {
     await admin.connect();
   } catch (err) {
-    console.log(`# no Postgres at ${ADMIN_URL.replace(/:[^:@]*@/, ':<redacted>@')}: ${err.message}`);
-    return;
+    throw new Error('Database tests require reachable PostgreSQL', { cause: err });
   }
 
   try {
-    await dropTestDb();
     await admin.query(`CREATE DATABASE ${TEST_DB}`);
     available = true;
   } catch (err) {
-    // A user without CREATEDB cannot run this suite. Skip rather than fail, but
-    // say why, since silently-passing integration tests are worse than none.
-    console.log(`# skipping database suite: ${err.message}`);
-    available = false;
-    return;
+    throw new Error('Database tests require permission to create disposable databases', { cause: err });
   }
 
   // Apply the real migrations rather than hand-writing a schema, so a broken
@@ -125,6 +117,7 @@ test.before(async () => {
 
 test.after(async () => {
   if (server) await new Promise((resolve) => server.close(resolve));
+  await require('../src/config/db').pool.end();
   if (admin) {
     if (available) {
       try {
@@ -133,18 +126,10 @@ test.after(async () => {
     }
     await admin.end().catch(() => {});
   }
-  await require('../src/config/db').pool.end().catch(() => {});
 });
 
-// The skip decision has to be made INSIDE the test body, not in the options.
-// A `{ skip }` option is evaluated when the test is registered, which happens
-// before the `before` hook runs, so `available` would still be false and every
-// test would be skipped whether or not Postgres is actually there.
-const dbTest = (name, fn) =>
-  test(name, async (t) => {
-    if (!available) return t.skip('no Postgres available');
-    return fn(t);
-  });
+// Setup failures fail the suite; database checks must never silently skip.
+const dbTest = test;
 
 const TABLES = [
   'rooms', 'users', 'messages', 'attachments', 'decisions', 'tasks',

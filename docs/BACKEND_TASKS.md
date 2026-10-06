@@ -71,10 +71,17 @@ follows [CLAUDE.md](CLAUDE.md) and remains Isaac's lane.
 
 ## Verification
 
-Run the commands in [CONTRIBUTING.md](../CONTRIBUTING.md). The merged database
-suite covers migrations and the implemented query paths; upload round trips need
-Cloudinary credentials. CI targets Node 22 and PostgreSQL 16. Live Redis delivery,
-browser acceptance and actual provider deployment are separate staging checks.
+Run the commands in [CONTRIBUTING.md](../CONTRIBUTING.md). On 2026-10-06, local
+Node 22 checks passed 22 backend regression tests, 104 database/upload checks
+and six client session tests. Four Cloudinary round-trip checks skipped because
+credentials were absent. All 13 migrations applied to fresh PostgreSQL 18.4;
+a second run was a no-op. Database isolation/cleanup and failure on unavailable
+PostgreSQL were verified. The client production build also passed.
+
+CI targets Node 22 and PostgreSQL 16; remote CI results are not verified here.
+Notification regressions verify emitted payloads against persisted rows, with a
+fake Socket.IO transport. Live Redis delivery, browser acceptance and actual
+provider deployment remain separate staging checks.
 
 ## Historical audit reference
 

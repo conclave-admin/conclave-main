@@ -9,8 +9,8 @@
     "start": "node src/server.js",
     "migrate": "node database/migrate.js",
     "migrate:baseline": "node database/migrate.js --baseline",
-    "test": "node --test test/",
-    "test:db": "node --test tests/",
+    "test": "node --test test/*.test.js",
+    "test:db": "node --test tests/*.test.js",
     "test:integration": "npm run test:db"
   },
   "dependencies": {

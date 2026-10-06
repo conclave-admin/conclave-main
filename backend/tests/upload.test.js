@@ -16,26 +16,27 @@
 // upload record existing, and a stubbed Cloudinary would not catch a wrong
 // upload_stream callback or a secure_url that is actually a public URL.
 //
-// SAFETY: like tests/integration.test.js, this never touches the development
-// database — it uses the throwaway TEST_DB_NAME and drops it afterwards.
+// Uses a uniquely named disposable database, dropped only after this run
+// creates it. DATABASE_URL must point to a test PostgreSQL server.
 
 'use strict';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Client } = require('pg');
+const { randomBytes } = require('node:crypto');
 
 // --- Environment, resolved before src/config/* is required --------------------
 
 require('dotenv').config({ quiet: true });
 
 const ADMIN_URL = process.env.DATABASE_URL || 'postgres://app:app@127.0.0.1:5432/postgres';
-const TEST_DB = process.env.TEST_DB_NAME || 'conclave_upload_test';
+// A unique name per suite/run: never drop a pre-existing database.
+const TEST_DB = `conclave_upload_test_${randomBytes(12).toString('hex')}`;
 
-const adminUrl = new URL(ADMIN_URL);
-const TEST_DB_URL =
-  `postgresql://${adminUrl.username}:${adminUrl.password}` +
-  `@${adminUrl.hostname}:${adminUrl.port || 5432}/${TEST_DB}`;
+const testUrl = new URL(ADMIN_URL);
+testUrl.pathname = `/${TEST_DB}`;
+const TEST_DB_URL = testUrl.toString();
 
 process.env.DATABASE_URL = TEST_DB_URL;
 process.env.REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
@@ -167,17 +168,14 @@ test.before(async () => {
   try {
     await admin.connect();
   } catch (err) {
-    console.log(`# no Postgres at ${ADMIN_URL.replace(/:[^:@]*@/, ':<redacted>@')}: ${err.message}`);
-    return;
+    throw new Error('Database tests require reachable PostgreSQL', { cause: err });
   }
 
   try {
-    await dropTestDb();
     await admin.query(`CREATE DATABASE ${TEST_DB}`);
     available = true;
   } catch (err) {
-    console.log(`# skipping upload round trip: ${err.message}`);
-    return;
+    throw new Error('Database tests require permission to create disposable databases', { cause: err });
   }
 
   const { execFileSync } = require('child_process');
@@ -223,13 +221,13 @@ test.before(async () => {
 
 test.after(async () => {
   if (server) await new Promise((resolve) => server.close(resolve));
+  await require('../src/config/db').pool.end();
   if (admin) {
     if (available) {
       try { await dropTestDb(); } catch { /* best effort */ }
     }
     await admin.end().catch(() => {});
   }
-  await require('../src/config/db').pool.end().catch(() => {});
 });
 
 dbTest('a real upload is stored in Cloudinary and recorded for attachment', async () => {

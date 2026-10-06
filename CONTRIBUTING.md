@@ -265,8 +265,9 @@ npm run build
 
 The database suite needs a **disposable PostgreSQL server** with a user allowed
 to create databases. Set `DATABASE_URL` to its `postgres` admin database.
-The suite creates and drops `conclave_test` and `conclave_upload_test`; do not
-point it at a shared or production server or override both suites to one database.
+Each suite creates a uniquely named database and drops only its own database.
+Connection/setup failures fail `test:db`; they cannot silently skip the SQL checks.
+Do not point it at a shared or production server.
 Cloudinary round-trip tests additionally require credentials and create real assets.
 `npm run test:integration` is an alias for `test:db`.
 
