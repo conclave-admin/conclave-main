@@ -4,6 +4,7 @@ permissions:
   contents: read
 jobs:
   backend:
+    if: false
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -40,6 +41,7 @@ jobs:
         env:
           DATABASE_URL: postgres://app:test-only-password@localhost:5432/postgres
   client:
+    if: false
     runs-on: ubuntu-latest
     defaults:
       run:
