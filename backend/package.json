@@ -8,8 +8,10 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "migrate": "node database/migrate.js",
+    "migrate:baseline": "node database/migrate.js --baseline",
     "test": "node --test test/",
-    "test:integration": "node --test integration/"
+    "test:db": "node --test tests/",
+    "test:integration": "npm run test:db"
   },
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
@@ -29,5 +31,7 @@
   "devDependencies": {
     "nodemon": "^3.1.4"
   },
-  "engines": { "node": ">=22 <23" }
+  "engines": {
+    "node": ">=22 <23"
+  }
 }

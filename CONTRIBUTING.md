@@ -7,87 +7,85 @@ frontend and backend are contractually bound to each other — features that spa
 both need a pairing, and features inside one lane can be picked up and finished
 without waiting on anyone.
 
-| Owner   | Lane      | Owns                                                                 |
-| ------- | --------- | -------------------------------------------------------------------- |
-| Michael | Backend   | Auth, users, rooms, and the shared write path in `services/`           |
-| Victor  | Backend   | The differentiator layer: decisions, tasks, digest, sockets, upload    |
-| Isaac   | Frontend  | Everything under `client/`, including design fidelity and the fixtures |
+| Owner   | Lane     | Owns                                                                                                                       |
+| ------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Michael | Backend  | The differentiator layer: decisions, tasks, digest, upload, notifications, **the message write path and the socket layer** |
+| Victor  | Backend  | Foundations: auth, users, rooms, plus the presence and token services                                                      |
+| Isaac   | Frontend | Everything under `client/`, including design fidelity and the fixtures                                                     |
+
+**Why `message.service.js` belongs to the differentiator lane.** It used to be
+listed as a shared write path, which meant whoever owned decisions, tasks,
+notifications or uploads had to cross lanes to touch it. All four write through
+it — uploads insert attachments, notifications create rows on send, structured
+mentions parse at send time, and tasks emit over the socket. Putting it in one
+lane removes that crossing. It is now Michael's outright, not shared.
 
 ---
 
-## Michael — Backend, foundations
+## Michael — Backend, the differentiator layer
 
-**Why this lane:** auth and rooms are the substrate everything else queries
-against. Room membership is checked by nearly every other controller, so these
-need to be right and stable first.
+**Why this lane:** decisions, tasks, digest and uploads are what separates
+Conclave from a chat clone, and they are the least built. This is the
+highest-leverage work available.
 
-**Current state: complete.** Auth (register/login/refresh/logout with rotation),
-users (me/update/list/delete), rooms (create/list/get/add member/mark seen) are
-all implemented and hardened.
-
-**Owns going forward:**
-
-- **Item G — Group access.** Victor has chosen open registration for everyone.
-  Invitations belong to private group collaboration, with public/private group
-  preferences controlled by users/admins. Implement group discovery/joining and
-  invitation permissions without gating account registration. Anonymous group
-  reads are not yet specified; existing room reads remain membership-restricted.
-- **Item F — Rooms management.** Update room name, leave room, remove member,
-  delete room, promote member to admin. Also `POST /rooms/dm { userId }` to find
-  or create a DM, which the `/dms` screen needs — `createRoom` dedupes but
-  there's still no way to *find* one.
-- **Item D — Home page data.** `GET /home/summary`, or `unread_count` on
-  `listRooms`. Now unblocked because `last_seen_at` actually moves.
-- **Rate limiting on `/auth/*`.** Needs a dependency choice
-  (`express-rate-limit` vs hand-rolled on Redis) — raise it, don't just pick.
-- **`role_id` is never checked anywhere.** Decide what it's for or drop it.
-- **`listUsers` leaks every user's email to any authenticated caller.** Scope it
-  to shared rooms, or hide the address. Product/privacy call.
-
-**Watch out for:**
-
-- `requireAuth` now runs one `SELECT 1 FROM users ... AND deleted_at IS NULL` per
-  authenticated request. That's deliberate — a JWT can't be revoked, so this is
-  what makes account deletion mean anything — but it is a hot path. Don't remove
-  it; if it ever needs to be cheaper, cache it with a short TTL.
-- Anything that changes `room_members` or `users` affects the digest window
-  (`last_seen_at`) and every membership check in the codebase.
-
----
-
-## Victor — Backend, the differentiator layer
-
-**Why this lane:** decisions, tasks and digest are what separates Conclave from a
-chat clone, and they are the least built. This is the highest-leverage work.
-
-**Current state: mixed.** Decisions, digest and task APIs are implemented.
-Notifications and upload remain 501 stubs.
+**Current state: complete.** Decisions, digest, tasks, notifications, upload,
+structured mentions, and message edit/delete/reactions are all implemented. You
+also own `message.service.js` and the socket layer, so the write path and
+everything emitted from it are yours.
 
 **Owns going forward, in priority order:**
 
-1. **Item C — File upload.** Unblocks the composer's attach button, and is the
-   prerequisite for closing a real security hole: `message.service.js` currently
-   takes the attachment `url` straight from the request body, so any room member
-   can persist an arbitrary string as a file URL. Once uploads exist, look the
-   URL up from the upload record instead. Stream to `cloudinary.uploader.upload_stream`,
-   allowlist mime types, return `{ filename, url, mime_type, size }`.
-2. **Item A — Tasks integration.** Create/list/status APIs, membership checks,
-   pagination and socket events are implemented and database-tested. Pair with
-   Isaac on the board; assignment notifications remain part of item B.
-3. **Item B — Notifications.** `GET /notifications` with an unread count, and
-   `PATCH /notifications/seen`. The table stores only `type` and `reference_id`,
-   so the list needs a join to return readable text. Create `new_message` and
-   `mention` rows and emit `notification` — `addMember` already writes a
-   `room_invite` row and never emits it, which is the natural place to close that.
-4. **Item H — Structured mentions.** The regex mention matcher is correct but
-   it is still text matching, and a display name is not an identity: renaming a
-   user changes who gets mentioned. Add `message_mentions(message_id, user_id)`,
-   parse from a client-supplied `mentionedUserIds`, and use it for the digest and
-   notifications.
-5. **Item I — Message edit, delete, reactions.** `edited_at` and `deleted_at` ship
-   in every payload and `message_reactions` has a table but no routes. The read
-   side already handles soft-deleted rows (content withheld, `is_deleted` set), so
-   once the delete endpoint exists it will behave.
+1. **Item C — File upload.** DONE. `POST /upload` streams to
+   `cloudinary.uploader.upload_stream` behind a 22-type allowlist and returns
+   `{ filename, url, mime_type, size }`. `message.service` no longer takes an
+   attachment `url` on trust: it claims the upload inside the message transaction
+   with a conditional `UPDATE`, so an upload can be attached exactly once and only
+   by whoever uploaded it, and `filename`/`mime_type`/`size` come from the record
+   rather than the request. This closed the hole the old code described as _"this
+   checks shape, not provenance."_
+2. **Item A — Tasks endpoints.** DONE. `POST /tasks`, `GET /tasks` (cross-room,
+   the page is top-level), and `PATCH /tasks/:taskId/status` limited to
+   `open | in_progress | done`. `status` is constrained by a `CHECK` in migration
+   011, not just validated in the controller, and `updated_at` is set explicitly
+   because the digest's whole window depends on it. Emits `task:updated` to the
+   room.
+3. **Item B — Notifications.** DONE. `GET /notifications` returns
+   `{ notifications, unreadCount, nextCursor }` and `PATCH /notifications/seen`
+   takes one id or `all`. Rows are resolved through `notification.service`, so the
+   list payload and the socket payload are identical. `addMember` now writes its
+   `room_invite` through the service and emits it — that row had existed since
+   PR1, unreadable. `createMessage` writes and emits `mention` rows, excluding the
+   sender. `new_message` is deliberately not implemented: fanning out to every room
+   member on every message is a product call about noise.
+4. **Item H — Structured mentions.** DONE. `message_mentions(message_id, user_id)`
+   (migration 012) records who was mentioned, by id, and both the digest and
+   notifications read it. A rename no longer moves a mention, and two members who
+   share a display name are now distinguishable — `display_name` is not unique, so
+   text genuinely could not tell them apart.
+
+   `createMessage` takes `mentionedUserIds`, filters them to room members
+   (silently dropping the rest so a stale id cannot fail a valid send), and writes
+   the rows inside the message transaction. `mentioned_user_ids` is on the payload
+   from `createMessage`, `listMessages` and `searchMessages`.
+
+   **One temporary fallback remains.** A client that sends no `mentionedUserIds`
+   still gets mentions inferred from the text, because the only send path —
+   `client/src/hooks/useMessages.js` — does not send ids yet. **Delete
+   `services/mention.service.js` and the fallback branch in `resolveMentionIds`
+   when that hook starts sending them.** The digest has no such fallback on
+   purpose: re-deriving mentions from text there would reintroduce the rename bug
+   on historical rows.
+5. **Item I — Message edit, delete, reactions.** DONE. `PATCH /messages/:id`,
+   `DELETE /messages/:id`, and `PUT`/`DELETE /messages/:id/reactions`, each
+   emitting the whole updated message so open clients need no refetch.
+   Edit is author-only with no time limit; delete is author **or room admin** and
+   overwrites `content` to NULL, so delete means delete rather than hide.
+   Reactions are constrained to `👍 👎 🎉 ✅` in the schema (migration 013).
+   `reactions` is on the payload from all six message surfaces.
+
+   That completes items C, A, B, H and I — the differentiator layer. Remaining in
+   this lane: global search (item E) below, and the temporary mention fallback
+   under item H.
 6. **Global search (Item E)** — or decide the navbar icon opens per-room search only.
 
 **Watch out for:**
@@ -96,10 +94,65 @@ Notifications and upload remain 501 stubs.
   to the one in `007_decisions_search_includes_tags.sql`, or the GIN index stops
   being used and search silently gets slow. Tags are matched separately because
   `array_to_string` is STABLE, not IMMUTABLE, so it can't be folded into an index.
-- Socket events are documented at the top of `sockets/index.js`. Add to that list
-  when you add an event — the previous list advertised four events that were never
-  emitted.
+  That migration has already failed once this way — don't rediscover it.
+- **Your digest depends on Victor not corrupting `room_members`.** `getUserDigest`
+  filters on each room's own `last_seen_at`, so "leave room" and "remove member"
+  (Item F, Victor's lane) move or delete rows your query depends on. If your
+  digest suddenly reports the wrong window, look at his changes before yours.
+- Socket events are documented at the top of `sockets/index.js`, and you own both
+  the events and the doc. Add to that list when you add an event — the previous
+  list advertised four events that were never emitted.
 - Emit errors on `error:message`, not `error`. Socket.IO reserves `error`.
+
+---
+
+## Victor — Backend, foundations
+
+**Why this lane:** auth and rooms are the substrate everything else queries
+against. Room membership is checked by nearly every other controller, so these
+need to be right and stable first.
+
+**Current state: complete.** Auth (register/login/refresh/logout with rotation),
+users (me/update/list/delete), rooms (create/list/get/add member/mark seen) are
+all implemented and hardened. You also own `token.service.js` and
+`presence.service.js`.
+
+**Owns going forward:**
+
+- **Item F — Rooms management.** Update room name, leave room, remove member,
+  delete room, promote member to admin. Also `POST /rooms/dm { userId }` to find
+  or create a DM, which the `/dms` screen needs — `createRoom` dedupes but
+  there's still no way to _find_ one.
+- **Item D — Home page data.** `GET /home/summary`, or `unread_count` on
+  `listRooms`. Now unblocked because `last_seen_at` actually moves.
+- **Item G — Group access.** Registration is open to everyone (Victor's decision).
+  Invitations belong to group collaboration. Implement public discovery/joining
+  and private invitations according to user/admin preferences. Existing room reads
+  require membership; anonymous group reading has not been specified.
+- **Rate limiting on `/auth/*`.** Needs a dependency choice
+  (`express-rate-limit` vs hand-rolled on Redis) — raise it, don't just pick.
+- **`role_id` is never checked anywhere.** Decide what it's for or drop it.
+- **`listUsers` leaks every user's email to any authenticated caller.** Scope it
+  to shared rooms, or hide the address. Product/privacy call.
+
+**Watch out for:**
+
+- **You are on the critical path for someone else's feature.** Michael's digest
+  filters each room on that room's own `room_members.last_seen_at`, so Item F —
+  "leave room", "remove member" — moves or deletes rows his queries depend on. A
+  digest that suddenly reports the wrong window after your change is your change.
+  Talk to him before designing those two endpoints; it may need a design that
+  preserves the row rather than deleting it.
+- `requireAuth` now runs one `SELECT 1 FROM users ... AND deleted_at IS NULL` per
+  authenticated request. That's deliberate — a JWT can't be revoked, so this is
+  what makes account deletion mean anything — but it is a hot path. Don't remove
+  it; if it ever needs to be cheaper, cache it with a short TTL.
+- Anything that changes `room_members` or `users` affects every membership check
+  in the codebase, not just the digest.
+- `rooms.type` is still only documented in a schema comment, not enforced by a
+  CHECK constraint. The code honours all five documented types. Adding the
+  constraint means validating whatever rows already exist — coordinate before
+  attempting it on a populated database.
 
 ---
 
@@ -109,8 +162,12 @@ Notifications and upload remain 501 stubs.
 reviewable, but most of it is currently reading fixtures rather than endpoints.
 
 **Current state: polished but disconnected.** Every protected route renders, but
-seven of nine read from `config/devPreview.js`. The backend has shipped four
-endpoints the client never calls.
+**three of the eight** — `Decisions`, `CatchUpDigestPage` and `Tasks` — still
+render entirely from `config/devPreview.js` even though their backend endpoints
+are live and implemented. `Home` also reads fixtures, and has no endpoint behind
+it at all (item D, Victor's lane). These live endpoints are not wired into their screens:
+`DELETE /api/users/me`, `POST /api/rooms/:roomId/seen`,
+and `GET /api/decisions/search`.
 
 **Highest-leverage first — these are backend fixes the client never picked up:**
 
@@ -121,14 +178,14 @@ endpoints the client never calls.
   `room_members.last_seen_at` only advances on socket `leave-room`, and
   `GET /api/digest` keeps reporting everything since the user joined. The entire
   digest feature is inert without this one call.
-- **Session refresh and socket reconnect credentials are now wired.** Follow up
-  on coordination across browser tabs and complete a live expiry/reconnect check.
+- **Session refresh and socket reconnect credentials are wired.** Follow up on
+  coordination across browser tabs and live expiry/reconnect verification.
 
 **Then the feature work:**
 
 - **Create the missing services.** `decisions.service.js`, `tasks.service.js`,
   `digest.service.js` and `notifications.service.js` do not exist. The backend
-  endpoints for decisions, tasks and digest are implemented.
+  endpoints for decisions, tasks, digest and notifications are implemented.
 - **`CatchUpDigestPage.jsx` will crash on an unknown item type.**
   `ITEM_TYPES[type]` destructures with no default — one unexpected `type` from
   the backend throws and takes the page down.
@@ -148,8 +205,7 @@ endpoints the client never calls.
   overview" while Decisions/Tasks/Digest correctly set their own.
 - **`Settings` and `Notifications` are 9-line TODO stubs**, and both use
   `text-gray-500` — a stock Tailwind colour, not a Foundations token (`muted`).
-  Their backend endpoints are 501, so be honest about that in the UI rather than
-  calling them and rendering a placeholder as data.
+  Notifications have a working API; connect it when replacing the placeholder.
 
 **Constraints — read `docs/CLAUDE.md` before touching any component.** It is
 binding, not advisory:
@@ -196,17 +252,23 @@ because they are the rules that keep three people from colliding:
 
 ## Verifying your work
 
+Use Node 22, as configured in `.nvmrc` and CI.
+
 ```bash
 cd backend
-npm test          # smoke and regression tests; no external services required
-node --check src/**/*.js
+npm test          # smoke/regression tests without PostgreSQL or Redis
+npm run test:db   # API/database tests plus upload validation
+cd ../client
+npm test
+npm run build
 ```
 
-The default suite covers routing, auth, errors, sockets and input validation
-without external services. Run `npm run test:integration` with
-`TEST_DATABASE_URL` pointing at a migrated disposable PostgreSQL database for
-task permissions, queries and digest integration. CI runs both suites.
+The database suite needs a **disposable PostgreSQL server** with a user allowed
+to create databases. Set `DATABASE_URL` to its `postgres` admin database.
+The suite creates and drops `conclave_test` and `conclave_upload_test`; do not
+point it at a shared or production server or override both suites to one database.
+Cloudinary round-trip tests additionally require credentials and create real assets.
+`npm run test:integration` is an alias for `test:db`.
 
-Fresh migrations and task flows have passed locally against real PostgreSQL.
-Auth/room/message end-to-end flows, Redis-backed live delivery and provider
-connectivity still need verification before inviting users.
+CI applies migrations twice and runs the database suite. Redis-backed delivery,
+live provider connectivity and browser acceptance still require staging checks.

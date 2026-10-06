@@ -14,7 +14,8 @@ intentionally open; group visibility does not yet provide public discovery/joini
 - Render: the persistent Express + Socket.IO process from `backend/`.
 - Supabase: PostgreSQL, using a session-pooler connection.
 - Redis: a compatible TCP Redis service, configured through `REDIS_URL`.
-- Cloudinary: optional until uploads are implemented.
+- Cloudinary: required for uploads; configure `CLOUDINARY_CLOUD_NAME`,
+  `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` in the backend environment.
 
 This preserves the existing architecture. Render supports persistent WebSocket
 connections. Free web services can sleep, so allow for slow initial connections;
@@ -53,8 +54,8 @@ npm run build
 ```
 
 The GitHub workflow also starts a disposable PostgreSQL 16 instance, runs
-migrations twice, and tests task permissions and queries through the real API.
-Fresh migrations and task integration have passed locally on PostgreSQL 18.4.
+migrations twice, and runs `npm run test:db` against disposable databases to
+exercise the implemented API queries and permissions.
 That workflow has been added but has not been executed remotely in this session.
 
 ## Database and Redis
@@ -139,6 +140,6 @@ local auth-preview bypass.
 - Verify members can read decisions/digests and nonmembers cannot.
 - Confirm backups and record the actual frontend/API URLs and provider projects.
 
-Task APIs are implemented, but the board UI still needs integration. Notifications
-and uploads still return 501. Several frontend screens remain fixtures or empty
-placeholders.
+Task, notification and upload APIs are implemented, but their frontend integration
+remains. Uploads return 503 until Cloudinary is configured. Several frontend
+screens remain fixtures or empty placeholders.

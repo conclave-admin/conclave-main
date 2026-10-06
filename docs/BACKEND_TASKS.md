@@ -1,128 +1,80 @@
 # Backend work and launch status
 
-This is the current backlog. Ownership and collaboration rules live in
-[CONTRIBUTING.md](../CONTRIBUTING.md); provider setup and acceptance checks live
-in [DEPLOYMENT.md](../DEPLOYMENT.md). Keep endpoint payloads in
-[API_CONTRACTS.md](API_CONTRACTS.md), not duplicated here.
+Ownership and working rules live in [CONTRIBUTING.md](../CONTRIBUTING.md), endpoint
+payloads in [API_CONTRACTS.md](API_CONTRACTS.md), and provider setup and acceptance
+checks in [DEPLOYMENT.md](../DEPLOYMENT.md).
 
 ## Current state
 
 | Area | State | Owner |
 | --- | --- | --- |
-| Auth, users, rooms | Implemented; invitations, auth rate limiting and room management remain | Michael |
-| Messaging | Implemented; pagination UI and send acknowledgements remain | Michael / Victor / Isaac by layer |
-| Decisions and digest | APIs implemented; frontend integration remains | Victor / Isaac |
-| Tasks | Create/list/status APIs implemented and database-tested; UI/notifications remain | Victor / Isaac |
-| Notifications and uploads | API stubs return 501 | Victor |
-| Frontend | Room chat wired; several other screens are fixtures/placeholders | Isaac |
-| Deployment | Configuration committed; no live deployment verified here | Victor coordinates |
+| Auth, users, rooms | Implemented; group access, rate limiting and room management remain | Victor |
+| Presence and tokens | Implemented; privacy and cross-tab refresh need review | Victor |
+| Messages, decisions, tasks, digest | APIs implemented; further frontend integration remains | Michael / Isaac |
+| Notifications | List/seen APIs, room invitations and mentions implemented | Michael |
+| Uploads | Cloudinary upload and server-owned attachment records implemented | Michael |
+| Frontend | Room chat wired; several screens use fixtures/placeholders | Isaac |
+| Deployment | Configuration committed; public deployment not verified here | Victor coordinates |
 
 ## Victor's backlog
 
-### A. Tasks
+- **G — Group access:** registration is intentionally open to everyone. Implement
+  public group discovery/joining and private group invitations according to
+  user/admin preferences. Existing room reads require membership even for rooms
+  typed `public`; anonymous reading has not been specified.
+- **Auth rate limiting:** agree the library/store choice before implementation.
+- **F — Room management:** editing, leave/remove/promote/delete and find-or-create
+  DMs. Coordinate membership changes with Michael because digest windows and
+  authorization depend on membership rows.
+- **D — Home data:** unread counts, tasks due and recent activity.
+- **Privacy/authorization:** directory email exposure, unused `role_id`, account
+  deletion while sockets remain connected, and presence broadcast visibility.
+- **Session reliability:** coordinate simultaneous refresh across browser tabs
+  with Isaac; current refresh coalescing is within one tab.
 
-Create, cross-room/per-room listing, and status updates are implemented. The API
-checks room membership, active assignees and source-message room/deletion state.
-It returns metadata, date strings, filters and precise pagination cursors. Only
-the creator, assignee or room admin may change status. Committed writes emit
-`task:created` / `task:updated`; no-op updates do not rebroadcast.
+## Michael's implemented features and follow-up
 
-Remaining: assignment notifications (item B) and Isaac’s board integration.
-Contracts and database test instructions are in [API_CONTRACTS.md](API_CONTRACTS.md).
+- **A — Tasks:** create, cross-room/per-room listing, status filters and room-member
+  status updates. Lists sort by due date, undated last. Create/update emits
+  `task:updated` to room subscribers. Pagination, assignment notifications and
+  live updates on the top-level board remain possible follow-up work.
+- **B — Notifications:** recipient-scoped pagination, unread count and mark-seen,
+  with live room-invite/mention delivery. `new_message` fan-out is intentionally
+  deferred pending a product decision about notification volume.
+- **C — Uploads:** allowlisted files stream to Cloudinary and create ownership
+  records. Message creation claims the upload once and reads metadata from the
+  server record. Cloudinary credentials are needed for a real round-trip check.
+- **H — Structured mentions:** IDs are persisted and used by notifications/digest.
+  Remove text-matching fallback after Isaac's client sends `mentionedUserIds`.
+- **I — Message mutations:** author edits, author/admin deletion and four allowed
+  reactions are implemented with socket events. Read-receipt persistence remains.
+- **E — Search:** decide whether the navbar needs global search or room search.
+  Global queries must restrict results to the caller's rooms.
 
-### B. Notifications
+## Isaac's integration work
 
-Implement recipient-scoped, paginated reads with an unread count and mark-seen
-for one/all notifications. Resolve `type` and `reference_id` into readable text.
-Add assignment, new-message and mention notifications and live delivery.
-Michael's room-member endpoint already stores `room_invite`; coordinate any
-change to that controller instead of taking over his work.
-
-### C. Uploads and attachment ownership
-
-Stream uploads to Cloudinary, enforce file-type and size limits, and keep the
-filename/MIME/size response aligned with the API contract. Persist upload
-ownership and resolve attachment URLs from server records. The shared message
-service currently trusts client URLs, so coordinate that necessary change with
-Michael. Isaac owns the composer UI. Cloudinary credentials are needed for a
-real integration check; oversized multipart requests already return 413.
-
-### E. Search
-
-Decision search exists across rooms; message search is room-scoped. Decide
-whether the navbar opens room search or needs a global message/decision search
-endpoint before adding another API. Any global query must restrict room membership.
-
-### H. Structured mentions
-
-Replace display-name regex matching with `message_mentions(message_id, user_id)`
-and validated `mentionedUserIds`. Names are mutable and are not identities.
-This affects the shared message write path; coordinate with Michael and Isaac.
-
-### I. Message edits, deletion and reactions
-
-Add authorized mutations and socket events. `edited_at`, `deleted_at` and
-`message_reactions` already exist. The read side withholds deleted content;
-Isaac still needs to render tombstones and controls. Persist read receipts if
-required; the existing event only broadcasts them.
-
-### Later
-
-Sourced room Q&A can build on reliable decisions, tasks, search and permissions.
-Answers should link to their source messages.
-
-## Work to coordinate, not take over
-
-- **Michael — G, group access:** registration is intentionally open to everyone
-  (Victor’s decision). Add invitations for private collaborations and public group
-  discovery/joining according to user/admin preferences. Room reads currently
-  require membership, including rooms with type `public`. Anonymous read access
-  has not been specified; do not infer it from public signup.
-- **Michael — auth rate limiting:** agree the library/store choice; none is wired.
-- **Michael — F, room management:** room editing, leave/remove/promote/delete and
-  find-or-create DMs. Room creation APIs exist but their onboarding UI does not.
-- **Michael — D, home data:** unread counts, tasks due and recent activity.
-- **Michael — privacy/authorization:** user-directory email exposure, unused
-  `role_id`, and account deletion while existing sockets remain connected.
-- **Isaac:** wire decisions/digest APIs, room-seen calls, older-message pagination,
-  task/notification/upload screens, first-room creation and member management.
-- **Isaac / Victor:** coordinate simultaneous token refresh across browser tabs,
-  visible socket send failures and acknowledgements. Current refresh coalescing
-  works within one tab; reconnect recovery fetches the latest history page.
+Wire decisions/tasks/digest/notifications, uploads and structured mentions; call
+room-seen when opening a room; support older-message pagination and first-room
+creation/member management. Connect existing account deletion. Frontend work
+follows [CLAUDE.md](CLAUDE.md) and remains Isaac's lane.
 
 ## Remaining technical risks
 
-- Fresh migrations and task queries now pass against temporary PostgreSQL 18.4.
-  Other API queries and provider connectivity still need coverage. Migration
-  008's populated backfill may collide for existing names such as `Room`, `Room`, `Room-2`;
-  a fresh-schema check does not cover populated upgrades.
-- Presence announcements currently reach sockets outside shared rooms. Decide
-  the visibility policy and then scope broadcasts. Check multi-tab room presence.
-- Review room-member authorization races and unbounded member lists before
-  scaling. `listMessages` attachment aggregation could later be simplified.
-- Review remaining React Router production advisories and development-tool
-  advisories separately; do not serve Vite's dev server in production.
-- New schema changes use numbered migrations. Never silently baseline an
-  existing database or rewrite applied migrations.
+- Migration 008's populated slug backfill may collide for existing names such as
+  `Room`, `Room`, `Room-2`; fresh-schema checks do not cover populated upgrades.
+- Review room-member authorization races and unbounded lists before scaling.
+- Presence broadcasts currently reach sockets outside shared rooms. Decide the
+  visibility policy and verify multi-tab room presence.
+- Review frontend dependency advisories separately; never serve Vite's development
+  server in production.
+- Never silently baseline an existing database or rewrite applied migrations.
 
-## Verification status
+## Verification
 
-The backend unit/regression suite passes 27 tests. All eight migrations applied
-successfully to a fresh temporary PostgreSQL 18.4 database; a second run was a
-no-op. Task integration checks cover creation, authorization, filters, exact
-pagination, due-date serialization, status events and the existing room digest.
-The frontend build passes after the open-signup copy change; the earlier six
-session tests also passed in the launch-hardening commit.
-
-Local checks used Node 18.19.1. Node 22 and PostgreSQL 16 are configured in CI;
-remote CI results, Redis integration, two-browser live delivery, other API flows
-and provider deployment have not been verified here. Task event tests capture
-server emissions; they do not test a Redis-backed transport. No provider
-credentials are configured in this workspace.
-
-The last production dependency audit reported zero backend findings and two
-moderate frontend entries (React Router and its DOM package). This is a dated
-check, not a guarantee about future dependency versions.
+Run the commands in [CONTRIBUTING.md](../CONTRIBUTING.md). The merged database
+suite covers migrations and the implemented query paths; upload round trips need
+Cloudinary credentials. CI targets Node 22 and PostgreSQL 16. Live Redis delivery,
+browser acceptance and actual provider deployment are separate staging checks.
 
 ## Historical audit reference
 
@@ -137,9 +89,9 @@ Git history; this index preserves their meaning without duplicating old reports.
 | Bug 4 | Room slug: added by 008; populated backfill collision remains |
 | Bug 5 | Decision search: includes tags; keep title/body tsvector identical to migration 007 |
 | Bug 6 | Attachment response shape aligned; `file_type` stores MIME strings |
-| Bug 7 | Deleted message reads/search handled; mutation endpoints remain |
-| Bug 8 | Attachment-only messages accepted; URL ownership remains |
-| Bug 9 | Regex mention matching improved; replace with user IDs in H |
+| Bug 7 | Deleted message reads/search handled; edit/delete/reaction endpoints implemented |
+| Bug 8 | Attachment-only messages accepted; server-owned uploads claimed once per message |
+| Bug 9 | Regex mention matching improved; structured IDs implemented; legacy client fallback remains |
 | Bug 10 | Migration ledger and session advisory lock added |
 | Bug 11 | Credential validation, token rotation, unique JWT IDs, safe login responses and client refresh added; group access/rate limiting remain |
 | Bug 12 | Env files ignored; exclude credentials from shared archives |

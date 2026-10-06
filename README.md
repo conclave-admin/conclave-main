@@ -28,7 +28,7 @@ Full product/architecture context: [`docs/PKB_Project_Architecture_Brief.docx`](
 
 2. **Start Postgres + Redis:**
    ```bash
-   docker compose up -d
+   docker compose up -d postgres redis
    ```
 
 3. **Run migrations:**
@@ -64,7 +64,7 @@ docker-compose.yml   Postgres + Redis for local dev
 ## Where to start
 
 - **Auth flow (register/login/refresh) is already wired up** in `backend/src/controllers/auth.controller.js` — use it as the pattern for everything else.
-- Rooms, messages, decisions, tasks, and digest APIs are implemented. Notifications and uploads still return 501. See [the backend backlog](docs/BACKEND_TASKS.md) for current gaps and Victor's priorities, and [CONTRIBUTING.md](CONTRIBUTING.md) for ownership.
+- Rooms, messages, decisions, tasks, digest, notifications and uploads have implemented APIs. See [the backend backlog](docs/BACKEND_TASKS.md) for current gaps and Victor's priorities, and [CONTRIBUTING.md](CONTRIBUTING.md) for ownership.
 - Socket event names and payloads are documented in `backend/src/sockets/index.js`.
 - Database schema lives in `backend/database/migrations/` as plain SQL — run in order.
 - Deployment instructions and the Render Blueprint are in [DEPLOYMENT.md](DEPLOYMENT.md) and [render.yaml](render.yaml). Use Node 22 for hosting and CI.
@@ -73,7 +73,7 @@ docker-compose.yml   Postgres + Redis for local dev
 
 REST requests follow routes → controllers → shared services → PostgreSQL.
 Socket.IO uses the same message write service; Redis maintains presence and
-relays events between API instances. Cloudinary is configured for future uploads.
+relays events between API instances. Cloudinary stores uploaded attachments.
 
 - [API contracts](docs/API_CONTRACTS.md): endpoint payloads and integration notes.
 - [Backend backlog](docs/BACKEND_TASKS.md): current status, priorities and risks.

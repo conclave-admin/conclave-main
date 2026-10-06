@@ -1,26 +1,28 @@
 FROM node:22-alpine
 WORKDIR /app
 
-# Build deps and app dependencies are installed, then the build deps are
-# removed, all inside ONE layer. Splitting this across multiple RUN lines
-# would leave python3/make/g++ in an earlier layer even after apk del, since
-# layers are immutable and only the final filesystem is squashed.
-#
-# Keep build tools available for native-module fallback compilation when a
-# prebuilt binary is unavailable for the target platform.
+# No build toolchain here. bcrypt is the only native module, and it ships a
+# prebuilt linux-musl binary that node-pre-gyp fetches at install time, so it
+# does not compile. An earlier revision installed python3/make/g++ on the
+# assumption that Alpine's musl libc meant no prebuilt binary existed. That was
+# wrong: installing and running bcrypt in node:20-alpine with no compiler
+# present succeeded in 17s. The toolchain also caused a ~40MB python3 download
+# that stalled the Alpine CDN and left a build hanging for 48 minutes. If a
+# future dependency genuinely needs to compile, add the toolchain back here
+# rather than debugging a node-gyp error at runtime.
 COPY package*.json ./
-RUN apk add --no-cache --virtual .build-deps python3 make g++ \
- && npm ci --omit=dev \
- && npm cache clean --force \
- && apk del .build-deps
+RUN npm ci --omit=dev \
+ && npm cache clean --force
 
-# .dockerignore keeps host .env and node_modules out of this layer.
+# .dockerignore keeps the host's .env and node_modules out of this layer.
+# Without it, host (glibc) node_modules would overwrite these musl-built ones
+# and the image would build cleanly and then crash on startup.
 COPY . .
 
 EXPOSE 5000
 
-# Drop root. The app only reads from /app, so this is safe today; revisit if
-# it ever needs to write (e.g. uploads/tmp).
+# Drop root. The app only reads from /app today; revisit if it needs to write
+# (e.g. uploads/tmp).
 USER node
 
 # Invoked through `sh` rather than executed directly so the image does not

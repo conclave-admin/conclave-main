@@ -86,10 +86,15 @@ async function main() {
   subClient = redisClient.duplicate();
   await Promise.all([pubClient.connect(), subClient.connect()]);
   io.adapter(createAdapter(pubClient, subClient));
-  // REST task mutations broadcast through the same room-aware Socket.IO server.
-  app.set('io', io);
 
   registerSocketHandlers(io);
+
+  // Hand the io instance to Express so controllers can emit. Without this, io is
+  // only reachable inside this module and from the socket handlers that receive
+  // it as an argument — a REST handler has no way to push an event, which is why
+  // addMember writes a room_invite notification row that nobody is ever told
+  // about. Controllers read it as req.app.get('io').
+  app.set('io', io);
 
   httpServer.listen(env.port, () => {
     console.log(`API + Socket.IO listening on http://localhost:${env.port}`);
