@@ -13,14 +13,23 @@ intentionally open; group visibility does not yet provide public discovery/joini
 - Vercel: the static React build from `client/`.
 - Render: the persistent Express + Socket.IO process from `backend/`.
 - Supabase: PostgreSQL, using a session-pooler connection.
-- Redis: a compatible TCP Redis service, configured through `REDIS_URL`.
+- Redis: Render Key Value in the API service's region, using its internal TCP
+  URL as `REDIS_URL`, or another compatible TCP Redis provider.
 - Cloudinary: required for uploads; configure `CLOUDINARY_CLOUD_NAME`,
   `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` in the backend environment.
 
 This preserves the existing architecture. Render supports persistent WebSocket
 connections. Free web services can sleep, so allow for slow initial connections;
 choose an always-on plan when the team requires dependable chat availability.
-Check current plans before provisioning paid resources.
+Check current plans before provisioning paid resources. Render Key Value can be
+restarted with data loss on the free plan; PostgreSQL remains the source of truth,
+while Redis presence and subscriptions must recover after reconnecting.
+
+Vercel Hobby is limited to personal, non-commercial use. Confirm eligibility for
+this team project; otherwise use Pro or evaluate Render Static Sites for the
+frontend. Do not assume that an unpaid beta automatically qualifies for Hobby.
+See [Vercel Hobby](https://vercel.com/docs/plans/hobby) and
+[Render Key Value](https://render.com/docs/key-value).
 
 Sources: [Render WebSockets](https://render.com/docs/websocket),
 [Render free services](https://render.com/docs/free),
@@ -56,13 +65,24 @@ npm run build
 The GitHub workflow also starts a disposable PostgreSQL 16 instance, runs
 migrations twice, and runs `npm run test:db` against disposable databases to
 exercise the implemented API queries and permissions.
-That workflow has been added but has not been executed remotely in this session.
+The backend and client jobs passed on GitHub in
+[run 37487393630](https://github.com/conclave-admin/conclave-main/actions/runs/37487393630),
+including real PostgreSQL checks and the client build. This verifies that commit;
+it does not establish that a hosted deployment works.
 
 ## Database and Redis
 
 Create a Supabase project and copy its **session pooler** connection string from
 the Connect panel. Use the provider's TLS settings and properly encoded password.
 Keep this URL only in server-side secrets as `DATABASE_URL`.
+
+Use Supabase as PostgreSQL for the existing Express API. Keep Conclave's current
+JWT authentication and Socket.IO; no Supabase Auth or Realtime migration is needed.
+Disable the Supabase Data API for this project before applying the schema. The
+application authorizes access in Express, and its SQL migrations do not define
+Supabase RLS policies. An additional exposed API must not provide a route around
+those membership checks. Do not put Supabase database credentials or service keys
+in the frontend. See [Supabase Data API security](https://supabase.com/docs/guides/api/securing-your-api).
 
 Session pooling works with this persistent Node server and the migration runner's
 session advisory lock. Transaction pooling *does* support transactions, but it
@@ -143,3 +163,43 @@ local auth-preview bypass.
 Task, notification and upload APIs are implemented, but their frontend integration
 remains. Uploads return 503 until Cloudinary is configured. Several frontend
 screens remain fixtures or empty placeholders.
+
+
+## First feedback release and deployment order
+
+Use the GitHub `main` branch after its checks pass. Keep the initial feedback
+release focused on signup/login, joining a prepared group and reliable messaging.
+Task, decision and digest APIs exist, but their frontend screens still need Isaac's
+integration work. Prepare the initial rooms and memberships before onboarding
+testers; public group discovery/joining remains separate work from open signup.
+
+1. Confirm provider accounts, budget and the intended production branch. Use the
+   generated HTTPS hostnames initially; a custom domain is optional.
+2. Create Supabase PostgreSQL, disable its Data API, and select a session-pooler
+   connection. Keep Render and the database geographically close where possible.
+3. Create Render Key Value in the same region as the API. Use the internal Redis
+   URL; keep it private. Leave SQL database URLs out of browser variables.
+4. Create the Vercel project to establish its production hostname. Configure its
+   build using the settings above. An early build without the API is not launch-ready.
+5. Create the Render API from the Blueprint. Supply its database/cache URLs and
+   the exact Vercel origin. Configure Cloudinary if testing uploads. Verify startup
+   migrations and `/health`, then copy the API hostname into Vercel's build variables.
+6. Redeploy Vercel with the final API/socket URLs. Complete auth rate limiting and
+   the two-browser acceptance checks above before distributing the feedback URL.
+7. Record the frontend/API URLs and project names here after verification. Never
+   record connection strings, passwords or API secrets in this document.
+
+## PWA follow-up (Isaac owns frontend implementation)
+
+A responsive web release can become an installable PWA without rewriting the API.
+First verify mobile navigation, touch controls, keyboard behavior and reconnects.
+Then add a web app manifest, approved app icons and standalone display behavior;
+verify installation on target Android and iOS browsers. HTTPS is required outside
+local development. See [MDN's installation guide](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable).
+
+Treat offline support as a separate increment: cache the application shell and
+provide an honest offline state. Do not cache authenticated API responses or
+private conversations by default. Offline sending needs durable queues,
+idempotency and visible pending/failed states before it can be advertised.
+Background push notifications are separate from the existing live Socket.IO
+notifications and need an explicit implementation and device testing.
