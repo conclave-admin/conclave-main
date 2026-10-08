@@ -289,8 +289,11 @@ const searchMessages = asyncHandler(async (req, res) => {
 const editMessageHandler = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
   const { content } = req.body;
+  const io = req.app.get("io");
 
-  await editMessage({ messageId, userId: req.user.id, content });
+  // `io` goes to the service first so the chat-list refresh happens at the
+  // point of write. Re-read afterwards for the response.
+  await editMessage({ messageId, userId: req.user.id, content, io });
 
   // Re-read the full row rather than trusting the UPDATE ... RETURNING, so the
   // response has exactly the shape listMessages returns — including sender
@@ -298,7 +301,6 @@ const editMessageHandler = asyncHandler(async (req, res) => {
   // a socket client replace its copy without a second request.
   const message = await getMessagePayload(messageId, req.user.id);
 
-  const io = req.app.get("io");
   if (io) {
     io.to(message.room_id).emit("message:updated", { message });
   }
@@ -310,14 +312,14 @@ const editMessageHandler = asyncHandler(async (req, res) => {
 // DELETE /messages/:id — author or room admin. Soft delete; content is overwritten.
 const deleteMessageHandler = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
+  const io = req.app.get("io");
 
-  const message = await deleteMessage({ messageId, userId: req.user.id });
+  const message = await deleteMessage({ messageId, userId: req.user.id, io });
 
   // Re-read for the full shape. The tombstone is what clients swap in, and it
   // carries is_deleted so the client knows to render one.
   const payload = await getMessagePayload(message.room_id && message.id, req.user.id);
 
-  const io = req.app.get("io");
   if (io) {
     io.to(payload.room_id).emit("message:deleted", { message: payload });
   }

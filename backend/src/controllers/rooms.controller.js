@@ -6,6 +6,7 @@ const {
   createNotification,
   presentNotification,
   emitNotification,
+  UNREAD_COUNT_SQL,
 } = require("../services/notification.service");
 
 // The five types named in the rooms.type schema comment. `public` and
@@ -191,8 +192,15 @@ const createRoom = asyncHandler(async (req, res) => {
 });
 
 // ---------- listRooms ----------
-// Returns all rooms the authenticated user is a member of, with member count
-// and the user's role in each room.
+// Returns all rooms the authenticated user is a member of, with member count,
+// the user's role in each room, and the two fields the chat list needs:
+// a display identity and enough message state to render a row without a
+// second round trip.
+//
+// The shape is purely additive — every column the sidebar reads today is still
+// here. The GROUP BY is gone: member_count became a correlated count so the
+// LATERAL below isn't trapped inside an aggregate, and so an empty room is
+// still a row (a room with no messages must not vanish from the sidebar).
 const listRooms = asyncHandler(async (req, res) => {
   const result = await query(
     `SELECT
@@ -205,24 +213,78 @@ const listRooms = asyncHandler(async (req, res) => {
        rm.role AS my_role,
        rm.joined_at,
        rm.last_seen_at,
-       COUNT(all_members.user_id)::int AS member_count
+       (SELECT COUNT(*) FROM room_members am WHERE am.room_id = r.id)::int
+         AS member_count,
+
+       -- A DM is named after the other person, not the two-word title
+       -- createRoom gave it. Groups keep their own name.
+       CASE
+         WHEN r.type = 'dm' THEN (
+           SELECT u.display_name
+             FROM room_members o
+             INNER JOIN users u ON u.id = o.user_id
+            WHERE o.room_id = r.id AND o.user_id <> $1
+            LIMIT 1
+         )
+         ELSE r.name
+       END AS display_name,
+
+       CASE
+         WHEN r.type = 'dm' THEN (
+           SELECT u.avatar_url
+             FROM room_members o
+             INNER JOIN users u ON u.id = o.user_id
+            WHERE o.room_id = r.id AND o.user_id <> $1
+            LIMIT 1
+         )
+         ELSE NULL
+       END AS display_avatar,
+
+       -- LEFT JOIN LATERAL, not CROSS: an empty room returns NULL here rather
+       -- than dropping out of the result set entirely.
+       lm.id IS NOT NULL AS has_message,
+       CASE
+         WHEN lm.id IS NULL THEN NULL
+         ELSE jsonb_build_object(
+           'id',             lm.id,
+           -- The row's own tombstone is reported, but its content is never
+           -- echoed: a deleted message keeps showing up in the timeline, and
+           -- hiding it here would make the sidebar and the room disagree.
+           'content',        CASE WHEN lm.deleted_at IS NULL
+                                  THEN lm.content ELSE NULL END,
+           'sender_id',      lm.sender_id,
+           'sender_name',    lm.sender_name,
+           'sender_avatar',  lm.sender_avatar,
+           'has_attachment', lm.has_attachment,
+           'is_deleted',     lm.deleted_at IS NOT NULL,
+           'created_at',     lm.created_at
+         )
+       END AS last_message,
+
+       -- Unread is "a message I have not seen and can still read". Tombstones
+       -- are excluded because there would be a badge pointing at nothing, and
+       -- the caller's own messages are excluded because no one expects an
+       -- unread count on their own words. Shared with emitChatUpdated so the
+       -- list row and the sidebar badge can never disagree.
+       ${UNREAD_COUNT_SQL} AS unread_count
+
      FROM rooms r
      INNER JOIN room_members rm
        ON rm.room_id = r.id
       AND rm.user_id = $1
-     INNER JOIN room_members all_members
-       ON all_members.room_id = r.id
-     GROUP BY
-       r.id,
-       r.name,
-       r.type,
-       r.slug,
-       r.created_by,
-       r.created_at,
-       rm.role,
-       rm.joined_at,
-       rm.last_seen_at
-     ORDER BY r.created_at DESC`,
+     LEFT JOIN LATERAL (
+       SELECT m.id, m.content, m.sender_id, m.created_at, m.deleted_at,
+              u.display_name AS sender_name,
+              u.avatar_url   AS sender_avatar,
+              EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id)
+                AS has_attachment
+         FROM messages m
+         INNER JOIN users u ON u.id = m.sender_id
+        WHERE m.room_id = r.id
+        ORDER BY m.created_at DESC, m.id DESC
+        LIMIT 1
+     ) lm ON TRUE
+     ORDER BY COALESCE(lm.created_at, r.created_at) DESC, r.id DESC`,
     [req.user.id],
   );
 

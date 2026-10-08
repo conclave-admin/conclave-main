@@ -20,6 +20,15 @@ const socketHandler = require('../utils/socketHandler');
 //
 // Server -> Client:
 //   receive-message   { message }
+//   chat:updated      { roomId, lastMessage, unreadCount }
+//                                   emitted to EACH MEMBER'S personal room
+//                                   (user:<id>), never the chat room, because
+//                                   unreadCount is one person's number. Fires
+//                                   after every message create, edit and
+//                                   delete, so a sidebar row — preview and
+//                                   badge — updates without being opened.
+//                                   Emitted by emitChatUpdated in
+//                                   services/notification.service.js.
 //   user-online        { userId }
 //   user-offline       { userId }
 //   room-presence      { roomId, onlineUserIds }

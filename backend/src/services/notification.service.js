@@ -260,16 +260,132 @@ async function notifyAndEmit({ recipientId, type, referenceId, actorId, io, db }
   return presented;
 }
 
+// ---------------------------------------------------------------------------
+// chat:updated — keeping a sidebar row honest
+//
+// A chat list can only be rendered from the room's last message and its unread
+// count, and neither lives on the room row. Without this event every list in
+// every open tab shows stale previews until someone navigates.
+//
+// Deliberately a per-recipient emit to `user:<id>`, not a broadcast to the chat
+// room: `unread_count` is one person's number, and sending every member's count
+// to every member would both leak activity and force the client to figure out
+// which of N counts is its own. Each member gets exactly their own, which also
+// means the event is safe to handle without knowing who you are.
+// ---------------------------------------------------------------------------
+
+// Single source of truth for the badge, used by BOTH `listRooms` and the emit
+// below. Two definitions of "unread" would eventually disagree, and a sidebar
+// that says 3 while the list row says 2 is exactly the bug class that is hard
+// to see and impossible to reason about.
+//
+// Aliases are fixed (`rm` on room_members) because both callers join it the
+// same way; only `m` is introduced here.
+//
+// - `deleted_at IS NULL`: a tombstone carries no content, so a badge pointing
+//   at one would open into nothing. Nobody can read it, so it is not unread.
+// - `sender_id <> rm.user_id`: your own words are never unread to you.
+const UNREAD_COUNT_SQL = `(
+  SELECT COUNT(*)
+    FROM messages m
+   WHERE m.room_id = rm.room_id
+     AND m.created_at > rm.last_seen_at
+     AND m.deleted_at IS NULL
+     AND m.sender_id <> rm.user_id
+)::int`;
+
+/**
+ * Push a room's refreshed list row to every member's personal room.
+ *
+ * MUST be called after the write it reflects has committed: it reads through
+ * the default connection, so a caller still inside a transaction would compute
+ * counts against data no other connection can see yet.
+ *
+ * Best-effort, by the same reasoning as `notifyMentions`: the message is already
+ * durable, and a chat list that is a few seconds stale is strictly better than
+ * a send that reports failure for a message that exists.
+ *
+ * @param {object} io      - Socket.IO instance, optional
+ * @param {string} roomId
+ * @returns {Promise<number>} how many members were told, or 0 on failure
+ */
+async function emitChatUpdated(io, roomId) {
+  if (!io || !roomId) return 0;
+
+  try {
+    // The preview is read back rather than passed in, so create, edit and
+    // delete all produce an identical payload from one place. Handing each
+    // caller a half-built message is how the six message surfaces drifted
+    // apart in the first place.
+    const [messageResult, membersResult] = await Promise.all([
+      pool.query(
+        `SELECT m.id, m.content, m.deleted_at, m.created_at, m.sender_id,
+                u.display_name AS sender_name,
+                u.avatar_url   AS sender_avatar,
+                EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id)
+                  AS has_attachment
+           FROM messages m
+           INNER JOIN users u ON u.id = m.sender_id
+          WHERE m.room_id = $1
+          ORDER BY m.created_at DESC, m.id DESC
+          LIMIT 1`,
+        [roomId],
+      ),
+      pool.query(
+        `SELECT rm.user_id, ${UNREAD_COUNT_SQL} AS unread_count
+           FROM room_members rm
+          WHERE rm.room_id = $1`,
+        [roomId],
+      ),
+    ]);
+
+    // A room with no messages cannot happen after a create, but an all-rows
+    // cascade could in principle leave one. Sending `lastMessage: null` is the
+    // honest answer for "this room is now empty".
+    const row = messageResult.rows[0] || null;
+    const lastMessage = row
+      ? {
+          id: row.id,
+          // Masked server-side for the same reason listMessages masks it: the
+          // row exists, its text does not.
+          content: row.deleted_at ? null : row.content,
+          sender_id: row.sender_id,
+          sender_name: row.sender_name,
+          sender_avatar: row.sender_avatar,
+          has_attachment: row.has_attachment,
+          is_deleted: row.deleted_at !== null,
+          created_at: row.created_at,
+        }
+      : null;
+
+    for (const member of membersResult.rows) {
+      io.to(personalRoom(member.user_id)).emit('chat:updated', {
+        roomId,
+        lastMessage,
+        unreadCount: member.unread_count,
+      });
+    }
+
+    return membersResult.rows.length;
+  } catch (err) {
+    // Same contract as notifyMentions: never fail the write that triggered us.
+    console.error('chat:updated emit failed', err.message);
+    return 0;
+  }
+}
+
 module.exports = {
   NOTIFICATION_TYPES,
   MESSAGE_TARGET_TYPES,
   ROOM_TARGET_TYPES,
+  UNREAD_COUNT_SQL,
   personalRoom,
   createNotification,
   presentNotifications,
   presentNotification,
   emitNotification,
   emitNotificationsSeen,
+  emitChatUpdated,
   notifyAndEmit,
   preview,
 };

@@ -11,6 +11,7 @@ checks in [DEPLOYMENT.md](../DEPLOYMENT.md).
 | Auth, users, rooms | Implemented; group access, rate limiting and room management remain | Victor |
 | Presence and tokens | Implemented; privacy and cross-tab refresh need review | Victor |
 | Messages, decisions, tasks, digest | APIs implemented; further frontend integration remains | Michael / Isaac |
+| Chat list | `GET /rooms` enriched (`display_name`, `display_avatar`, `last_message`, `unread_count`, activity order) and `chat:updated` emitted per member on create/edit/delete | Michael |
 | Notifications | List/seen APIs, room invitations and mentions implemented | Michael |
 | Uploads | Cloudinary upload and server-owned attachment records implemented | Michael |
 | Frontend | Room chat wired; several screens use fixtures/placeholders | Isaac |

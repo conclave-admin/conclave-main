@@ -2683,3 +2683,258 @@ dbTest('REST and socket sends emit persisted mentions to the recipient personal 
   assert.deepEqual(notifications.map(({ payload }) => payload.notification.id).sort(),
     persisted.rows.map(({ id }) => id).sort());
 });
+
+
+// --- Chat list enrichment + chat:updated (frontend redesign, Phase 1) -------
+//
+// The sidebar cannot be rendered from the room row alone: it needs a display
+// identity, a last-message preview and an unread badge, and none of those lived
+// on `rooms` before this. These tests exist because the failure mode of an
+// enrichment like this is silent — a field is simply `undefined` in the client
+// and a badge never appears.
+
+async function createRoomVia(token, payload) {
+  const res = await fetch(`${baseUrl}/api/rooms`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 201, body);
+  return JSON.parse(body).data;
+}
+
+async function listRoomsVia(token) {
+  const res = await fetch(`${baseUrl}/api/rooms`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  return JSON.parse(body).data;
+}
+
+async function sendVia(token, roomId, content) {
+  const res = await fetch(`${baseUrl}/api/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ roomId, content }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 201, body);
+  return JSON.parse(body).data;
+}
+
+function captureEmitIo() {
+  const captured = [];
+  return {
+    captured,
+    io: {
+      to(room) {
+        return { emit(event, payload) { captured.push({ room, event, payload }); } };
+      },
+    },
+  };
+}
+
+dbTest('GET /rooms carries the chat-list row: DM name, last message, unread', async () => {
+  const me = await authedAccount('chatlist-me@test.com');
+  const them = await authedAccount('chatlist-them@test.com');
+
+  const renamed = await fetch(`${baseUrl}/api/users/me`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${them.token}` },
+    body: JSON.stringify({ display_name: 'Zara Okonkwo' }),
+  });
+  assert.equal(renamed.status, 200, await renamed.text());
+
+  const dm = await createRoomVia(me.token, { name: 'Mehdi and Zara', memberIds: [them.userId] });
+  assert.equal(dm.type, 'dm');
+
+  await sendVia(me.token, dm.id, 'first');
+  await sendVia(them.token, dm.id, 'the actual last message');
+
+  const dmRow = (await listRoomsVia(me.token)).find((r) => r.id === dm.id);
+  assert.ok(dmRow, 'the DM must be listed');
+
+  // The DM is named after the other person, not the title createRoom required.
+  assert.equal(dmRow.display_name, 'Zara Okonkwo', 'a DM is named after the other member');
+  assert.notEqual(dmRow.display_name, dm.name, 'and not after the room row');
+
+  assert.ok(dmRow.last_message, 'last_message must be present');
+  assert.equal(dmRow.last_message.content, 'the actual last message');
+  assert.equal(dmRow.last_message.sender_name, 'Zara Okonkwo');
+  assert.equal(dmRow.last_message.is_deleted, false);
+  assert.equal(dmRow.last_message.has_attachment, false);
+  assert.equal(typeof dmRow.last_message.has_attachment, 'boolean', 'a count/flag must not arrive as a string');
+
+  // `me` sent one and `them` sent one; only theirs is unread to me.
+  assert.equal(dmRow.unread_count, 1, "your own message is never unread to you");
+  assert.equal(dmRow.member_count, 2, 'member_count still works without the old GROUP BY');
+
+  // A group room keeps its own name and has no other-member avatar.
+  const group = await createRoomVia(me.token, { name: 'Launch Plan' });
+  const groupRow = (await listRoomsVia(me.token)).find((r) => r.id === group.id);
+  assert.equal(groupRow.display_name, 'Launch Plan', 'a group room is named after itself');
+  assert.equal(groupRow.display_avatar, null);
+});
+
+dbTest('a room with no messages is still listed, with has_message false', async () => {
+  // The regression this guards against: a CROSS JOIN LATERAL on an empty
+  // messages table drops the row entirely, so a brand-new room would be
+  // invisible in the sidebar until somebody spoke.
+  const me = await authedAccount('chatlist-empty@test.com');
+  const empty = await createRoomVia(me.token, { name: 'Quiet Room' });
+
+  const row = (await listRoomsVia(me.token)).find((r) => r.id === empty.id);
+  assert.ok(row, 'an empty room must not vanish from the list');
+  assert.equal(row.has_message, false);
+  assert.equal(row.last_message, null);
+  assert.equal(row.unread_count, 0);
+});
+
+dbTest('GET /rooms orders by last activity, not room creation', async () => {
+  const me = await authedAccount('chatlist-order@test.com');
+  const first = await createRoomVia(me.token, { name: 'Created First' });
+  const second = await createRoomVia(me.token, { name: 'Created Second' });
+
+  let rows = await listRoomsVia(me.token);
+  assert.equal(rows[0].id, second.id, 'the newest room is first before anything happens');
+
+  await sendVia(me.token, first.id, 'bumping the older room');
+  rows = await listRoomsVia(me.token);
+  assert.equal(rows[0].id, first.id, 'last activity wins over creation order');
+
+  await sendVia(me.token, second.id, 'bumping again');
+  rows = await listRoomsVia(me.token);
+  assert.equal(rows[0].id, second.id, 'and the list follows activity back');
+});
+
+dbTest('unread counts only other people live messages, and never a tombstone', async () => {
+  const me = await authedAccount('chatlist-unread@test.com');
+  const them = await authedAccount('chatlist-unread2@test.com');
+  const chat = await createRoomVia(me.token, { name: 'Unread Check', memberIds: [them.userId] });
+
+  const mine1 = await sendVia(me.token, chat.id, 'mine 1');
+  await sendVia(me.token, chat.id, 'mine 2');
+  await sendVia(me.token, chat.id, 'mine 3');
+
+  const mineView = () => listRoomsVia(me.token).then((rows) => rows.find((r) => r.id === chat.id));
+  const theirsView = () => listRoomsVia(them.token).then((rows) => rows.find((r) => r.id === chat.id));
+
+  assert.equal((await mineView()).unread_count, 0, 'your own messages are not unread');
+
+  const theirs1 = await sendVia(them.token, chat.id, 'theirs 1');
+  await sendVia(them.token, chat.id, 'theirs 2');
+  assert.equal((await mineView()).unread_count, 2, "the other person's messages are");
+  assert.equal((await theirsView()).unread_count, 3, 'and they see mine');
+
+  // Deleting one of MY messages takes it out of THEIR unread: a tombstone has
+  // no body, so a badge pointing at one would open into nothing.
+  const delMine = await fetch(`${baseUrl}/api/messages/${mine1.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${me.token}` },
+  });
+  assert.equal(delMine.status, 200, await delMine.text());
+  assert.equal((await theirsView()).unread_count, 2, 'a deleted message is not unread');
+
+  // Deleting the NEWEST message moves their preview back and masks it.
+  const delLast = await fetch(`${baseUrl}/api/messages/${theirs1.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${them.token}` },
+  });
+  // theirs1 was not the newest — 'theirs 2' was. So the preview still points at
+  // theirs 2 and this only changes unread.
+  assert.equal(delLast.status, 200, await delLast.text());
+  assert.equal((await mineView()).unread_count, 1, 'now only theirs 2 is unread to me');
+
+  // Now delete theirs 2, which IS the newest: the preview must fall back to my
+  // most recent message rather than showing a masked row.
+  const newest = (await mineView()).last_message;
+  assert.equal(newest.content, 'theirs 2');
+
+  const delNewest = await fetch(`${baseUrl}/api/messages/${newest.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${them.token}` },
+  });
+  assert.equal(delNewest.status, 200, await delNewest.text());
+
+  const after = await mineView();
+  assert.equal(after.unread_count, 0, 'nothing readable is left unread');
+  assert.equal(after.last_message.is_deleted, true, 'the newest row is a tombstone');
+  assert.equal(after.last_message.content, null, 'and never echoes the body');
+});
+
+dbTest('chat:updated reaches every member personally with their own count', async () => {
+  const me = await authedAccount('chatup-me@test.com');
+  const them = await authedAccount('chatup-them@test.com');
+  const chat = await createRoomVia(me.token, { name: 'Chat Updated', memberIds: [them.userId] });
+
+  await sendVia(them.token, chat.id, 'from them');
+
+  const { captured, io } = captureEmitIo();
+  const notif = require('../src/services/notification.service');
+  const told = await notif.emitChatUpdated(io, chat.id);
+
+  assert.equal(told, 2, 'both members are told');
+  assert.deepEqual(
+    captured.map((c) => c.event),
+    ['chat:updated', 'chat:updated'],
+    'exactly one event per member',
+  );
+  assert.deepEqual(
+    captured.map((c) => c.room).sort(),
+    [`user:${me.userId}`, `user:${them.userId}`].sort(),
+    'each to their own personal room',
+  );
+  assert.ok(
+    captured.every((c) => c.room.startsWith('user:')),
+    'chat:updated must never broadcast to the chat room, or everyone sees every badge',
+  );
+
+  const payloadFor = (id) => captured.find((c) => c.room === `user:${id}`).payload;
+  const mine = payloadFor(me.userId);
+  const theirs = payloadFor(them.userId);
+
+  assert.equal(mine.roomId, chat.id);
+  assert.equal(mine.unreadCount, 1, 'the recipient sees the other person message');
+  assert.equal(theirs.unreadCount, 0, 'the sender does not count their own message');
+  assert.equal(mine.lastMessage.content, 'from them');
+  assert.equal(mine.lastMessage.sender_name, 'Task Tester');
+  assert.equal(mine.lastMessage.is_deleted, false);
+
+  // No socket and no room are both no-ops rather than throws: io is optional on
+  // every path that can reach this.
+  assert.equal(await notif.emitChatUpdated(undefined, chat.id), 0);
+  assert.equal(await notif.emitChatUpdated(io, undefined), 0);
+  assert.deepEqual(captured.length, 2, 'neither no-op emits anything');
+});
+
+dbTest('create, edit and delete all refresh the chat list', async () => {
+  const me = await authedAccount('chatup-mutations@test.com');
+  const chat = await createRoomVia(me.token, { name: 'Mutation Log' });
+  const { createMessage, editMessage, deleteMessage } = require('../src/services/message.service');
+
+  const { captured, io } = captureEmitIo();
+  const refreshes = () => captured.filter((c) => c.event === 'chat:updated');
+
+  const message = await createMessage({
+    roomId: chat.id, senderId: me.userId, content: 'original', io,
+  });
+  assert.equal(refreshes().length, 1, 'a create refreshes the list');
+
+  await editMessage({ messageId: message.id, userId: me.userId, content: 'edited', io });
+  assert.equal(refreshes().length, 2, 'an edit refreshes the list');
+  assert.equal(refreshes()[1].payload.lastMessage.content, 'edited');
+
+  await deleteMessage({ messageId: message.id, userId: me.userId, io });
+  assert.equal(refreshes().length, 3, 'a delete refreshes the list');
+  assert.equal(refreshes()[2].payload.lastMessage.content, null, 'the preview is masked');
+  assert.equal(refreshes()[2].payload.lastMessage.is_deleted, true);
+  assert.equal(refreshes()[2].payload.unreadCount, 0, 'a tombstone contributes no unread');
+
+  // Without io — the socket path can be absent — the same three writes still
+  // succeed. The chat list is a nicety; the message is the intent.
+  const plain = await createMessage({ roomId: chat.id, senderId: me.userId, content: 'no socket' });
+  assert.ok(plain.id, 'a send without io still lands');
+  assert.equal(refreshes().length, 3, 'and emits nothing');
+});

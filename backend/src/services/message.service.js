@@ -1,6 +1,6 @@
 const { pool, query } = require('../config/db');
 const ApiError = require('../utils/ApiError');
-const { notifyAndEmit } = require('./notification.service');
+const { notifyAndEmit, emitChatUpdated } = require('./notification.service');
 const { isMentioned } = require('./mention.service');
 const { attachReactions } = require('./reaction.service');
 
@@ -221,6 +221,12 @@ async function createMessage({ roomId, senderId, content, replyToId, attachments
   //    that exists.
   await notifyMentions({ message, mentionedIds, senderId, io });
 
+  // 8. Refresh every member's chat-list row. Last, and after the commit, so the
+  //    preview and the unread badge read the same data anyone else would.
+  //    Recipients are scoped inside emitChatUpdated — each person gets their own
+  //    number, never the room's.
+  await emitChatUpdated(io, roomId);
+
   // Reactions are attached for the same reason the other payload fields are: all
   // six surfaces return one message shape, and a message that was just created has
   // none, so this is always [].
@@ -388,9 +394,13 @@ async function loadMessageForAction({ messageId, userId, requireAdmin = false })
  * `attachments` and `mentionedUserIds` are not editable: both are recorded facts
  * about the send, not the current text.
  *
+ * @param {object} [params.io] - Socket.IO instance, used only to refresh the
+ *   room's chat-list row after the write. Optional; without it the edit still
+ *   lands and the list simply catches up on the next fetch.
+ *
  * @returns {object} the updated message row
  */
-async function editMessage({ messageId, userId, content }) {
+async function editMessage({ messageId, userId, content, io }) {
   if (typeof content !== 'string') {
     throw new ApiError(400, 'content must be a string');
   }
@@ -426,6 +436,12 @@ async function editMessage({ messageId, userId, content }) {
     [messageId, trimmed || null],
   );
 
+  // `existing.room_id` rather than the RETURNING row: a concurrent delete can
+  // make the UPDATE match nothing, and then there would be no room to tell.
+  // Room membership was already checked by loadMessageForAction, so this id is
+  // known to be a room the caller is in.
+  await emitChatUpdated(io, existing.room_id);
+
   return result.rows[0];
 }
 
@@ -444,9 +460,16 @@ async function editMessage({ messageId, userId, content }) {
  * Cloudinary asset and provenance are not destroyed by a moderation action. The
  * message itself stays in history as a tombstone so replies and ordering hold.
  *
+ * A delete reaches the chat list even though a tombstone is not shown as preview
+ * text: removing an unread message takes it out of everyone's unread_count, and
+ * removing the newest one moves the preview back a message. Both are visible
+ * without opening the room, so the list is told.
+ *
+ * @param {object} [params.io] - Socket.IO instance for the chat-list refresh.
+ *
  * @returns {object} the updated message row
  */
-async function deleteMessage({ messageId, userId }) {
+async function deleteMessage({ messageId, userId, io }) {
   const existing = await loadMessageForAction({ messageId, userId, requireAdmin: true });
 
   const result = await query(
@@ -456,6 +479,8 @@ async function deleteMessage({ messageId, userId }) {
       RETURNING id, room_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at`,
     [messageId],
   );
+
+  await emitChatUpdated(io, existing.room_id);
 
   // A concurrent delete by someone else already won. Reporting success is
   // correct — the caller wanted it deleted, and it is — but there is nothing to

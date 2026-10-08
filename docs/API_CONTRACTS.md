@@ -56,10 +56,38 @@ room reads require membership.
 | Method | Path                   | Body                          | Returns                                 | Notes                                                                                                                                                                                                                               |
 | ------ | ---------------------- | ----------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | POST   | /rooms                 | `{ name, type?, memberIds? }` | room + `members[]`                      | `type` ∈ `dm, group, public, private, department`. Caller becomes admin. A DM between the same pair is **not** duplicated — the existing one is returned with `existing: true`. Slug is derived server-side and cannot be supplied. |
-| GET    | /rooms                 | —                             | room[]                                  | Includes `slug`, `type`, `member_count`, `my_role`, `last_seen_at`.                                                                                                                                                                 |
+| GET    | /rooms                 | —                             | room[]                                  | Everything the sidebar needs in one round trip. Includes `slug`, `type`, `member_count`, `my_role`, `last_seen_at`, plus **`display_name`** and **`display_avatar`** (a DM returns the *other* member's identity, not the room title), **`has_message`**, **`last_message`** and **`unread_count`**. Ordered by last activity, then creation. |
 | GET    | /rooms/:roomId         | —                             | room + `members[]`                      | Membership required.                                                                                                                                                                                                                |
 | POST   | /rooms/:roomId/members | `{ userId }`                  | `{ roomId, userId, displayName, role }` | Admin only. 404 if the target is soft-deleted. Writes a `room_invite` notification row but does **not** emit it on the socket.                                                                                                      |
 | POST   | /rooms/:roomId/seen    | —                             | `{ roomId, lastSeenAt }`                | **Call this when a room is opened.** It is the only thing that advances `room_members.last_seen_at` apart from socket `leave-room`, and the entire digest depends on it.                                                            |
+
+### The chat-list row
+
+`GET /rooms` is the sidebar's only request. Each entry adds:
+
+```jsonc
+{
+  "display_name": "Zara Okonkwo",   // the OTHER member for type:"dm", else room.name
+  "display_avatar": "https://…",    // null for non-DM rooms
+  "has_message": true,              // false for a room nobody has spoken in — it still appears
+  "last_message": {
+    "id": "…",
+    "content": "the last thing said",  // null when is_deleted
+    "sender_id": "…",
+    "sender_name": "…",
+    "sender_avatar": null,
+    "has_attachment": false,
+    "is_deleted": false,
+    "created_at": "2026-10-08T14:00:00Z"
+  } | null,
+  "unread_count": 3
+}
+```
+
+`unread_count` counts messages sent **after `last_seen_at`** that are neither
+your own nor tombstones — a badge pointing at deleted content would open into
+nothing. It is computed by the same SQL as `chat:updated`, so a row and its
+badge can never disagree.
 
 ## Messages
 
@@ -340,10 +368,17 @@ an existing DM by user id, home summary, or a global cross-room search. See
 ## Socket events
 
 Server → client, as documented at the top of `backend/src/sockets/index.js`:
-`receive-message`, `user-online`, `user-offline`, `room-presence`,
-`room-typing`, `typing`, `stop-typing`, `message-read`, `task:updated`,
-`message:updated`, `message:deleted`, `message:reaction`, `notification`,
-`notification:seen`, and `error:message`.
+`receive-message`, `chat:updated`, `user-online`, `user-offline`,
+`room-presence`, `room-typing`, `typing`, `stop-typing`, `message-read`,
+`task:updated`, `message:updated`, `message:deleted`, `message:reaction`,
+`notification`, `notification:seen`, and `error:message`.
+
+`chat:updated { roomId, lastMessage, unreadCount }` is the **only** event that
+is not broadcast to the chat room: it goes to each member's personal channel
+(`user:<id>`), because `unreadCount` is one person's number. It fires after every
+message create, edit and delete, so a sidebar row updates without being opened.
+`lastMessage` is `null` for a room with nothing in it, and carries
+`is_deleted: true, content: null` when the newest row is a tombstone.
 
 `message:updated`, `message:deleted` and `message:reaction` each carry the **whole
 message** under `{ message }`, emitted to the room. Replacing your copy from the
