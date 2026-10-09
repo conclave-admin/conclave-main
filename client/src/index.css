@@ -2,9 +2,84 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Colour tokens live here as CSS variables in CHANNEL format (three space
+  separated 0-255 channels), not as hex. Tailwind references them as
+  `rgb(var(--color-brand) / <alpha-value>)`, so `bg-brand/20` keeps working and
+  a token only has to be redefined once per theme instead of per utility.
+
+  Defining these as hex would silently break every opacity modifier, because
+  `rgb(#4f46e5 / 0.2)` is not valid CSS.
+
+  Dark values are defined by the `html.dark` block below. Which of light or dark
+  applies is decided before first paint by the inline script in index.html, so
+  there is no flash of the wrong theme; ThemeContext keeps it in step with the
+  user's choice afterwards.
+*/
+:root {
+  color-scheme: light;
+
+  --color-canvas: 247 248 250; /* Color.Background  #f7f8fa */
+  --color-surface: 255 255 255; /* Color.Surface     #ffffff */
+  --color-ink: 17 24 39; /* Color.Text.Primary   #111827 */
+  --color-muted: 107 114 128; /* Color.Text.Secondary #6b7280 */
+  --color-line: 229 231 235; /* Color.Border        #e5e7eb */
+  --color-brand: 79 70 229; /* Color.Primary       #4f46e5 */
+  --color-brand-soft: 238 242 255; /* #eef2ff, not a Foundations token */
+  --color-success: 22 163 74; /* Color.Success       #16a34a */
+  --color-warning: 217 119 6; /* Color.Warning       #d97706 */
+  --color-error: 220 38 38; /* Color.Error         #dc2626 */
+
+  /* Elevation.Modal. Shadow is a token too, or a dark modal keeps a light
+     shadow and reads as a bright halo. */
+  --shadow-modal: 0 12px 28px 0 rgba(17, 24, 39, 0.14);
+}
+
+/*
+  Dark palette. Same indigo identity, tuned for contrast on dark surfaces
+  rather than inverted mechanically: brand lightens to stay legible on a dark
+  field, and brand-soft becomes the dark-equivalent tint of the same hue.
+*/
+html.dark {
+  color-scheme: dark;
+
+  --color-canvas: 11 13 18;
+  --color-surface: 18 21 28;
+  --color-ink: 243 244 246;
+  --color-muted: 156 163 175;
+  --color-line: 36 42 54;
+  --color-brand: 129 140 248;
+  --color-brand-soft: 30 27 75;
+  --color-success: 74 222 128;
+  --color-warning: 251 191 36;
+  --color-error: 248 113 113;
+
+  --shadow-modal: 0 12px 28px 0 rgba(0, 0, 0, 0.5);
+}
+
 @layer base {
-  html { font-family: "Inter Tight", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #111827; line-height: 1.2; }
-  body { margin: 0; min-width: 320px; background: #f7f8fa; }
+  /*
+    Tailwind's preflight sets a hardcoded #e5e7eb as the default border colour,
+    so a bare `border` would stay light-grey on a dark surface. Every existing
+    border names `border-line` explicitly, but overriding the default here means
+    a future one cannot get it wrong.
+  */
+  *,
+  ::before,
+  ::after {
+    border-color: rgb(var(--color-line));
+  }
+
+  html {
+    font-family: "Inter Tight", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: rgb(var(--color-ink));
+    line-height: 1.2;
+  }
+  body {
+    margin: 0;
+    min-width: 320px;
+    background: rgb(var(--color-canvas));
+  }
   button, input, textarea { font: inherit; }
   * { box-sizing: border-box; }
   html, body, #root { height: 100%; }

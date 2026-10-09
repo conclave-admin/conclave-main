@@ -4,6 +4,8 @@ import ProtectedRoute from "./components/routing/ProtectedRoute";
 import PublicOnlyRoute from "./components/routing/PublicOnlyRoute";
 import { AuthProvider } from "./contexts/AuthContext";
 import { RealtimeProvider } from "./contexts/RealtimeContext";
+import { ThemeProvider } from "./contexts/ThemeContext";
+import { ToastProvider } from "./contexts/ToastContext";
 import CatchUpDigestPage from "./pages/CatchUpDigestPage";
 import Decisions from "./pages/Decisions";
 import Home from "./pages/Home";
@@ -17,28 +19,37 @@ import Tasks from "./pages/Tasks";
 
 export default function App() {
   return (
-    <AuthProvider>
-      <RealtimeProvider>
-        <Routes>
-          <Route element={<PublicOnlyRoute />}>
-            <Route path="/login" element={<Login />} />
-            <Route path="/register" element={<Register />} />
-          </Route>
-          <Route element={<ProtectedRoute />}>
-            <Route element={<AppShell />}>
-              <Route path="/" element={<Home />} />
-              <Route path="/rooms/:roomId" element={<Room />} />
-              <Route path="/profile" element={<Profile />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/notifications" element={<Notifications />} />
-              <Route path="/decisions" element={<Decisions />} />
-              <Route path="/digest" element={<CatchUpDigestPage />} />
-              <Route path="/tasks" element={<Tasks />} />
-            </Route>
-          </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </RealtimeProvider>
-    </AuthProvider>
+    // Outermost: the auth screens need the theme too, and it does not depend on
+    // the session, so there is no reason to nest it under AuthProvider. ToastProvider
+    // sits above AuthProvider for the same reason — registration wants a toast.
+    // Each added level indents the tree below it; that is the only reason the
+    // routes moved.
+    <ThemeProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <RealtimeProvider>
+            <Routes>
+              <Route element={<PublicOnlyRoute />}>
+                <Route path="/login" element={<Login />} />
+                <Route path="/register" element={<Register />} />
+              </Route>
+              <Route element={<ProtectedRoute />}>
+                <Route element={<AppShell />}>
+                  <Route path="/" element={<Home />} />
+                  <Route path="/rooms/:roomId" element={<Room />} />
+                  <Route path="/profile" element={<Profile />} />
+                  <Route path="/settings" element={<Settings />} />
+                  <Route path="/notifications" element={<Notifications />} />
+                  <Route path="/decisions" element={<Decisions />} />
+                  <Route path="/digest" element={<CatchUpDigestPage />} />
+                  <Route path="/tasks" element={<Tasks />} />
+                </Route>
+              </Route>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </RealtimeProvider>
+        </AuthProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 }

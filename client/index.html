@@ -1,2 +1,39 @@
 <!doctype html>
-<html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="description" content="Conclave private collaboration platform" /><title>Conclave</title></head><body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Conclave private collaboration platform" />
+    <title>Conclave</title>
+    <!--
+      Set the theme class before anything paints. This runs as the first thing
+      in head so the stylesheet never evaluates with the wrong palette; without
+      it every reload flashes light before ThemeContext mounts and switches.
+
+      Three states: an explicit stored choice, otherwise the system preference,
+      otherwise light — which is what src/index.css declares. A failure here
+      (private mode, storage disabled) is not worth surfacing; falling back to
+      light is correct.
+
+      The key and the three values are the contract with ThemeContext.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('conclave-theme');
+          var dark =
+            stored === 'dark' ||
+            (stored !== 'light' &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {
+          /* storage unavailable: stay on the light default */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

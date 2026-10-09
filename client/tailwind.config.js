@@ -1,21 +1,31 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
+  // Theme is switched by a class on <html>, set before first paint by the
+  // inline script in index.html so there is no flash of the wrong theme.
+  darkMode: 'class',
   theme: {
     screens: { md: '768px', lg: '1280px' },
     extend: {
-      // Values sourced from the Penpot "Conclave-Foundations" token set.
+      // Values sourced from the Penpot "Conclave-Foundations" token set, now
+      // backed by CSS variables in src/index.css so dark mode redefines each
+      // token once instead of per utility.
+      //
+      // The `<alpha-value>` placeholder is what keeps `bg-brand/20` working:
+      // Tailwind substitutes the requested alpha in place of it. Writing
+      // `rgb(var(--color-brand))` instead would drop that substitution and
+      // make every opacity modifier compile to nothing.
       colors: {
-        canvas: '#f7f8fa', // Color.Background
-        surface: '#ffffff', // Color.Surface
-        ink: '#111827', // Color.Text.Primary
-        muted: '#6b7280', // Color.Text.Secondary
-        line: '#e5e7eb', // Color.Border
-        brand: '#4f46e5', // Color.Primary
-        'brand-soft': '#eef2ff', // not a Foundations token; retained until components are reworked
-        success: '#16a34a', // Color.Success
-        warning: '#d97706', // Color.Warning
-        error: '#dc2626', // Color.Error
+        canvas: 'rgb(var(--color-canvas) / <alpha-value>)', // Color.Background
+        surface: 'rgb(var(--color-surface) / <alpha-value>)', // Color.Surface
+        ink: 'rgb(var(--color-ink) / <alpha-value>)', // Color.Text.Primary
+        muted: 'rgb(var(--color-muted) / <alpha-value>)', // Color.Text.Secondary
+        line: 'rgb(var(--color-line) / <alpha-value>)', // Color.Border
+        brand: 'rgb(var(--color-brand) / <alpha-value>)', // Color.Primary
+        'brand-soft': 'rgb(var(--color-brand-soft) / <alpha-value>)', // not a Foundations token; retained until components are reworked
+        success: 'rgb(var(--color-success) / <alpha-value>)', // Color.Success
+        warning: 'rgb(var(--color-warning) / <alpha-value>)', // Color.Warning
+        error: 'rgb(var(--color-error) / <alpha-value>)', // Color.Error
       },
       fontFamily: {
         // Typography.FontFamily.InterTight
@@ -36,7 +46,25 @@ export default {
       },
       boxShadow: {
         // Elevation.Header and Elevation.SidebarEdge are transparent in the design (no shadow).
-        modal: '0 12px 28px 0 rgba(17, 24, 39, 0.14)', // Elevation.Modal
+        modal: 'var(--shadow-modal)', // Elevation.Modal, redefined per theme
+      },
+      // Only entrance the app has. Components mount already-visible, so the
+      // overlay fades and the sheet arrives from the edge it is anchored to,
+      // in CSS rather than a mount/visible state dance in every dialog.
+      // Both are wrapped in `motion-safe:` at the call site.
+      keyframes: {
+        'sheet-in': {
+          from: { transform: 'translateY(100%)' },
+          to: { transform: 'translateY(0)' },
+        },
+        'fade-in': {
+          from: { opacity: '0' },
+          to: { opacity: '1' },
+        },
+      },
+      animation: {
+        'sheet-in': 'sheet-in 180ms ease-out',
+        'fade-in': 'fade-in 150ms ease-out',
       },
       // Radius.8 -> rounded-lg, Radius.12 -> rounded-xl, Border.Width.1 -> border (Tailwind defaults).
     },
