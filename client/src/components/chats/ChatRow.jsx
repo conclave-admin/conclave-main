@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import Avatar from '@/components/ui/Avatar';
 import Badge from '@/components/ui/Badge';
@@ -7,6 +7,7 @@ import IconMute from '@/assets/icons/mute.svg?react';
 import IconPin from '@/assets/icons/pin.svg?react';
 import { useChats } from '@/contexts/ChatsContext';
 import { formatRoomPreview, formatRoomTime } from '@/lib/roomMeta';
+import PopoverMenu from '@/components/ui/PopoverMenu';
 
 /**
  * One conversation in the chat list.
@@ -27,32 +28,14 @@ import { formatRoomPreview, formatRoomTime } from '@/lib/roomMeta';
 export default function ChatRow({ room }) {
   const { pinned, muted, togglePin, toggleMute } = useChats();
   const [menuOpen, setMenuOpen] = useState(false);
-  const wrapperRef = useRef(null);
+  const triggerRef = useRef(null);
 
   const isPinned = pinned.includes(room.id);
   const isMuted = muted.includes(room.id);
   const unread = room.unread_count || 0;
 
-  useEffect(() => {
-    if (!menuOpen) return undefined;
-
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') setMenuOpen(false);
-    };
-    const onPointerDown = (event) => {
-      if (!wrapperRef.current?.contains(event.target)) setMenuOpen(false);
-    };
-
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('mousedown', onPointerDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('mousedown', onPointerDown);
-    };
-  }, [menuOpen]);
-
   return (
-    <li ref={wrapperRef} className="relative">
+    <li className="relative">
       {/* No markSeen here: Room does it on open, which covers the rail, a
           deep link and the back button too — not just this click. */}
       <NavLink
@@ -94,6 +77,7 @@ export default function ChatRow({ room }) {
       </NavLink>
 
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setMenuOpen((open) => !open)}
         aria-haspopup="menu"
@@ -104,11 +88,14 @@ export default function ChatRow({ room }) {
         <IconMore className="h-4 w-4" aria-hidden="true" />
       </button>
 
-      {menuOpen && (
-        <div
-          role="menu"
-          className="absolute right-2 top-12 z-20 w-44 rounded-lg border border-line bg-surface p-1 shadow-modal"
-        >
+      <PopoverMenu
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        triggerRef={triggerRef}
+        align="end"
+        label={`Actions for ${room.display_name}`}
+        className="w-44"
+      >
           <button
             type="button"
             role="menuitem"
@@ -136,8 +123,7 @@ export default function ChatRow({ room }) {
           <p className="border-t border-line px-2.5 pb-1 pt-2 text-metadata text-muted">
             Saved on this device
           </p>
-        </div>
-      )}
+      </PopoverMenu>
     </li>
   );
 }

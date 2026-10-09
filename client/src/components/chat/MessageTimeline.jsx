@@ -49,6 +49,8 @@ export default function MessageTimeline({
   onReply,
   onEdit,
   onDelete,
+  onPromote,
+  onFlagTask,
   onToggleReaction,
 }) {
   const endRef = useRef(null);
@@ -148,6 +150,8 @@ export default function MessageTimeline({
               onReply={onReply}
               onEdit={onEdit}
               onDelete={onDelete}
+              onPromote={onPromote}
+              onFlagTask={onFlagTask}
               onToggleReaction={onToggleReaction}
             />
           </div>

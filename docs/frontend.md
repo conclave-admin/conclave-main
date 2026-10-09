@@ -112,13 +112,25 @@ Only two breakpoints, per the repo rule: `md` (768px) and `lg` (1280px). Below `
 
 Existing facts: `GET /rooms` returns `slug, type, member_count, my_role, last_seen_at`. Typing events already exist over the socket (`typing`, `stop-typing`, `room-typing`). `message-read` is broadcast but not persisted. Each user already has a personal socket channel (`personalRoom(userId)`). Sockets only join a room channel on `join-room`.
 
-Status of the changes this redesign needs:
+**Phase 6 audit correction.** An earlier draft of this document described the decisions, tasks, digest and notification controllers as "TODO stubs" and claimed there was no cross-room decisions endpoint and no unread aggregate. All four claims were wrong — the audit read the controllers and found them fully implemented. The accurate state is below, and it is what the client now relies on:
 
-- **Done (phase 1).** `GET /rooms` now returns `display_name` / `display_avatar` (for a DM, the other member's identity rather than the room title), `has_message`, `last_message` (`{ id, content, sender_id, sender_name, sender_avatar, has_attachment, is_deleted, created_at }`, or `null` for a room nobody has spoken in) and `unread_count`, ordered by last activity. `unread_count` excludes your own messages and tombstones.
+- **`GET /decisions` is already cross-room.** No `roomId` is required; passing one narrows to a single room. `GET /tasks` and `GET /digest` are the same. The three top-level pages could therefore be built without any new endpoint.
+- **`GET /notifications` does return an `unreadCount` aggregate.** The controller counts unseen rows separately from the page, so the number is a true total rather than "unseen among the most recent page". An earlier note in this document said no aggregate existed and that the navbar badge had to show the room unread total instead; that was corrected in phase 6, and the badge now shows the notifications count.
+- **Notifications reach the client over the personal room `user:<id>`,** which `sockets/index.js` joins automatically on connect — no client-side join is needed. The events are `notification { notification }` and `notification:seen { updated }`. Both carry the presented shape `[{ id, type, reference_id, seen, created_at, context: { room_id, room_name, room_slug, actor_name, message_preview } }]`, so a live row is inserted with no translation and no refetch. **`notification:seen` carries a delta, and is echoed to the originating tab as well as to other tabs** — the client has to suppress its own echo or the badge double-subtracts.
+- **`task:updated` is emitted to the task's room only.** A viewer on the cross-room board has not joined those rooms, so the board cannot go live without a per-user subscription. This is the reason the Tasks page refreshes on reload rather than listening.
+- **`GET /digest` returns `{ items, summary }`,** each item `{ id, type, title, metadata, room_id, room_name, created_at }`. `metadata` is an actor name (`author_name` for a decision, `status · assignee_name` for a task, `sender_name` for a mention or file) and `null` for activity — not a formatted timestamp.
+- **The one backend change phase 6 did make: `GET /decisions/:decisionId`.** Added to `decisions.controller.js` and `decisions.routes.js` (registered after `/room/...` so it cannot shadow it), with three integration tests in `tests/integration.test.js`. It returns the joined list shape with `pins` attached, and answers 403 for both "not in that room" and "does not exist" — deliberately not distinguishing them, since saying "not found" would confirm a UUID exists.
+
+Other existing facts that hold:
+
+- **Done (phase 1).** `GET /rooms` returns `display_name` / `display_avatar` (for a DM, the other member's identity rather than the room title), `has_message`, `last_message` (`{ id, content, sender_id, sender_name, sender_avatar, has_attachment, is_deleted, created_at }`, or `null` for a room nobody has spoken in) and `unread_count`, ordered by last activity. `unread_count` excludes your own messages and tombstones.
 - **Done (phase 1).** `chat:updated { roomId, lastMessage, unreadCount }` goes to **each member's personal channel**, never the chat room, because `unreadCount` is one person's number. Fires after every message create, edit and delete.
 - **Verified, no backend change.** Find-or-create DM already works: `POST /rooms { name, memberIds: [userId] }` returns the existing 2-member DM rather than minting a second one. It only requires a `name`, which the client can take from `GET /users` results. (`POST /rooms/dm` is Victor's Item F and was deliberately left alone.)
+- `GET /rooms/:roomId` returns members as `[{ id, display_name, avatar_url, role, joined_at, last_seen_at }]` plus `my_role`.
+- `POST /rooms/:roomId/seen` is a POST, not a PATCH. Sending must use the `send-message` socket event — the REST path does not emit `receive-message` and would leave every other member's view stale.
+- Reaction allowlist is `👍 👎 🎉 ✅`. `MAX_ATTACHMENTS` is 10 and the upload cap is 25 MB per file; there is no video type.
 - All new responses go through the existing `apiResponse` util and `ApiError`.
-- Read receipts: persistence is deferred. v1 ships "sent" ticks only.
+- Read receipts: shipped in phase 5 and made persistent — `message-read` writes `room_members.last_seen_at`.
 - Search: room search first. Global message search later, restricted to the caller's rooms.
 
 ## 9. Confirmed defaults
@@ -169,7 +181,7 @@ Planned follow-up: lift `useNotifications` into a `NotificationsProvider` so the
 3. **Landing page and auth redesign.**
 4. **Chats shell (DONE):** routing, chat list, responsive panes, bottom nav and rail. Also took the room-seen call out of phase 5, because the unread badge cannot be judged without it.
 5. **Conversation upgrade (DONE):** bubbles, grouping, ticks, typing, actions, reactions, edit and delete, uploads, mentions, pinned decision strip. Backend work was confirmed and included: migration 014, `decisionPin.service.js`, pin routes, and `message-read` now persisting `last_seen_at` instead of being memory-only.
-6. **Decisions, Tasks, Digest, Notifications:** real API, create and status actions, integrated into chat.
+6. **Decisions, Tasks, Digest, Notifications (BUILT, uncommitted):** all four surfaces now read the real API. One backend addition was confirmed and made — `GET /decisions/:decisionId` — because a pinned chip that could only point at the board was a suggestion rather than a destination. Everything else was already implemented server-side; see section 8.
 7. **Settings, Profile edit, New chat, member management.**
 8. **QA** at 360, 390, 768, 1024, 1280 and 1440 widths, plus accessibility.
 
@@ -196,13 +208,23 @@ Delivery style: code written in chat, one file at a time, grouped by phase. No f
 5. ~~**Read receipts:** confirm that v1 ships "sent" ticks only, with persisted read receipts deferred.~~ **Answered in phase 5: shipped, and made persistent.** `message-read` now writes `room_members.last_seen_at` rather than only emitting, so the tick survives a reload. It means "at least one other member has caught up", not everyone.
 6. **Search scope:** confirm room search first, global search later. Still open — room-level message search is built server-side but not yet used by any client surface.
 
+**Phase 6 decisions (answered; recorded rather than re-asked).**
+
+7. ~~**Backend scope:** audit the four controllers read-only, then ask before changing anything.~~ **Answered and followed.** The audit found all four fully implemented and corrected three stale claims in section 8. Exactly one endpoint was then proposed and approved: `GET /decisions/:decisionId`.
+8. ~~**Scope:** one phase covering all four surfaces — Decisions, Tasks, Digest, Notifications.~~ **Answered: yes, all four.**
+9. ~~**Promote and flag:** wire both "Promote to decision" and "Flag as task" into the message actions menu.~~ **Answered: yes, both.** They live beside Reply/Edit/Delete because a decision is almost always remembered as "that message in #deployments", and finding it again in a board is the hard part.
+10. ~~**Pinned chip destination:** resolve to the decision detail view, not the board.~~ **Answered: yes.** This is what motivated the one backend addition.
+11. ~~**Tasks board:** cross-room, with live updates deferred.~~ **Answered: yes.** Documented as a known gap; `task:updated` is room-scoped and a cross-room viewer has not joined.
+12. ~~**In-room catch-up digest card:** remove it.~~ **Answered: remove.** Opening a room advances `last_seen_at`, and the digest filters on exactly that pointer, so the in-room card would always be empty. The cross-room card and page stay.
+13. ~~**Decisions "New decision" button:** navigate to `/chats`, since every decision in this build is promoted from a message and no standalone create form exists in the design.~~ **Answered: navigate to `/chats`.**
+
 Questions 5 and 6 are parked until the phases that need them (5 and 4 respectively). Questions 2 and 4 were needed for phase 3 and are now answered above.
 
 ## 14. Next step
 
-Phases 1 to 5 are complete (commits `0d91968`, `bed546b`, `e92f530`; phases 4 and 5 are built and verified but not yet committed). **Phase 6 — Decisions, Tasks, Digest, Notifications.**
+Phases 1 to 5 are complete (commits `0d91968`, `bed546b`, `e92f530`). Phase 6 is **built and verified but not yet committed**, alongside uncommitted phases 4 and 5. **Next: phase 7 — Settings, Profile edit, New chat, member management.**
 
-Phase 5 left the following, and phase 6 should not re-litigate them:
+Phase 5 left the following, and phase 7 should not re-litigate them:
 
 - Sending goes over the socket (`send-message`), never `POST /messages`. Both write through the same service, but only the socket handler emits `receive-message`, so a REST send leaves every other member's open conversation stale. This is not an optimisation choice.
 - `message-read` now persists `room_members.last_seen_at` and emits to the whole room. The read tick is derived by comparing that pointer to the message timestamp — a room-level fact, not a stored per-message one, which is why it survives a reload.
@@ -214,14 +236,20 @@ Phase 5 left the following, and phase 6 should not re-litigate them:
 - The pinned strip drives off the `pins` object the server attaches to every decision and off `decision:pinned` / `decision:unpinned`, both of which carry a whole decision — a replace, not a filter.
 - `decorateMessages` in `lib/messageMeta.js` is the single source of grouping, day labels and read status. Do not re-derive them in a component.
 
+**Gaps phase 6 closed.** Recorded so they are not re-raised:
+
+- **Per-decision detail route.** `GET /decisions/:decisionId` was added to the backend (controller, route, three integration tests) and `/decisions/:decisionId` now resolves it. `PinnedDecisionStrip` chips link to the decision itself rather than to the board, which is what made a pin a destination instead of a suggestion.
+- **The Decisions page was a placeholder.** It now calls `listDecisions()` / `searchDecisions()` and renders the real joined shape, with `?q=` search in the URL.
+- **The navbar unread badge was the room unread total.** `GET /notifications` does return a real aggregate — the controller counts unseen rows separately from the page, so the number is a total rather than "unseen among the most recent page". The badge now shows it, sourced from `NotificationsContext` so the bell, the rail entry and the page share one number. The earlier claim that no aggregate existed was wrong.
+
 **Known gaps this phase does not close.** These are open, not oversights:
 
-- **No per-decision detail route.** `PinnedDecisionStrip` links to `/decisions` because nothing resolves a single decision. Adding `GET /decisions/:id` and a route is the honest fix; inventing a URL that 404s to the landing page is not.
-- **The Decisions page is still a placeholder.** It renders `previewDecisions` or an empty state and never calls `listRoomDecisions`, so the strip is currently the only real consumer of decisions data.
 - **No chat-list presence dots.** `room-presence` on join is a complete roster but `user-online` / `user-offline` are deltas with no initial roster, so a global presence map cannot be built without lying. `PresenceContext` is deliberately room-scoped and only draws dots in the open conversation.
 - **Reply targets degrade when unloaded.** There is no `GET /messages/:id`, so a reply to a message outside the loaded window renders "an earlier message" rather than fetching.
-- **The navbar unread badge is the room unread total, not a notifications count.** `GET /notifications` returns a paged feed with no unread aggregate, so any other number would be invented.
 - **Room-level message search (`GET /messages/room/:roomId/search`) is unused.** The header search matches room names only, because that endpoint cannot search across rooms.
+- **The Tasks board does not update live for someone sitting on it.** `task:updated` is emitted to the task's room, and joining is per-room and on demand, so a cross-room viewer has not joined the rooms listed. Closing this needs a per-user subscription; the page refreshes on reload rather than pretending otherwise. Recorded in `tasks.controller.js` too.
+- **There is no standalone "create decision" form.** The endpoint accepts a decision with no source message, but every decision in this build is promoted from a message — the flow the design shows. "New decision" navigates to `/chats` for that reason.
+- **The in-room catch-up digest card was removed, not deferred.** Opening a room advances that room's `last_seen_at`, and `getRoomDigest` filters against exactly that pointer — so a digest fetched in-room is always empty. Only the cross-room card and page read the pointer without moving it.
 
 **Bundle-size finding (DECIDED: leave alone).** Each file in `client/src/assets/icons/` is ~8 kB, of which ~97% is an embedded `<metadata>` C2PA provenance manifest; only ~270 bytes is the actual path. svgr carries that manifest into the bundle as a JSX string, so every distinct icon imported costs ~8 kB. Phases 4 and 5 went from 28 to 43 distinct icons, and the main chunk grew from 484 kB to 637 kB — roughly 116 kB of that is manifest text. Stripping `<metadata>` from the 90 icons would have cut the icon payload by ~92% (~665 kB of source), but it was considered and **explicitly declined** — the manifests stay. The practical consequence for later phases: every new icon import is a ~8 kB cost, so reuse existing glyphs rather than adding near-duplicates, and treat the chunk warning as expected rather than as a regression.
 
@@ -558,16 +586,15 @@ Notifications, Settings and DMs have no Penpot board, as DESIGN_QUESTIONS B1 and
 
 ## 16. Assets to be supplied
 
-The icon sprite at `client/src/assets/icons/` covers almost everything the redesign calls for. The four below do not, and the repo rule is to stop and ask rather than draw a substitute, so they are listed here for Michael to supply.
+The icon sprite at `client/src/assets/icons/` covers almost everything the redesign calls for. The three below do not, and the repo rule is to stop and ask rather than draw a substitute, so they are listed here for Michael to supply.
 
-| File             | Needed for                                                         | Until it exists                                         |
-| ---------------- | ------------------------------------------------------------------ | ------------------------------------------------------- |
-| `sun.svg`        | Light theme indicator                                              | The switch uses the text label "Light" instead          |
-| `moon.svg`       | Dark theme indicator                                               | The switch uses the text label "Dark" instead           |
-| `edit.svg`       | Message edit action — section 6 lists "reply, react, edit, delete" | Edit has no icon and cannot be placed in the action row |
-| `arrow-down.svg` | The "jump to latest" pill in the conversation — section 6          | The pill has no glyph and cannot be built               |
+| File             | Needed for                                                   | Until it exists                                         |
+| ---------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
+| `sun.svg`        | Light theme indicator                                        | The switch uses the text label "Light" instead          |
+| `moon.svg`       | Dark theme indicator                                         | The switch uses the text label "Dark" instead           |
+| `arrow-down.svg` | The "jump to latest" pill in the conversation — section 6    | The pill has no glyph and cannot be built               |
 
-These are icon-sprite entries: same folder, imported with svgr, drawn to match the existing set.
+**Resolved without a new asset: the message Edit action.** The set has no pencil glyph, and rather than invent one that would break the 90-icon style contract, Edit reuses `compose.svg` — compose and edit are the same gesture, a pen writing on a surface. The row is built; no further action needed unless a dedicated `edit.svg` is supplied, in which case it swaps in at `MessageActions.jsx` and nothing else changes.
 
 **Separately, the logo.** Not a sprite entry. A brand asset for the slot currently drawn as an empty dashed box in `components/landing/Logo.jsx`, which appears in the landing nav, the auth screens and the footer. When it arrives it replaces that slot directly; nothing else in the component changes. There is no `og:image` on the landing either, for the same reason — pointing a share card at a missing image renders worse than shipping a text-only one, so that gets added at the same time.
 

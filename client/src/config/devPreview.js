@@ -249,18 +249,17 @@ export const previewMessages = [
   },
 ];
 
-// Mirrors the `decisions` table (backend/database/migrations/002_decisions_tasks_digest.sql).
-// Same architectural gap as previewDigestSummary/previewDigestItems below: /decisions and
-// /digest are both top-level, cross-room pages in the design, but their only backend
-// endpoints (/decisions/room/:roomId, /digest/room/:roomId — see decisions.controller.js
-// and digest.controller.js, both TODO stubs) are room-scoped. Neither can list "across
-// every room I'm in" yet — that's what the backend needs to add. room_name/room_slug
-// below are join fields such an endpoint would need to return; rooms has no slug column,
-// so this is display-only, same convenience as sender_name on previewMessages.
+// Mirrors one row of the enriched `GET /decisions` response. The list endpoint
+// is cross-room — no roomId required — because the Decisions page is top-level
+// in the rail; `GET /decisions/room/:roomId` exists too and is what the in-room
+// pin strip uses.
+// room_name/room_slug are join fields the controller returns; without them the
+// board cannot say which room a decision came from, and a cross-room list
+// without origins is three identical sentences with no way to open them.
 // `pins` mirrors the wire shape decisionPin.service.attachPins builds: `room` is
 // shared truth (one pinner, same for everyone), `mine` is the viewer's own scopes
 // and is a list because a decision can be both room-pinned and bookmarked. The
-// three entries below cover one of each state so the strip can be read at a
+// three entries below cover one of each state so the board can be read at a
 // glance: room-pinned, bookmarked only, and neither.
 export const previewDecisions = [
   {
@@ -271,7 +270,7 @@ export const previewDecisions = [
     source_message_id: "dev-message-1",
     title: "Use Socket.IO for real-time events; REST handles CRUD.",
     body: "After testing both approaches, we'll keep Socket.IO for real-time events and REST for CRUD endpoints.",
-    tags: [],
+    tags: ["realtime", "architecture"],
     created_by: "dev-victor",
     author_name: "Victor",
     created_at: "2026-08-20T00:00:00.000Z",
@@ -310,44 +309,106 @@ export const previewDecisions = [
   },
 ];
 
-// Mirrors the digest the backend would assemble from decisions/tasks/messages/attachments
-// (see getRoomDigest's TODO comments in digest.controller.js) and cache in the `digests`
-// table (room_id, user_id, period_start, period_end, content_json). Same cross-room gap as
-// previewDecisions above: only /digest/room/:roomId exists, nothing aggregates across a
-// user's rooms yet, even though /digest is a top-level page in the design.
+// Mirrors the digest getRoomDigest assembles from decisions/tasks/messages/attachments
+// (digest.controller.js) and the cross-room variant. Each item carries the room it
+// belongs to — the wire shape is { id, type, title, metadata, room_id, room_name,
+// created_at } — because a cross-room catch-up list whose rows do not name their
+// room is unreadable the moment two rooms have similar traffic.
 export const previewDigestSummary = {
   headline: "5 meaningful updates",
-  summary: "One decision, two task changes, a mention, and a shared file.",
+  summary: "1 decisions, 1 task changes, 1 mentions, 1 files.",
 };
 
 // `type` only — no label/colour here. That's presentation, not data: the backend will
 // send a type, not display copy, so the type-to-label/colour mapping lives in
-// CatchUpDigestPage.jsx instead.
+// CatchUpDigestPage.jsx instead. The five below are one of every type getRoomDigest
+// can emit, and `metadata` is copied from the controller's own construction:
+// author_name for a decision, `status · assignee_name` for a task, sender_name for a
+// mention or file, and null for activity — which has no actor to name. The summary
+// string follows the same `${n} …` template the controller builds, so a preview and
+// the real response read the same way.
 export const previewDigestItems = [
-  { id: "dev-digest-1", type: "decision", title: "Keep Socket.IO focused on real-time events; REST handles CRUD.", metadata: "Today · 9:02 AM" },
-  { id: "dev-digest-2", type: "task", title: "Daniel, confirm production upload limits.", metadata: "Today · 10:12 AM" },
-  { id: "dev-digest-3", type: "mention", title: "Amina mentioned you in #deployments.", metadata: "Today · 11:22 AM" },
-  { id: "dev-digest-4", type: "file", title: "deployment-checklist-v2.pdf", metadata: "Today · 12:32 AM" },
-  { id: "dev-digest-5", type: "activity", title: "7 messages in #product-eng", metadata: "Today · 1:42 PM" },
+  { id: "dev-digest-1", type: "decision", title: "Keep Socket.IO focused on real-time events; REST handles CRUD.", metadata: "Victor", room_id: previewRoom.id, room_name: previewRoom.name, created_at: "2026-10-08T09:02:00.000Z" },
+  { id: "dev-digest-2", type: "task", title: "Confirm production upload limits", metadata: "open · Daniel", room_id: previewRoom.id, room_name: previewRoom.name, created_at: "2026-10-08T10:12:00.000Z" },
+  { id: "dev-digest-3", type: "mention", title: "Amina can you confirm deployment readiness for the API gateway changes today?", metadata: "Amina Yusuf", room_id: "dev-room-deployments", room_name: "Deployments", created_at: "2026-10-08T11:22:00.000Z" },
+  { id: "dev-digest-4", type: "file", title: "deployment-checklist-v2.pdf", metadata: "Victor", room_id: "dev-room-deployments", room_name: "Deployments", created_at: "2026-10-08T12:32:00.000Z" },
+  { id: "dev-digest-5", type: "activity", title: "7 new messages", metadata: null, room_id: previewRoom.id, room_name: previewRoom.name, created_at: "2026-10-08T13:42:00.000Z" },
 ];
 
-// Mirrors the `tasks` table (backend/database/migrations/002_decisions_tasks_digest.sql).
-// /tasks/room/:roomId, POST /tasks, and PATCH /tasks/:taskId/status all exist
-// (tasks.routes.js) but are TODO stubs (tasks.controller.js). `status` already matches
-// the board's three columns 1:1 ('open'|'in_progress'|'done'), no extra mapping needed.
-// assignee_name is a join field the real endpoint would need to return, same convenience
-// as sender_name/author_name elsewhere in this file.
+// Mirrors the `tasks` table. /tasks is cross-room — no roomId required — because
+// the Tasks page is top-level in the rail; /tasks/room/:roomId exists for a
+// room-scoped view. The three `status` values are the board's three columns
+// 1:1, so no client-side mapping is needed. room_name is a join field the
+// controller returns, same convenience as sender_name on previewMessages —
+// without it a cross-room board cannot say which room a card belongs to.
 export const previewTasks = [
-  { id: "dev-task-1", room_id: previewRoom.id, status: "open", title: "Confirm production upload limits", assignee_id: "dev-priya", assignee_name: "Priya", due_date: "2026-08-22" },
-  { id: "dev-task-2", room_id: previewRoom.id, status: "open", title: "Validate deployment config", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-23" },
-  { id: "dev-task-3", room_id: previewRoom.id, status: "open", title: "Review storage alerts", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-24" },
-  { id: "dev-task-4", room_id: previewRoom.id, status: "in_progress", title: "Draft API rate-limit docs", assignee_id: previewUser.id, assignee_name: "Amina", due_date: "2026-08-21" },
-  { id: "dev-task-5", room_id: previewRoom.id, status: "in_progress", title: "Wire Socket.IO reconnect handling", assignee_id: "dev-daniel", assignee_name: "Daniel", due_date: "2026-08-25" },
-  { id: "dev-task-6", room_id: previewRoom.id, status: "done", title: "Set up staging environment", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-18" },
-  { id: "dev-task-7", room_id: previewRoom.id, status: "done", title: "Migrate auth middleware to JWT", assignee_id: previewUser.id, assignee_name: "Amina", due_date: "2026-08-19" },
-  { id: "dev-task-8", room_id: previewRoom.id, status: "done", title: "Write onboarding checklist", assignee_id: "dev-priya", assignee_name: "Priya", due_date: "2026-08-19" },
-  { id: "dev-task-9", room_id: previewRoom.id, status: "done", title: "Fix flaky websocket reconnect test", assignee_id: "dev-daniel", assignee_name: "Daniel", due_date: "2026-08-20" },
-  { id: "dev-task-10", room_id: previewRoom.id, status: "done", title: "Ship upload size validation", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-20" },
+  { id: "dev-task-1", room_id: previewRoom.id, room_name: previewRoom.name, status: "open", title: "Confirm production upload limits", assignee_id: "dev-priya", assignee_name: "Priya", due_date: "2026-08-22" },
+  { id: "dev-task-2", room_id: previewRoom.id, room_name: previewRoom.name, status: "open", title: "Validate deployment config", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-23" },
+  { id: "dev-task-3", room_id: "dev-room-deployments", room_name: "Deployments", status: "open", title: "Review storage alerts", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-24" },
+  { id: "dev-task-4", room_id: previewRoom.id, room_name: previewRoom.name, status: "in_progress", title: "Draft API rate-limit docs", assignee_id: previewUser.id, assignee_name: "Amina", due_date: "2026-08-21" },
+  { id: "dev-task-5", room_id: "dev-room-deployments", room_name: "Deployments", status: "in_progress", title: "Wire Socket.IO reconnect handling", assignee_id: "dev-daniel", assignee_name: "Daniel", due_date: "2026-08-25" },
+  { id: "dev-task-6", room_id: previewRoom.id, room_name: previewRoom.name, status: "done", title: "Set up staging environment", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-18" },
+  { id: "dev-task-7", room_id: previewRoom.id, room_name: previewRoom.name, status: "done", title: "Migrate auth middleware to JWT", assignee_id: previewUser.id, assignee_name: "Amina", due_date: "2026-08-19" },
+  { id: "dev-task-8", room_id: "dev-room-deployments", room_name: "Deployments", status: "done", title: "Write onboarding checklist", assignee_id: "dev-priya", assignee_name: "Priya", due_date: "2026-08-19" },
+  { id: "dev-task-9", room_id: previewRoom.id, room_name: previewRoom.name, status: "done", title: "Fix flaky websocket reconnect test", assignee_id: "dev-daniel", assignee_name: "Daniel", due_date: "2026-08-20" },
+  { id: "dev-task-10", room_id: "dev-room-deployments", room_name: "Deployments", status: "done", title: "Ship upload size validation", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-20" },
+];
+
+// Mirrors the PRESENTED notification shape from notification.service.js — not
+// the raw table row. The server resolves each row into readable context
+// (room name, actor, message preview) before returning it, so the list
+// endpoint and the socket payload are identical and the client can insert one
+// into the other without a refetch or a translation step.
+//
+// `type` is bare data, never display copy: the label and colour mapping lives
+// in pages/Notifications.jsx, because the server sends a type and never a
+// string a person should read.
+export const previewNotifications = [
+  {
+    id: 'dev-notif-1',
+    type: 'mention',
+    reference_id: 'dev-message-3',
+    seen: false,
+    created_at: '2026-10-08T09:44:00.000Z',
+    context: {
+      room_id: previewRoom.id,
+      room_name: previewRoom.name,
+      room_slug: previewRoom.slug,
+      actor_name: previewUser.display_name,
+      message_preview:
+        '@Priya can you confirm deployment readiness for the API gateway changes today?',
+    },
+  },
+  {
+    id: 'dev-notif-2',
+    type: 'file_uploaded',
+    reference_id: 'dev-message-5',
+    seen: false,
+    created_at: '2026-10-08T09:42:00.000Z',
+    context: {
+      room_id: previewRoom.id,
+      room_name: previewRoom.name,
+      room_slug: previewRoom.slug,
+      actor_name: 'Victor',
+      message_preview: "Here's the Q3 performance report.",
+    },
+  },
+  {
+    id: 'dev-notif-3',
+    type: 'room_invite',
+    reference_id: previewDmRoom.id,
+    seen: true,
+    created_at: '2026-10-07T16:10:00.000Z',
+    context: {
+      room_id: previewDmRoom.id,
+      room_name: previewDmRoom.name,
+      room_slug: previewDmRoom.slug,
+      actor_name: 'Victor',
+      // Room-targeted types have no message to preview, so this is null
+      // rather than an empty string — the component must handle null.
+      message_preview: null,
+    },
+  },
 ];
 
 const listeners = new Map();

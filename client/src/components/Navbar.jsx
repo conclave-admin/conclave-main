@@ -1,5 +1,5 @@
 import { NavLink, useNavigate, useSearchParams } from 'react-router-dom';
-import { useChats } from '@/contexts/ChatsContext';
+import { useNotifications } from '@/contexts/NotificationsContext';
 import IconMenu from '../assets/icons/menu.svg?react';
 import IconNotify from '../assets/icons/notify.svg?react';
 import IconSearch from '../assets/icons/search.svg?react';
@@ -20,11 +20,11 @@ import IconSearch from '../assets/icons/search.svg?react';
  * notifications. The sidebar now carries that route too, and this is the
  * second entry point.
  *
- * The unread count is the total across rooms rather than a separate
- * notifications count: `GET /notifications` returns a paged activity feed with
- * no unread aggregate, so any number shown here would be invented. The room
- * unread total is real data from phase 1 and is what a user is actually
- * counting when they look for a badge.
+ * The badge is the notifications unread count, not the room unread total. An
+ * earlier version used the room total because `GET /notifications` was thought
+ * to have no aggregate; it does — the controller counts unseen rows separately
+ * from the page so the badge is not capped at the page size. The two numbers
+ * count different things and only one of them belongs on a bell.
  *
  * @param {React.ReactNode|null} roomHeader - a richer title supplied by the route
  * @param {() => void} onMenuClick
@@ -32,7 +32,7 @@ import IconSearch from '../assets/icons/search.svg?react';
 export default function Navbar({ roomHeader = null, onMenuClick }) {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const { unreadTotal } = useChats();
+  const { unreadCount } = useNotifications();
 
   const query = params.get('q') || '';
 
@@ -77,14 +77,14 @@ export default function Navbar({ roomHeader = null, onMenuClick }) {
           <NavLink
             to="/notifications"
             aria-label={
-              unreadTotal > 0 ? `Notifications, ${unreadTotal} unread` : 'Notifications'
+              unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'
             }
             className="relative flex h-6 w-6 items-center justify-center"
           >
             <IconNotify className="h-6 w-6 text-ink" />
-            {unreadTotal > 0 && (
+            {unreadCount > 0 && (
               <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-metadata font-semibold text-surface">
-                {unreadTotal > 99 ? '99+' : unreadTotal}
+                {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
           </NavLink>

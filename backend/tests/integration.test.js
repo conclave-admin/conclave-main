@@ -3263,3 +3263,91 @@ dbTest('an advanced last_seen_at is what another member reads back', async () =>
     'the read pointer moved forward and another member can see it — which is what makes a read tick survive a reload',
   );
 });
+
+// --- GET /decisions/:decisionId (phase 6) ------------------------------------
+
+async function getDecisionVia(token, decisionId) {
+  return fetch(`${baseUrl}/api/decisions/${decisionId}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+dbTest('a decision reads back individually, in the list shape, with pins', async () => {
+  const me = await authedAccount('decision-one-me@test.com');
+  const them = await authedAccount('decision-one-them@test.com');
+  const room = await createRoomVia(me.token, { name: 'Single Decision', memberIds: [them.userId] });
+
+  const created = await promoteVia(me.token, {
+    roomId: room.id, title: 'Read it alone', body: 'The body text.',
+  });
+  await pinVia(me.token, created.id, 'room');
+
+  const res = await getDecisionVia(me.token, created.id);
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const decision = JSON.parse(body).data;
+
+  // The joined shape, not the raw row: a bare RETURNING * would come back with
+  // no room_name and the detail view would have nothing to title itself with.
+  assert.equal(decision.id, created.id);
+  assert.equal(decision.title, 'Read it alone');
+  assert.equal(decision.room_id, room.id);
+  assert.equal(decision.room_name, 'Single Decision');
+  assert.ok(decision.author_name, 'author_name is joined, not left null');
+  assert.deepEqual(decision.tags, []);
+
+  // Pins travel with it, so the detail view does not need a second request to
+  // know whether this is pinned and by whom.
+  assert.ok(decision.pins, 'pins is present even though the list attaches it too');
+  assert.equal(decision.pins.room.user_id, me.userId);
+  assert.ok(decision.pins.room.display_name);
+  assert.deepEqual(decision.pins.mine, ['room']);
+
+  // Another member of the same room reads the same decision, but the pin is
+  // theirs not mine — `mine` is per viewer, exactly like reactions' `reacted`.
+  const theirs = JSON.parse(await (await getDecisionVia(them.token, created.id)).text()).data;
+  assert.equal(theirs.id, created.id);
+  assert.deepEqual(theirs.pins.mine, [], 'a room pin set by someone else is not in my scopes');
+});
+
+dbTest('an unknown decision and one in a room you are not in are both 403', async () => {
+  const me = await authedAccount('decision-403-me@test.com');
+  const stranger = await authedAccount('decision-403-stranger@test.com');
+  const room = await createRoomVia(me.token, { name: 'Closed Room' });
+
+  const created = await promoteVia(me.token, {
+    roomId: room.id, title: 'Members only', body: 'Not for strangers.',
+  });
+
+  const outsider = await getDecisionVia(stranger.token, created.id);
+  assert.equal(outsider.status, 403, 'a non-member cannot read a decision');
+
+  // Indistinguishable from outside, deliberately: saying "not found" would
+  // confirm the UUID exists to someone who cannot see it.
+  const unknown = await getDecisionVia(me.token, '00000000-0000-4000-8000-000000000000');
+  assert.equal(unknown.status, 403, 'an unknown id is the same answer as a forbidden one');
+});
+
+dbTest('GET /decisions/:decisionId does not shadow the literal routes', async () => {
+  const me = await authedAccount('decision-routes@test.com');
+  const room = await createRoomVia(me.token, { name: 'Route Order' });
+  const created = await promoteVia(me.token, {
+    roomId: room.id, title: 'Route order', body: 'The literal routes still win.',
+  });
+
+  // `/search` is a literal and is registered first; if `/:decisionId` had been
+  // registered above it, this would answer 403 with "search" as the id.
+  const search = await fetch(`${baseUrl}/api/decisions/search?q=order`, {
+    headers: { authorization: `Bearer ${me.token}` },
+  });
+  assert.equal(search.status, 200, 'the literal /search still matches');
+  assert.ok(JSON.parse(await search.text()).data.decisions.length >= 1);
+
+  // `/room/:roomId` is two segments and must not be read as a single id.
+  const scoped = await fetch(`${baseUrl}/api/decisions/room/${room.id}`, {
+    headers: { authorization: `Bearer ${me.token}` },
+  });
+  assert.equal(scoped.status, 200, 'the two-segment room route still matches');
+  const rows = JSON.parse(await scoped.text()).data.decisions;
+  assert.ok(rows.some((d) => d.id === created.id));
+});

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useOutletContext, useParams } from 'react-router-dom';
-import CatchUpDigest from '../components/chat/CatchUpDigest';
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import FlagAsTaskDialog from '../components/chat/FlagAsTaskDialog';
 import MessageComposer from '../components/chat/MessageComposer';
 import MessageTimeline from '../components/chat/MessageTimeline';
 import PinnedDecisionStrip from '../components/chat/PinnedDecisionStrip';
+import PromoteToDecisionDialog from '../components/chat/PromoteToDecisionDialog';
 import RoomHeader from '../components/chat/RoomHeader';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
@@ -32,9 +33,15 @@ import useRoom from '../hooks/useRoom';
  * Edit and delete are dialogs rather than inline: an edit that turns the row
  * into a second composer breaks the grouping around it, and a delete needs a
  * confirmation the row cannot hold without shifting under the pointer.
+ *
+ * Promote and flag-as-task are dialogs for the same reason, and because both
+ * need fields the row cannot hold — a title, an assignee, a due date. They
+ * both carry the source message id back to the server, so the decision or task
+ * stays linked to the message that produced it.
  */
 export default function Room() {
   const { roomId } = useParams();
+  const navigate = useNavigate();
   const { isConnected, socket } = useRealtime();
   const { setRoomHeader } = useOutletContext();
   const { markSeen } = useChats();
@@ -46,6 +53,8 @@ export default function Room() {
   const [editing, setEditing] = useState(null);
   const [editDraft, setEditDraft] = useState('');
   const [deleting, setDeleting] = useState(null);
+  const [promoting, setPromoting] = useState(null);
+  const [flagging, setFlagging] = useState(null);
 
   const scrollContainerRef = useRef(null);
 
@@ -134,6 +143,19 @@ export default function Room() {
     });
   };
 
+  // Both dialogs report success themselves; these callbacks are the room's
+  // reaction to it. Promoting navigates to the decision, because the next
+  // question after "did it work" is "let me read it back", and making the
+  // reader find it on the board turns a two-step action into a hunt.
+  const handlePromoted = (decision) => {
+    toast({ title: 'Promoted to decision', description: decision.title, tone: 'success' });
+    navigate(`/decisions/${decision.id}`);
+  };
+
+  const handleTaskCreated = (task) => {
+    toast({ title: 'Task created', description: task.title, tone: 'success' });
+  };
+
   if (roomLoading) return <Spinner label="Opening room" />;
 
   if (roomError) {
@@ -152,7 +174,11 @@ export default function Room() {
         ref={scrollContainerRef}
         className="min-h-0 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        <CatchUpDigest />
+        {/* No in-room catch-up digest. markSeen below advances this room's
+            last_seen_at on open, and getRoomDigest filters against exactly that
+            pointer — so a digest fetched here would always be empty. Catch-up
+            belongs to the cross-room card and page, which read the pointer
+            without moving it. */}
         {messagesLoading ? (
           <Spinner label="Loading messages" />
         ) : messagesError ? (
@@ -181,6 +207,8 @@ export default function Room() {
               setEditDraft(message.content || '');
             }}
             onDelete={setDeleting}
+            onPromote={setPromoting}
+            onFlagTask={setFlagging}
             onToggleReaction={handleToggleReaction}
           />
         )}
@@ -239,6 +267,23 @@ export default function Room() {
           This replaces the message with “Message deleted” for everyone in the room.
         </p>
       </Modal>
+
+      <PromoteToDecisionDialog
+        open={Boolean(promoting)}
+        onClose={() => setPromoting(null)}
+        message={promoting}
+        roomId={roomId}
+        onPromoted={handlePromoted}
+      />
+
+      <FlagAsTaskDialog
+        open={Boolean(flagging)}
+        onClose={() => setFlagging(null)}
+        message={flagging}
+        roomId={roomId}
+        members={members}
+        onCreated={handleTaskCreated}
+      />
     </section>
   );
 }

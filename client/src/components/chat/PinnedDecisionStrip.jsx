@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import IconClose from '@/assets/icons/close.svg?react';
+// The trigger opens a menu; close.svg would read as "remove this chip". more.svg
+// is the set's kebab and is what MessageActions already uses for the same job.
+import IconMore from '@/assets/icons/more.svg?react';
 import IconPin from '@/assets/icons/pin.svg?react';
 import IconStar from '@/assets/icons/star.svg?react';
 import { useToast } from '@/contexts/ToastContext';
 import { useRealtime } from '@/contexts/RealtimeContext';
-import { listRoomDecisions, pinDecision, unpinDecision } from '@/services/decisions.service';
+import { listDecisions, pinDecision, unpinDecision } from '@/services/decisions.service';
+import PopoverMenu from '@/components/ui/PopoverMenu';
 
 /**
  * Decisions pinned to this room, in a strip under the header.
@@ -20,15 +24,15 @@ import { listRoomDecisions, pinDecision, unpinDecision } from '@/services/decisi
  * carry a full decision rather than a delta — so an unpin is a replace, not a
  * filter, and a 409 arriving on a stale read is corrected without a refetch.
  *
- * There is no per-decision detail route yet, so a chip links to /decisions
- * rather than inventing a URL that does not resolve. That is the weakest part
- * of this component and is recorded as a gap.
+ * A chip opens the decision itself, via GET /decisions/:decisionId (added in
+ * phase 6 for exactly this). Before that endpoint existed the chip linked to
+ * the board, which made a pin a suggestion rather than a destination.
  */
 export default function PinnedDecisionStrip({ roomId }) {
   const [decisions, setDecisions] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [menuFor, setMenuFor] = useState(null);
-  const menuRef = useRef(null);
+  const triggerRef = useRef(null);
   const { toast } = useToast();
   const { socket } = useRealtime();
 
@@ -45,8 +49,8 @@ export default function PinnedDecisionStrip({ roomId }) {
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
-    listRoomDecisions(roomId)
-      .then((rows) => {
+    listDecisions({ roomId })
+      .then(({ decisions: rows }) => {
         if (!cancelled) setDecisions(rows);
       })
       .catch(() => {
@@ -83,22 +87,6 @@ export default function PinnedDecisionStrip({ roomId }) {
     };
   }, [socket, roomId, mergeDecision]);
 
-  useEffect(() => {
-    if (!menuFor) return undefined;
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') setMenuFor(null);
-    };
-    const onPointerDown = (event) => {
-      if (!menuRef.current?.contains(event.target)) setMenuFor(null);
-    };
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('mousedown', onPointerDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('mousedown', onPointerDown);
-    };
-  }, [menuFor]);
-
   const pinned = decisions
     .filter((decision) => decision.pins?.room || (decision.pins?.mine || []).length > 0)
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -114,7 +102,7 @@ export default function PinnedDecisionStrip({ roomId }) {
       // A 409 means the room pin moved to somebody else. Refetching rather than
       // guessing at the new holder keeps the strip honest when two people race.
       if (err.response?.status === 409) {
-        const rows = await listRoomDecisions(roomId).catch(() => []);
+        const { decisions: rows } = await listDecisions({ roomId }).catch(() => ({ decisions: [] }));
         setDecisions(rows);
       }
     }
@@ -123,7 +111,13 @@ export default function PinnedDecisionStrip({ roomId }) {
   const runUnpin = async (decision, scope) => {
     try {
       const updated = await unpinDecision(decision.id, scope);
-      if (updated) mergeDecision(updated);
+      // The server answers a removed-but-absent pin with a sentinel
+      // `{ decisionId, scope, unpinned: false }` rather than a 404, so a
+      // retried unpin does not look like a failure. That sentinel is not a
+      // decision — it has no pins and no title — so it is treated as "nothing
+      // changed" and the chip is dropped locally instead of being replaced by
+      // a row that would render as an empty pill.
+      if (updated?.pins) mergeDecision(updated);
       else setDecisions((prev) => prev.filter((item) => item.id !== decision.id));
     } catch (err) {
       toast({
@@ -146,7 +140,7 @@ export default function PinnedDecisionStrip({ roomId }) {
             const canUnpinRoom = mineScopes.includes('room');
 
             return (
-              <li key={decision.id} ref={menuFor === decision.id ? menuRef : null} className="relative">
+              <li key={decision.id}>
                 <div className="flex items-center gap-1 rounded-full border border-line bg-canvas pl-2.5 pr-1">
                   {isRoomPinned ? (
                     <IconPin className="h-3.5 w-3.5 shrink-0 text-brand" aria-hidden="true" />
@@ -155,7 +149,7 @@ export default function PinnedDecisionStrip({ roomId }) {
                   )}
 
                   <Link
-                    to="/decisions"
+                    to={`/decisions/${decision.id}`}
                     className="max-w-[14rem] truncate px-1.5 py-1 text-metadata text-ink transition-colors hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
                     title={decision.title}
                   >
@@ -170,6 +164,7 @@ export default function PinnedDecisionStrip({ roomId }) {
 
                   {(isMineOnly || canUnpinRoom || isRoomPinned) && (
                     <button
+                      ref={triggerRef}
                       type="button"
                       onClick={() => setMenuFor((open) => (open === decision.id ? null : decision.id))}
                       aria-haspopup="menu"
@@ -177,13 +172,19 @@ export default function PinnedDecisionStrip({ roomId }) {
                       aria-label={`Pin actions for ${decision.title}`}
                       className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
                     >
-                      <IconClose className="h-3 w-3" aria-hidden="true" />
+                      <IconMore className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
                   )}
                 </div>
 
-                {menuFor === decision.id && (
-                  <div role="menu" className="absolute right-0 top-8 z-20 w-52 rounded-lg border border-line bg-surface p-1 shadow-modal">
+                <PopoverMenu
+                  open={menuFor === decision.id}
+                  onClose={() => setMenuFor(null)}
+                  triggerRef={triggerRef}
+                  align="end"
+                  label={`Pin actions for ${decision.title}`}
+                  className="w-52"
+                >
                     {!isRoomPinned && (
                       <button
                         type="button"
@@ -245,8 +246,7 @@ export default function PinnedDecisionStrip({ roomId }) {
                         ? 'Only the pinner or a room admin can unpin this'
                         : 'Any member can pin'}
                     </p>
-                  </div>
-                )}
+                </PopoverMenu>
               </li>
             );
           })}

@@ -5,6 +5,7 @@ const {
   promoteToDecision,
   listDecisions,
   searchDecisions,
+  getDecision,
   pinDecision,
   unpinDecision,
 } = require('../controllers/decisions.controller');
@@ -21,8 +22,12 @@ router.get('/room/:roomId', (req, res, next) => {         // backward-compatible
   return listDecisions(req, res, next);
 });
 router.get('/room/:roomId/search', searchDecisions);
-// Registered after the room routes above so `/room/:roomId` cannot swallow
-// `/:decisionId`. Both are path-parameter handlers on the decision itself.
+// Registered after every literal and two-segment GET above, so `/search` and
+// `/room/:roomId` cannot be captured by it. It is the only GET that reads a
+// decision id, and it sits before the pin routes because those are the actions
+// on the decision this returns.
+router.get('/:decisionId', getDecision);
+// Both are path-parameter handlers on the decision itself.
 router.put('/:decisionId/pin', pinDecision);             // { scope: 'user' | 'room' }
 router.delete('/:decisionId/pin/:scope', unpinDecision);
 

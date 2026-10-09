@@ -5,6 +5,7 @@ import EmptyState from '@/components/ui/EmptyState';
 import Spinner from '@/components/ui/Spinner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useChats } from '@/contexts/ChatsContext';
+import { useNotifications } from '@/contexts/NotificationsContext';
 import IconDecisions from '@/assets/icons/decisions.svg?react';
 import IconHash from '@/assets/icons/hash.svg?react';
 import IconHome from '@/assets/icons/home.svg?react';
@@ -12,6 +13,7 @@ import IconInvite from '@/assets/icons/invite.svg?react';
 import IconLocked from '@/assets/icons/locked.svg?react';
 import IconMember from '@/assets/icons/member.svg?react';
 import IconNotify from '@/assets/icons/notify.svg?react';
+import IconRecent from '@/assets/icons/recent.svg?react';
 import IconSettings from '@/assets/icons/settings.svg?react';
 import IconTasks from '@/assets/icons/tasks.svg?react';
 import IconThread from '@/assets/icons/thread.svg?react';
@@ -28,18 +30,34 @@ function RoomIcon({ room }) {
 }
 
 // Row pill is 36px (h-9); pitch is set by each nav's gap — 44px for the
-// workspace nav, 42px for rooms. The active highlight is 196px wide at a
+// workspace nav, 42px for the rooms. The active highlight is 196px wide at a
 // 220px sidebar (220 − 12 margin each side).
+//
+// `shrink-0` is load-bearing. Every one of these rows is a flex item in a
+// column, so the default `flex-shrink: 1` lets them compress below `h-9` when
+// the rail is short — and a compressed row is a row whose click target is
+// smaller than the 36px it advertises. Measured at a 640px-tall window the
+// second room row was 20px instead of 36px, and at 600px it overlapped the
+// profile block outright.
+//
+// The rail scrolls as one column rather than only its rooms list. The fixed
+// parts — logo, workspace nav, footer — total about 550px, so on a short window
+// *something* has to give. Scrolling the whole rail keeps every destination
+// reachable; letting the rooms list absorb the shortfall instead collapsed it
+// to zero height below ~600px, which made rooms unreachable altogether.
 const rowClass = ({ isActive }) =>
-  `mx-3 flex h-9 items-center gap-3 rounded-lg pl-3 text-body transition-colors ${
+  `mx-3 flex h-9 shrink-0 items-center gap-3 rounded-lg pl-3 text-body transition-colors ${
     isActive ? 'bg-brand-soft text-brand' : 'text-ink hover:bg-canvas'
   }`;
 
+// recent.svg (a clock) for Digest rather than the bell Notifications uses: two
+// rail entries with the same glyph read as one entry twice, and the digest is
+// "what happened while you were away" — a time window, not an alert.
 const primaryNav = [
   { to: '/chats', label: 'Chats', Icon: IconHome, end: true },
   { to: '/decisions', label: 'Decisions', Icon: IconDecisions },
   { to: '/tasks', label: 'Tasks', Icon: IconTasks },
-  { to: '/digest', label: 'Digest', Icon: IconNotify },
+  { to: '/digest', label: 'Digest', Icon: IconRecent },
   { to: '/notifications', label: 'Notifications', Icon: IconNotify },
 ];
 
@@ -61,27 +79,33 @@ const primaryNav = [
 export default function NavRail({ onNavigate }) {
   const { user } = useAuth();
   const { rooms, isLoading, error, unreadTotal } = useChats();
+  const { unreadCount } = useNotifications();
   const displayName = user?.display_name || 'Unknown user';
 
   return (
-    <div className="flex h-full min-h-0 flex-col pb-4 pt-6">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto pb-4 pt-6">
       <NavLink to="/chats" onClick={onNavigate} className="px-6 text-h2 text-brand">
         CONCLAVE
       </NavLink>
 
-      <p className="mt-10 px-6 text-label uppercase text-muted">Workspace</p>
-      <nav className="mt-6 flex flex-col gap-2">
+      <p className="mt-10 shrink-0 px-6 text-label uppercase text-muted">Workspace</p>
+      <nav className="mt-6 flex shrink-0 flex-col gap-2">
         {primaryNav.map(({ to, label, Icon, end }) => (
           <NavLink key={to} end={end} to={to} onClick={onNavigate} className={rowClass}>
             <Icon className="h-5 w-5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{label}</span>
+            {/* The same two counts the Navbar badge shows, so the rail and the
+                bell never disagree about what is unread. */}
             {to === '/chats' && unreadTotal > 0 && <Badge tone="brand">{unreadTotal}</Badge>}
+            {to === '/notifications' && unreadCount > 0 && (
+              <Badge tone="brand">{unreadCount}</Badge>
+            )}
           </NavLink>
         ))}
       </nav>
 
-      <p className="mt-10 px-6 text-label uppercase text-muted">Rooms</p>
-      <nav className="mt-3 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
+      <p className="mt-10 shrink-0 px-6 text-label uppercase text-muted">Rooms</p>
+      <nav className="mt-3 flex flex-col gap-1.5">
         {isLoading && <Spinner label="Loading rooms" />}
         {error && <p className="mx-3 text-metadata text-error">{error}</p>}
         {!isLoading && !error && rooms.length === 0 && (
@@ -96,7 +120,7 @@ export default function NavRail({ onNavigate }) {
         ))}
       </nav>
 
-      <div className="mt-4">
+      <div className="mt-4 shrink-0">
         <div className="mx-3 border-t border-line" />
 
         <NavLink to="/profile" onClick={onNavigate} className="mt-5 flex items-start gap-3 px-6">

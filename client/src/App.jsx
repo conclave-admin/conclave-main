@@ -11,6 +11,7 @@ import { ToastProvider } from './contexts/ToastContext';
 import CatchUpDigestPage from './pages/CatchUpDigestPage';
 import Chats from './pages/Chats';
 import Decisions from './pages/Decisions';
+import DecisionDetail from './pages/DecisionDetail';
 import Login from './pages/Login';
 import NewChat from './pages/NewChat';
 import Notifications from './pages/Notifications';
@@ -98,6 +99,10 @@ export default function App() {
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/notifications" element={<Notifications />} />
                   <Route path="/decisions" element={<Decisions />} />
+                  {/* Registered as a sibling, not a child of /decisions: the
+                      board is a list page and the detail page is a different
+                      layout, not a nested view of it. */}
+                  <Route path="/decisions/:decisionId" element={<DecisionDetail />} />
                   <Route path="/digest" element={<CatchUpDigestPage />} />
                   <Route path="/tasks" element={<Tasks />} />
                 </Route>

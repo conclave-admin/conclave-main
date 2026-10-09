@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import IconReaction from '@/assets/icons/reaction.svg?react';
 import { REACTION_EMOJI } from '@/lib/messageMeta';
+import PopoverMenu from '@/components/ui/PopoverMenu';
 
 /**
  * Reaction chips, and the picker that adds one.
@@ -22,26 +23,10 @@ import { REACTION_EMOJI } from '@/lib/messageMeta';
 export default function MessageReactions({ message, onToggle }) {
   const reactions = message.reactions || [];
   const [pickerOpen, setPickerOpen] = useState(false);
-  const wrapperRef = useRef(null);
-
-  useEffect(() => {
-    if (!pickerOpen) return undefined;
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') setPickerOpen(false);
-    };
-    const onPointerDown = (event) => {
-      if (!wrapperRef.current?.contains(event.target)) setPickerOpen(false);
-    };
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('mousedown', onPointerDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('mousedown', onPointerDown);
-    };
-  }, [pickerOpen]);
+  const triggerRef = useRef(null);
 
   return (
-    <div ref={wrapperRef} className="relative flex flex-wrap items-center gap-1.5">
+    <div className="relative flex flex-wrap items-center gap-1.5">
       {reactions.map((reaction) => (
         <button
           key={reaction.emoji}
@@ -61,6 +46,7 @@ export default function MessageReactions({ message, onToggle }) {
       ))}
 
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setPickerOpen((open) => !open)}
         aria-haspopup="menu"
@@ -71,12 +57,15 @@ export default function MessageReactions({ message, onToggle }) {
         <IconReaction className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
 
-      {pickerOpen && (
-        <div
-          role="menu"
-          aria-label="Choose a reaction"
-          className="absolute bottom-8 left-0 z-20 flex gap-1 rounded-lg border border-line bg-surface p-1 shadow-modal"
-        >
+      <PopoverMenu
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        triggerRef={triggerRef}
+        side="top"
+        align="start"
+        label="Choose a reaction"
+        className="flex gap-1"
+      >
           {REACTION_EMOJI.map((emoji) => {
             const already = reactions.find((r) => r.emoji === emoji)?.reacted;
             return (
@@ -100,8 +89,7 @@ export default function MessageReactions({ message, onToggle }) {
               </button>
             );
           })}
-        </div>
-      )}
+      </PopoverMenu>
     </div>
   );
 }

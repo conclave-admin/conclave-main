@@ -4,6 +4,7 @@ const { ok } = require('../utils/apiResponse');
 const ApiError = require('../utils/ApiError');
 const {
   attachPins,
+  getDecisionPayload,
   pinDecision,
   unpinDecision,
 } = require('../services/decisionPin.service');
@@ -213,6 +214,37 @@ const searchDecisions = asyncHandler(async (req, res) => {
   });
 });
 
+// ---------- getDecision ----------
+// GET /decisions/:decisionId
+//
+// One decision, in the same joined shape the list and search endpoints return,
+// pins attached. Exists so the pinned strip under a room header can resolve to
+// the decision itself rather than to the board and leave the reader hunting.
+//
+// Membership is checked here rather than trusted to getDecisionPayload: that
+// service is shared with the pin path, where the caller has already been
+// authorised against the room, and adding a check inside it would cost an extra
+// query on every pin. Here there is no prior check, so it is this handler's job.
+const getDecision = asyncHandler(async (req, res) => {
+  const { decisionId } = req.params;
+
+  const membership = await query(
+    `SELECT 1 FROM room_members
+      WHERE room_id = (SELECT room_id FROM decisions WHERE id = $1)
+        AND user_id = $2`,
+    [decisionId, req.user.id],
+  );
+  // An unknown decision and one in a room you are not in are both a 403: the
+  // membership subquery returns no row either way, and distinguishing them
+  // would confirm a UUID exists to someone who cannot see it.
+  if (membership.rows.length === 0) {
+    throw new ApiError(403, 'You are not a member of this room');
+  }
+
+  const decision = await getDecisionPayload(decisionId, req.user.id);
+  return ok(res, decision);
+});
+
 // ---------- pinDecisionHandler ----------
 // PUT /decisions/:decisionId/pin { scope }
 //
@@ -257,6 +289,7 @@ module.exports = {
   promoteToDecision,
   listDecisions,
   searchDecisions,
+  getDecision,
   pinDecision: pinDecisionHandler,
   unpinDecision: unpinDecisionHandler,
 };
