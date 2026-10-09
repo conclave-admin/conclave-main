@@ -24,10 +24,19 @@ Flow: Landing page, then Sign in, then the **Chats list**, then a Conversation.
 
 **Pending pages**
 
-- `/notifications` and `/settings` are TODO stubs. The sidebar link labelled "Invite members" points to `/settings`.
-- `/dms` has no route and falls through to Home.
-- Navbar search and bell buttons do nothing and there is no unread badge.
-- Profile is a placeholder. It does not edit name, bio or avatar, and Delete account uses `window.alert` although `DELETE /users/me` exists.
+- `/settings` and `/profile` exist; Profile is still a placeholder that does not edit name, bio or avatar, and Delete account uses `window.alert` although `DELETE /users/me` exists.
+- `/new` and `/chats/:roomId/info` are honest stubs with an empty state, behind a working route and a working link.
+- `/rooms/:roomId` no longer exists. It was replaced by `/chats/:roomId` in phase 4; the old path is not redirected because nothing external linked to it and a permanent redirect for a dead URL is a lie about a feature that no longer has that shape.
+
+**Resolved in phase 4**
+
+- The sidebar linked to `/dms`, which had no route and fell through to the catch-all. It now resolves to `/chats?filter=dms`.
+- The sidebar item labelled "Invite members" pointed at `/settings`. It now points at `/new`, and Settings has its own item.
+- `/digest` had no entry point anywhere in the UI. It is a rail item now, and the chat list has a Catch-up card linking to it.
+- Navbar search and bell were inert buttons. Search writes `?q=` onto `/chats`; the bell links to `/notifications`. Both carry a real unread count.
+- Opening a room never marked it read. `Room` now calls `PATCH /rooms/:roomId/seen` on open, optimistically zeroing the badge first.
+- `chat:updated` was emitted by the server and ignored by the client. `ChatsContext` consumes it.
+- Pin and mute exist as row actions, stored per browser in `localStorage`. There is no backend for either — see section 6.
 
 **Pages that look built but are not wired**
 
@@ -40,8 +49,8 @@ Flow: Landing page, then Sign in, then the **Chats list**, then a Conversation.
 **Chat**
 
 - The backend supports edit, delete, reactions, attachments and structured mentions. The UI has none of these. Attach and mention buttons are inert and the composer has a fixed height.
-- Opening a room never calls `POST /rooms/:id/seen`.
-- No avatars, only grey circles. No shared Avatar, Modal, Textarea, Select or Badge components.
+- Opening a room calls `PATCH /rooms/:roomId/seen` (the audit above said `POST`; the route is a PATCH).
+- Avatars, Modal, Textarea, Select and Badge are shared components from phase 2. Presence dots are not drawn: the client does not subscribe to room presence, so a green dot would be invented.
 
 ## 4. Routes
 
@@ -50,9 +59,11 @@ Flow: Landing page, then Sign in, then the **Chats list**, then a Conversation.
 | `/`                                                 | Landing page (logged-in users redirect to `/chats`) | Public      |
 | `/login`, `/register`                               | Redesigned auth                                     | Public only |
 | `/chats`                                            | Chat list                                           | Protected   |
+| `/chats?filter=unread\|groups\|dms`, `?q=`          | Same list, filtered and searched                    | Protected   |
 | `/chats/:roomId`                                    | Conversation                                        | Protected   |
-| `/chats/:roomId/info`                               | Members, files, pinned decisions, tasks             | Protected   |
-| `/new`                                              | New chat, new group, find people                    | Protected   |
+| `/chats/:roomId/info`                               | Members, files, pinned decisions, tasks (stub)      | Protected   |
+| `/dms`                                              | Redirect to `/chats?filter=dms`                     | Protected   |
+| `/new`                                              | New chat, new group, find people (stub)             | Protected   |
 | `/tasks`, `/decisions`, `/digest`, `/notifications` | Secondary screens wired to the real API             | Protected   |
 | `/settings`, `/profile`                             | Account and preferences                             | Protected   |
 
@@ -70,9 +81,11 @@ Only two breakpoints, per the repo rule: `md` (768px) and `lg` (1280px). Below `
 
 **Chat list rows**
 
-- Avatar with online dot, name, last message preview, time, unread badge, mute and pin indicators.
-- Sticky search, filter chips (All, Unread, Groups, DMs), floating compose button on mobile.
-- A "Catch up" card at the top when there are unread decisions or tasks.
+- Avatar, name, last message preview, time, unread badge, mute and pin indicators. No presence dot — see the known gaps in section 14.
+- Sticky search, filter chips (All, Unread, Groups, DMs).
+- A "Catch up" card at the top when there are unread decisions or tasks, reading the same `GET /digest` payload as the digest page.
+- **No floating compose button on mobile yet.** `/new` is reachable from the drawer's "Invite members" item, which is one tap fewer than a FAB but not the affordance this section describes. It is deferred rather than skipped silently.
+- Pin and mute are per-browser only. The row menu says so in place.
 
 **Conversation**
 
@@ -154,8 +167,8 @@ Planned follow-up: lift `useNotifications` into a `NotificationsProvider` so the
 1. **Backend (DONE):** enrich `GET /rooms`, add `chat:updated`, verify DM find-or-create. No backend change was needed for find-or-create — see section 8. Anything beyond this phase needs asking again before `backend/` is touched.
 2. **Foundations:** refreshed tokens, dark mode, shared components (Avatar with presence, Badge, Modal and bottom sheet, Tabs, Skeleton, Toast).
 3. **Landing page and auth redesign.**
-4. **Chats shell:** routing, chat list, responsive panes, bottom nav and rail.
-5. **Conversation upgrade:** bubbles, actions, reactions, edit and delete, uploads, mentions, room-seen call.
+4. **Chats shell (DONE):** routing, chat list, responsive panes, bottom nav and rail. Also took the room-seen call out of phase 5, because the unread badge cannot be judged without it.
+5. **Conversation upgrade:** bubbles, actions, reactions, edit and delete, uploads, mentions.
 6. **Decisions, Tasks, Digest, Notifications:** real API, create and status actions, integrated into chat.
 7. **Settings, Profile edit, New chat, member management.**
 8. **QA** at 360, 390, 768, 1024, 1280 and 1440 widths, plus accessibility.
@@ -187,25 +200,28 @@ Questions 5 and 6 are parked until the phases that need them (5 and 4 respective
 
 ## 14. Next step
 
-Phases 1 and 2 are complete (commits `0d91968` and `bed546b`). **Phase 3 — landing page and auth redesign.**
+Phases 1 to 4 are complete (commits `0d91968`, `bed546b`, `e92f530`; phase 4 is built and verified but not yet committed). **Phase 5 — conversation upgrade.**
+
+Phase 4 left the following, and phase 5 should not re-litigate them:
+
+- The filter chips and the search field write `?filter=` and `?q=` onto `/chats` rather than holding React state, so `/dms` is a redirect into the same list instead of a second implementation. Keep it that way.
+- Pin and mute are `localStorage` only, under `conclave-pinned-rooms` and `conclave-muted-rooms`, behind `lib/localRoomPrefs.js`. Any backend for them replaces that one module. The chat-row menu says "Saved on this device" so the limitation is visible rather than implied.
+- `unreadTotal` excludes muted rooms, matching the per-row badge. If that ever changes, change both.
+- The header search lands on `/chats` even when a room is open, because `?q=` is only meaningful to the list.
+- `RoomInfo` and `NewChat` are stubs with working routes and working links into them. They are not half-built.
 
 Build order, one file at a time, verified with `npm test` and `npm run build` after each:
 
-1. `index.html` — font links (Inter Tight finally loaded, plus Instrument Serif for landing headings) and meta/OG tags.
-2. `tailwind.config.js` — register the display face in the font stack.
-3. `components/landing/*` — nav, hero with the animated chat mock, feature blocks, how-it-works strip, final CTA, footer. Split so each is independently reviewable.
-4. `pages/Landing.jsx` — composes the above; tagline "Messaging that survives the scroll".
-5. `components/layout/AuthLayout.jsx`, then `pages/Login.jsx` and `pages/Register.jsx` — restyled onto the phase-2 primitives.
-6. `App.jsx` — `/` becomes the public landing, logged-in users redirect, landing lazy-loaded.
-7. Add `pages/Chats.jsx` as a placeholder (heading + empty state).
+1. Message bubbles — own right in brand, others left on soft surface, consecutive grouping, tails on the last only.
+2. Timeline chrome — day separators, sent/pending ticks, typing dots, "jump to latest" pill.
+3. Message actions — reply, react, edit, delete, with the server's `PATCH` and `DELETE` on `messages`.
+4. Composer — grow to ~5 lines, Enter to send with IME safety.
+5. Attachments and mentions — `POST /rooms/:roomId/messages` with `attachmentIds` and `mentionedUserIds`.
+6. Pinned decision strip under the room header.
 
-**Routing hazard.** The intended redirect is logged-in users at `/` → `/chats`, but `/chats` does not exist until phase 4 and the catch-all sends unknown paths back to `/`, which would be an infinite redirect loop. Step 7 exists only to give the redirect a target; phase 4 replaces it.
+**Known gaps this phase does not close.** Presence dots are not drawn because the client never subscribes to room presence. The navbar unread badge is the room unread total, not a notifications count — `GET /notifications` returns a paged feed with no unread aggregate, so any other number would be invented. Room-level message search (`GET /messages/room/:roomId/search`) is unused; the header search matches room names only, because that endpoint cannot search across rooms.
 
-**Two decisions carried into phase 3.** The nav renders a logo placeholder rather than a wordmark, because a logo file is still to be supplied — it must not be left as a silent gap. And GSAP with ScrollTrigger is installed for the landing page only, lazy-loaded, which is already sanctioned by the confirmed defaults in section 9.
-
-Footer links for pricing, Privacy and Terms render empty shells, not written pages.
-
-Working rule for this build: **no visual tests until Michael gives confirmation.** Verification is `npm test` and `npm run build` only.
+Working rule for this build: **no visual tests until Michael gives confirmation.** Verification is `npm test` and `npm run build` only. Phase 4 is almost entirely layout and is therefore the phase most likely to be wrong in ways those two commands cannot see.
 
 ## 15. Early-session audit and Notifications draft
 
@@ -540,12 +556,12 @@ Notifications, Settings and DMs have no Penpot board, as DESIGN_QUESTIONS B1 and
 
 The icon sprite at `client/src/assets/icons/` covers almost everything the redesign calls for. The four below do not, and the repo rule is to stop and ask rather than draw a substitute, so they are listed here for Michael to supply.
 
-| File                    | Needed for                                                                 | Until it exists                                          |
-| ----------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `sun.svg`               | Light theme indicator                                                      | The switch uses the text label "Light" instead            |
-| `moon.svg`              | Dark theme indicator                                                       | The switch uses the text label "Dark" instead             |
-| `edit.svg`              | Message edit action — section 6 lists "reply, react, edit, delete"          | Edit has no icon and cannot be placed in the action row   |
-| `arrow-down.svg`        | The "jump to latest" pill in the conversation — section 6                   | The pill has no glyph and cannot be built                 |
+| File             | Needed for                                                         | Until it exists                                         |
+| ---------------- | ------------------------------------------------------------------ | ------------------------------------------------------- |
+| `sun.svg`        | Light theme indicator                                              | The switch uses the text label "Light" instead          |
+| `moon.svg`       | Dark theme indicator                                               | The switch uses the text label "Dark" instead           |
+| `edit.svg`       | Message edit action — section 6 lists "reply, react, edit, delete" | Edit has no icon and cannot be placed in the action row |
+| `arrow-down.svg` | The "jump to latest" pill in the conversation — section 6          | The pill has no glyph and cannot be built               |
 
 These are icon-sprite entries: same folder, imported with svgr, drawn to match the existing set.
 

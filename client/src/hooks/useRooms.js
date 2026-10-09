@@ -1,3 +1,0 @@
-import { useCallback, useEffect, useState } from 'react';
-import { listRooms } from '../services/rooms.service';
-export default function useRooms() { const [rooms, setRooms] = useState([]); const [isLoading, setIsLoading] = useState(true); const [error, setError] = useState(''); const refresh = useCallback(async () => { setIsLoading(true); setError(''); try { setRooms(await listRooms()); } catch (err) { setError(err.response?.data?.message || 'Could not load rooms.'); } finally { setIsLoading(false); } }, []); useEffect(() => { refresh(); }, [refresh]); return { rooms, isLoading, error, refresh }; }

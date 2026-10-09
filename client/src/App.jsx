@@ -12,10 +12,12 @@ import CatchUpDigestPage from './pages/CatchUpDigestPage';
 import Chats from './pages/Chats';
 import Decisions from './pages/Decisions';
 import Login from './pages/Login';
+import NewChat from './pages/NewChat';
 import Notifications from './pages/Notifications';
 import Profile from './pages/Profile';
 import Register from './pages/Register';
 import Room from './pages/Room';
+import RoomInfo from './pages/RoomInfo';
 import Settings from './pages/Settings';
 import StaticPage from './pages/StaticPage';
 import Tasks from './pages/Tasks';
@@ -74,10 +76,24 @@ export default function App() {
 
               <Route element={<ProtectedRoute />}>
                 <Route element={<AppShell />}>
-                  {/* Target of the post-auth redirect. Replaced in phase 4 by
-                      the real chat list. */}
-                  <Route path="/chats" element={<Chats />} />
-                  <Route path="/rooms/:roomId" element={<Room />} />
+                  {/* Target of the post-auth redirect. Two panes: the list,
+                      and the open conversation — both keyed off this URL so a
+                      filtered or deep-linked view survives a reload. */}
+                  <Route path="/chats" element={<Chats />}>
+                    <Route path=":roomId" element={<Room />} />
+                    <Route path=":roomId/info" element={<RoomInfo />} />
+                  </Route>
+
+                  {/* The sidebar has always linked to /dms. Rather than
+                      maintain a second list component, it resolves into the
+                      same one with the DMs chip selected — one implementation,
+                      and the chip and the route cannot disagree. */}
+                  <Route path="/dms" element={<Navigate to="/chats?filter=dms" replace />} />
+
+                  {/* Stub behind the sidebar's "Invite members" and the mobile
+                      compose button. */}
+                  <Route path="/new" element={<NewChat />} />
+
                   <Route path="/profile" element={<Profile />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/notifications" element={<Notifications />} />

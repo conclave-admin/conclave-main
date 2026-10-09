@@ -9,18 +9,67 @@ export const previewUser = {
   bio: "Frontend preview account",
 };
 
+// Mirrors one row of the enriched `GET /rooms` response (docs/API_CONTRACTS.md,
+// "The chat-list row"). display_name/display_avatar/last_message/unread_count
+// are the fields phase 1 added; without them the chat list renders empty
+// previews in bypass mode and the whole phase becomes unverifiable offline.
+// A second, DM-shaped room is included so the DMs filter chip has something to
+// filter to.
 export const previewRoom = {
   id: "preview-room",
   name: "Product & Engineering",
   slug: "product-eng",
   type: "group",
   member_count: 4,
+  my_role: "admin",
+  last_seen_at: "2026-10-08T08:00:00.000Z",
+  display_name: "Product & Engineering",
+  display_avatar: null,
+  has_message: true,
+  unread_count: 3,
+  last_message: {
+    id: "dev-last-1",
+    content: "On it—validating the config and update by EOD.",
+    sender_id: "dev-priya",
+    sender_name: "Priya",
+    sender_avatar: null,
+    has_attachment: false,
+    is_deleted: false,
+    created_at: "2026-10-08T09:37:00.000Z",
+  },
   members: [
     previewUser,
     { id: "dev-victor", display_name: "Victor", avatar_url: null },
     { id: "dev-priya", display_name: "Priya", avatar_url: null },
     { id: "dev-daniel", display_name: "Daniel", avatar_url: null },
   ],
+};
+
+export const previewDmRoom = {
+  id: "preview-dm",
+  name: "Victor",
+  slug: null,
+  type: "dm",
+  member_count: 2,
+  my_role: "member",
+  last_seen_at: "2026-10-08T10:00:00.000Z",
+  // For a DM the backend returns the OTHER member's identity, not the room
+  // title — that is the whole point of display_name.
+  display_name: "Victor",
+  display_avatar: null,
+  has_message: true,
+  unread_count: 0,
+  last_message: {
+    id: "dev-last-2",
+    content: "Sending the deck over now.",
+    sender_id: "dev-victor",
+    sender_name: "Victor",
+    sender_avatar: null,
+    has_attachment: true,
+    is_deleted: false,
+    created_at: "2026-10-08T09:52:00.000Z",
+  },
+  members: [previewUser, { id: "dev-victor", display_name: "Victor", avatar_url: null }],
 };
 
 export const previewMessages = [
