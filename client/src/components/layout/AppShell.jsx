@@ -49,7 +49,15 @@ export default function AppShell() {
               <NavRail />
             </aside>
 
-            <div className="grid min-h-0 grid-rows-[auto_1fr_auto]">
+            {/*
+             * `grid-cols-1` is required, not decorative. Specifying rows without
+             * columns leaves the implicit column at `auto`, which sizes to
+             * max-content — so one long decision title widened the whole shell
+             * and pushed the document to 563px inside a 390px viewport, making
+             * every page scroll sideways. `grid-cols-1` resolves to
+             * `minmax(0, 1fr)`, which is the grid-blowout guard.
+             */}
+            <div className="grid min-h-0 grid-cols-1 grid-rows-[auto_1fr_auto]">
               <Navbar roomHeader={roomHeader} onMenuClick={() => setDrawerOpen(true)} />
               <main className="min-h-0 min-w-0 bg-surface">
                 <Outlet context={{ setRoomHeader }} />

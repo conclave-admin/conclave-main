@@ -54,9 +54,12 @@ export default function Navbar({ roomHeader = null, onMenuClick }) {
           <IconMenu className="h-6 w-6 text-ink" />
         </button>
 
-        <p className="min-w-0 flex-1 truncate text-h2 text-ink">
+        {/* A div, not a p: `roomHeader` is a <RoomHeader>, which renders the
+            page's <h1>. Inside a <p> that is invalid nesting and React logs
+            validateDOMNesting on every room view. */}
+        <div className="min-w-0 flex-1 truncate text-h2 text-ink">
           {roomHeader || 'Workspace overview'}
-        </p>
+        </div>
 
         <div className="flex shrink-0 items-center gap-4">
           <label className="relative hidden md:block">

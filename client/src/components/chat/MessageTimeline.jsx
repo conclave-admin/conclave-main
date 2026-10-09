@@ -162,14 +162,27 @@ export default function MessageTimeline({
 
       <TypingIndicator typingUserIds={typingUserIds} members={members} />
 
+      {/*
+        `sticky`, not `absolute`. This container is the scroll *content*, so an
+        absolutely positioned child anchors to the end of the whole transcript
+        — measured 910px below the visible pane, visible only once the reader
+        had already scrolled to the bottom, which is the one moment the pill is
+        not needed. `sticky` pins it to the scrollport instead.
+
+        The wrapper is `h-0` so it reserves no space: `showJump` flips on every
+        scroll tick, and an in-flow button would shove the transcript each time
+        it appeared or disappeared.
+      */}
       {showJump && (
-        <button
-          type="button"
-          onClick={jumpToLatest}
-          className="pointer-events-auto absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-line bg-surface px-4 py-2 text-label text-ink shadow-modal transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
-        >
-          Jump to latest
-        </button>
+        <div className="pointer-events-none sticky bottom-3 z-10 h-0">
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            className="pointer-events-auto absolute bottom-0 left-1/2 -translate-x-1/2 rounded-full border border-line bg-surface px-4 py-2 text-label text-ink shadow-modal transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+          >
+            Jump to latest
+          </button>
+        </div>
       )}
     </div>
   );
