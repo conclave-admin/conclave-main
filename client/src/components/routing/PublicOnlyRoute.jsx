@@ -6,5 +6,7 @@ export default function PublicOnlyRoute() {
   const { isAuthenticated, isLoading } = useAuth();
   if (isLoading) return <Spinner fullPage label="Loading" />;
   if (isDevAuthBypass) return <Outlet />;
-  return isAuthenticated ? <Navigate to="/" replace /> : <Outlet />;
+  // `/chats`, not `/`: `/` is the public landing page, so redirecting a
+  // signed-in visitor there would only bounce them straight back here.
+  return isAuthenticated ? <Navigate to="/chats" replace /> : <Outlet />;
 }

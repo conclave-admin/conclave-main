@@ -38,15 +38,18 @@ export default function RoomList({ onNavigate }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col pb-4 pt-6">
-      <NavLink to="/" onClick={onNavigate} className="px-6 text-h2 text-brand">
+      {/* `/` is the public landing page as of the phase-3 routing change, so
+          the in-app brand link and the primary nav item both point at `/chats`
+          — sending a signed-in user to `/` would only bounce them back. */}
+      <NavLink to="/chats" onClick={onNavigate} className="px-6 text-h2 text-brand">
         CONCLAVE
       </NavLink>
 
       <p className="mt-10 px-6 text-label uppercase text-muted">Workspace</p>
       <nav className="mt-18 flex flex-col gap-2">
-        <NavLink end to="/" onClick={onNavigate} className={rowClass}>
+        <NavLink end to="/chats" onClick={onNavigate} className={rowClass}>
           <IconHome className="h-5 w-5 shrink-0" />
-          Home
+          Chats
         </NavLink>
         {/* Penpot's sidebar has no Decisions link — this nav item is an
             addition, not modeled on any board. */}

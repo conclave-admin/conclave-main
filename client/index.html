@@ -3,12 +3,44 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Conclave private collaboration platform" />
     <title>Conclave</title>
+    <meta
+      name="description"
+      content="Private team messaging with decisions, action items and a catch-up digest, so the important part does not disappear into the scroll."
+    />
     <!--
-      Set the theme class before anything paints. This runs as the first thing
-      in head so the stylesheet never evaluates with the wrong palette; without
-      it every reload flashes light before ThemeContext mounts and switches.
+      Browser chrome colour. Mirrors --color-canvas in src/index.css.
+
+      These follow the OS preference only, not the manual override: a meta tag
+      is parsed before any script can read localStorage, so a user who has set
+      dark while their system is light will see the wrong chrome colour. That
+      is a known, deliberate trade — the alternative is injecting the tag from
+      JavaScript, which loses it for the first paint on every reload.
+    -->
+    <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)" />
+
+    <!--
+      Sharing metadata. There is no og:image on purpose: the repo has no logo or
+      screenshot asset, and pointing a card at a URL that does not exist renders
+      worse than shipping a text-only card. Add one when the logo lands.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Conclave" />
+    <meta property="og:title" content="Conclave" />
+    <meta
+      property="og:description"
+      content="Private team messaging with decisions, action items and a catch-up digest, so the important part does not disappear into the scroll."
+    />
+    <meta property="og:locale" content="en_US" />
+    <meta name="twitter:card" content="summary" />
+
+    <!--
+      Set the theme class before anything paints. This has to come BEFORE every
+      stylesheet link, including the font sheet below — a render-blocking
+      stylesheet stalls the parser, so a script placed after one runs late and
+      the light palette is already on screen. That is the whole reason this sits
+      above the font tags rather than at the end of head as it used to.
 
       Three states: an explicit stored choice, otherwise the system preference,
       otherwise light — which is what src/index.css declares. A failure here
@@ -31,6 +63,29 @@
         }
       })();
     </script>
+
+    <!--
+      Fonts. Both faces load for the whole app rather than Instrument Serif
+      being injected by the landing route only: it is a single weight, and
+      loading it on demand would make the one page whose first impression
+      matters most flash from a fallback to the real face.
+
+      Inter Tight is the app face (src/index.css --font-sans). It was referenced
+      in the font stack from the start but never actually loaded, so every screen
+      so far has been rendering in the system UI font.
+
+      Instrument Serif is landing headings only, paired against Inter Tight.
+
+      preconnect to both origins: the stylesheet and the font binaries live on
+      different hosts, and without the handshake each request pays a fresh TLS
+      negotiation before the first paint that needs text.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap"
+    />
   </head>
   <body>
     <div id="root"></div>

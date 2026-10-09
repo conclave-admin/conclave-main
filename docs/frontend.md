@@ -174,20 +174,36 @@ Delivery style: code written in chat, one file at a time, grouped by phase. No f
 ## 13. Pending questions
 
 1. ~~**Defaults:** do you accept the proposed defaults in section 9, or which ones do you want to change?~~ **Answered: yes, section 9 is confirmed.**
-2. **Display font:** do you want to choose the landing page display typeface, or should I propose two or three candidates?
+2. ~~**Display font:** do you want to choose the landing page display typeface, or should I propose two or three candidates?~~ **Answered: Instrument Serif**, loaded from Google Fonts, used for landing headings only and paired with Inter Tight everywhere else.
 3. ~~**Team coordination:** should the frontend owner and the room endpoint owner be looped in before work starts? Proposed: a dedicated branch (for example `redesign/messaging-ui`) and a heads-up before touching `rooms.controller.js`.~~ **Answered: work on `branch-michael`; backend work is announced and confirmed first.** `rooms.controller.js` was touched for phase 1 with that confirmation.
-4. **Landing content:**
-   - Tagline and tone (draft: "Messaging that survives the scroll").
-   - Logo, or is the "CONCLAVE" wordmark enough?
-   - Include pricing, Privacy and Terms pages, or only footer placeholders?
+4. **Landing content:** ~~all three answered.~~
+   - ~~Tagline and tone (draft: "Messaging that survives the scroll").~~ **Answered: keep the draft tagline.**
+   - ~~Logo, or is the "CONCLAVE" wordmark enough?~~ **Answered: a logo file will be supplied later; render a placeholder slot in the nav until it arrives.** No logo asset exists in `client/src/assets/` today — only the icon sprite.
+   - ~~Include pricing, Privacy and Terms pages, or only footer placeholders?~~ **Answered: footer placeholders only.** They render an empty shell rather than a written page; pricing especially needs copy that does not exist.
 5. **Read receipts:** confirm that v1 ships "sent" ticks only, with persisted read receipts deferred.
 6. **Search scope:** confirm room search first, global search later.
 
-Questions 2, 4, 5 and 6 are parked until the phase that needs them (3, 3, 5 and 4 respectively).
+Questions 5 and 6 are parked until the phases that need them (5 and 4 respectively). Questions 2 and 4 were needed for phase 3 and are now answered above.
 
 ## 14. Next step
 
-Phase 1 is complete. Phase 2 — foundations: colour tokens as CSS variables, `darkMode: 'class'`, the anti-FOUC script, and the shared components (Avatar, Badge, Textarea, Select, Skeleton, Modal, Sheet, Tabs, Toast).
+Phases 1 and 2 are complete (commits `0d91968` and `bed546b`). **Phase 3 — landing page and auth redesign.**
+
+Build order, one file at a time, verified with `npm test` and `npm run build` after each:
+
+1. `index.html` — font links (Inter Tight finally loaded, plus Instrument Serif for landing headings) and meta/OG tags.
+2. `tailwind.config.js` — register the display face in the font stack.
+3. `components/landing/*` — nav, hero with the animated chat mock, feature blocks, how-it-works strip, final CTA, footer. Split so each is independently reviewable.
+4. `pages/Landing.jsx` — composes the above; tagline "Messaging that survives the scroll".
+5. `components/layout/AuthLayout.jsx`, then `pages/Login.jsx` and `pages/Register.jsx` — restyled onto the phase-2 primitives.
+6. `App.jsx` — `/` becomes the public landing, logged-in users redirect, landing lazy-loaded.
+7. Add `pages/Chats.jsx` as a placeholder (heading + empty state).
+
+**Routing hazard.** The intended redirect is logged-in users at `/` → `/chats`, but `/chats` does not exist until phase 4 and the catch-all sends unknown paths back to `/`, which would be an infinite redirect loop. Step 7 exists only to give the redirect a target; phase 4 replaces it.
+
+**Two decisions carried into phase 3.** The nav renders a logo placeholder rather than a wordmark, because a logo file is still to be supplied — it must not be left as a silent gap. And GSAP with ScrollTrigger is installed for the landing page only, lazy-loaded, which is already sanctioned by the confirmed defaults in section 9.
+
+Footer links for pricing, Privacy and Terms render empty shells, not written pages.
 
 Working rule for this build: **no visual tests until Michael gives confirmation.** Verification is `npm test` and `npm run build` only.
 
@@ -519,3 +535,20 @@ Opening an unread row marks it seen and navigates to the room.
 ### Question before step 2
 
 Notifications, Settings and DMs have no Penpot board, as DESIGN_QUESTIONS B1 and B2 already note. Propose the layouts yourself using the existing tokens
+
+## 16. Assets to be supplied
+
+The icon sprite at `client/src/assets/icons/` covers almost everything the redesign calls for. The four below do not, and the repo rule is to stop and ask rather than draw a substitute, so they are listed here for Michael to supply.
+
+| File                    | Needed for                                                                 | Until it exists                                          |
+| ----------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `sun.svg`               | Light theme indicator                                                      | The switch uses the text label "Light" instead            |
+| `moon.svg`              | Dark theme indicator                                                       | The switch uses the text label "Dark" instead             |
+| `edit.svg`              | Message edit action — section 6 lists "reply, react, edit, delete"          | Edit has no icon and cannot be placed in the action row   |
+| `arrow-down.svg`        | The "jump to latest" pill in the conversation — section 6                   | The pill has no glyph and cannot be built                 |
+
+These are icon-sprite entries: same folder, imported with svgr, drawn to match the existing set.
+
+**Separately, the logo.** Not a sprite entry. A brand asset for the slot currently drawn as an empty dashed box in `components/landing/Logo.jsx`, which appears in the landing nav, the auth screens and the footer. When it arrives it replaces that slot directly; nothing else in the component changes. There is no `og:image` on the landing either, for the same reason — pointing a share card at a missing image renders worse than shipping a text-only one, so that gets added at the same time.
+
+Everything else the remaining phases need already exists in the sprite: `sent` and `pending` ticks, `reaction`, `pin`, `attach`, `mention`, `reply`, `decisions`, `tasks`, `notify`, `compose`, `menu`, `close`, `chevron-*` and the rest.
