@@ -35,7 +35,26 @@ const socketHandler = require('../utils/socketHandler');
 //   room-typing        { roomId, typingUserIds }
 //   typing             { roomId, userId }
 //   stop-typing        { roomId, userId }
-//   message-read       { roomId, messageId, userId }
+//   message-read       { roomId, messageId, userId, lastSeenAt }
+//                                   persists: advances room_members.last_seen_at
+//                                   and echoes the stored timestamp back, so the
+//                                   reader's own client adopts the server's value
+//                                   rather than guessing one.
+//   room-seen          { roomId, userId, lastSeenAt }
+//                                   emitted by PATCH /rooms/:roomId/seen, which
+//                                   is the other writer of last_seen_at. Both
+//                                   writers publish, so a read tick updates for
+//                                   everyone whether the reader arrived via the
+//                                   socket or the REST call.
+//   decision:pinned    { decision, scope, userId }
+//   decision:unpinned  { decision, scope, userId }
+//                                   from PUT /decisions/:decisionId/pin and
+//                                   DELETE .../pin/:scope. The decision carries
+//                                   pins.room, which is shared truth and identical
+//                                   for every viewer. It does NOT carry a finished
+//                                   pins.mine — that is per viewer, the same way
+//                                   reactions' `reacted` is, so each client fixes
+//                                   up its own from the acting userId.
 //   task:updated       { task }     emitted by POST /tasks and
 //                                   PATCH /tasks/:taskId/status
 //   message:updated    { message }  the whole edited row, from
@@ -234,15 +253,39 @@ function registerSocketHandlers(io) {
       socket.to(roomId).emit('stop-typing', { roomId, userId });
     });
 
-    // --- message-read: broadcast read receipt to the room ---
+    // --- message-read: advance the reader's pointer, then broadcast ---
     // Membership is checked because this previously relayed to any roomId the
     // client named, letting a user spoof read receipts into rooms they are not
-    // in. It still only broadcasts; nothing is persisted (see BACKEND_TASKS.md
-    // item I for a real read-receipt store).
+    // in.
+    //
+    // It now PERSISTS, which is the whole point. Before this, the socket
+    // broadcast and room_members.last_seen_at were two competing notions of
+    // "read": the event evaporated the moment the recipient's tab closed, while
+    // the durable pointer that unread_count and the digest filter against was
+    // only ever moved by PATCH /rooms/:roomId/seen. A read tick that vanishes
+    // on reload is not a receipt, it is a rumour. Both paths now write the same
+    // column, so there is one definition of read and it survives a restart.
+    //
+    // last_seen_at advances to NOW(), not to the read message's created_at:
+    // reading a room means reading everything up to the point you reached, and
+    // the newest message is a safe upper bound for what the reader has seen.
     onEvent('message-read', async ({ roomId, messageId }) => {
       if (!roomId || !messageId) return;
       if (!(await isMember(roomId, userId))) return;
-      socket.to(roomId).emit('message-read', { roomId, messageId, userId });
+
+      const result = await query(
+        `UPDATE room_members
+            SET last_seen_at = NOW()
+          WHERE room_id = $1 AND user_id = $2
+          RETURNING last_seen_at`,
+        [roomId, userId],
+      );
+      const lastSeenAt = result.rows[0]?.last_seen_at;
+
+      // Broadcast to the room including the sender, so the reader's own client
+      // converges on the same timestamp the server stored rather than assuming
+      // one. `.to()` would exclude them and leave their tick on a guess.
+      io.to(roomId).emit('message-read', { roomId, messageId, userId, lastSeenAt });
     });
 
     // --- heartbeat: refresh the user's presence TTL ---

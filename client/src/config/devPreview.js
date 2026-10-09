@@ -37,11 +37,17 @@ export const previewRoom = {
     is_deleted: false,
     created_at: "2026-10-08T09:37:00.000Z",
   },
+// `GET /rooms/:roomId` returns members in a richer shape than the chat-list
+// row: role, joined_at and last_seen_at. last_seen_at is the per-member read
+// pointer the delivery ticks are derived from, so without it every own message
+// in bypass mode renders permanently "Sent" and the whole tick feature is
+// unverifiable offline. last_seen_at is deliberately stale for Victor so his
+// messages read as unread and the tick can be seen changing.
   members: [
-    previewUser,
-    { id: "dev-victor", display_name: "Victor", avatar_url: null },
-    { id: "dev-priya", display_name: "Priya", avatar_url: null },
-    { id: "dev-daniel", display_name: "Daniel", avatar_url: null },
+    { ...previewUser, role: 'admin', last_seen_at: '2026-10-08T09:50:00.000Z' },
+    { id: 'dev-victor', display_name: 'Victor', avatar_url: null, role: 'member', last_seen_at: '2026-08-27T09:00:00.000Z' },
+    { id: 'dev-priya', display_name: 'Priya', avatar_url: null, role: 'member', last_seen_at: '2026-10-08T09:45:00.000Z' },
+    { id: 'dev-daniel', display_name: 'Daniel', avatar_url: null, role: 'member', last_seen_at: '2026-10-08T09:49:00.000Z' },
   ],
 };
 
@@ -69,17 +75,34 @@ export const previewDmRoom = {
     is_deleted: false,
     created_at: "2026-10-08T09:52:00.000Z",
   },
-  members: [previewUser, { id: "dev-victor", display_name: "Victor", avatar_url: null }],
+  members: [
+    { ...previewUser, role: 'admin', last_seen_at: '2026-10-08T10:00:00.000Z' },
+    { id: 'dev-victor', display_name: 'Victor', avatar_url: null, role: 'member', last_seen_at: '2026-10-08T09:52:00.000Z' },
+  ],
 };
 
+// Each field below corresponds to something phase 5 renders: `reactions` to the
+// chip row and picker, `edited_at` to the "edited" label, `is_deleted` to the
+// tombstone, `reply_to_id` to the reply preview, and `mentioned_user_ids` to the
+// @highlight — which is recorded, not inferred, so it is shown as data rather
+// than re-parsed out of the text.
 export const previewMessages = [
   {
     id: "dev-message-1",
     room_id: previewRoom.id,
     sender_id: previewUser.id,
     sender_name: "Amina Yusuf",
+    sender_avatar: null,
     content:
       "After testing both approaches, we'll keep Socket.IO for real-time events and REST for CRUD.",
+    reactions: [
+      { emoji: '👍', count: 2, reacted: true },
+      { emoji: '🎉', count: 1, reacted: false },
+    ],
+    mentioned_user_ids: [],
+    is_deleted: false,
+    edited_at: null,
+    reply_to_id: null,
     created_at: "2026-08-27T09:07:00.000Z",
   },
   {
@@ -87,8 +110,14 @@ export const previewMessages = [
     room_id: previewRoom.id,
     sender_id: "dev-victor",
     sender_name: "Victor",
+    sender_avatar: null,
     content:
       "Sounds good. This keeps our real-time path focused and reduces operational overhead.",
+    reactions: [],
+    mentioned_user_ids: [],
+    is_deleted: false,
+    edited_at: null,
+    reply_to_id: null,
     created_at: "2026-08-27T09:17:00.000Z",
   },
   {
@@ -96,8 +125,18 @@ export const previewMessages = [
     room_id: previewRoom.id,
     sender_id: previewUser.id,
     sender_name: "Amina Yusuf",
+    sender_avatar: null,
     content:
       "@Priya can you confirm deployment readiness for the API gateway changes today?",
+    reactions: [],
+    // The id, not the name: a mention means one person, and display names are
+    // not unique — two Priyas would both be notified by a name-only mention.
+    mentioned_user_ids: ["dev-priya"],
+    is_deleted: false,
+    // An edit that changed the text, so the "edited" label has something to
+    // describe. The timestamp is still the original creation time.
+    edited_at: "2026-08-27T09:31:00.000Z",
+    reply_to_id: null,
     created_at: "2026-08-27T09:27:00.000Z",
   },
   {
@@ -105,7 +144,14 @@ export const previewMessages = [
     room_id: previewRoom.id,
     sender_id: "dev-priya",
     sender_name: "Priya",
+    sender_avatar: null,
     content: "On it—validating the config and will update here by EOD.",
+    reactions: [{ emoji: '✅', count: 1, reacted: false }],
+    mentioned_user_ids: [],
+    is_deleted: false,
+    edited_at: null,
+    // A reply, so the preview bar and the in-timeline quote both render.
+    reply_to_id: "dev-message-3",
     created_at: "2026-08-27T09:37:00.000Z",
   },
   {
@@ -113,8 +159,13 @@ export const previewMessages = [
     room_id: previewRoom.id,
     sender_id: "dev-victor",
     sender_name: "Victor",
+    sender_avatar: null,
     content: "Here's the Q3 performance report.",
-    created_at: "2026-08-27T09:42:00.000Z",
+    reactions: [],
+    mentioned_user_ids: [],
+    is_deleted: false,
+    edited_at: null,
+    reply_to_id: null,
     attachments: [
       {
         id: "dev-att-1",
@@ -124,14 +175,20 @@ export const previewMessages = [
         url: "https://placehold.co/800x1100?text=Q3+Report",
       },
     ],
+    created_at: "2026-08-27T09:42:00.000Z",
   },
   {
     id: "dev-message-6",
     room_id: previewRoom.id,
     sender_id: previewUser.id,
     sender_name: "Amina Yusuf",
+    sender_avatar: null,
     content: "Screenshot from the staging deploy:",
-    created_at: "2026-08-27T09:45:00.000Z",
+    reactions: [{ emoji: '👍', count: 1, reacted: false }],
+    mentioned_user_ids: [],
+    is_deleted: false,
+    edited_at: null,
+    reply_to_id: null,
     attachments: [
       {
         id: "dev-att-2",
@@ -141,14 +198,20 @@ export const previewMessages = [
         url: "https://placehold.co/1200x800?text=Staging+Deploy",
       },
     ],
+    created_at: "2026-08-27T09:45:00.000Z",
   },
   {
     id: "dev-message-7",
     room_id: previewRoom.id,
     sender_id: "dev-daniel",
     sender_name: "Daniel",
+    sender_avatar: null,
     content: "",
-    created_at: "2026-08-27T09:48:00.000Z",
+    reactions: [],
+    mentioned_user_ids: [],
+    is_deleted: false,
+    edited_at: null,
+    reply_to_id: null,
     attachments: [
       {
         id: "dev-att-3",
@@ -165,6 +228,24 @@ export const previewMessages = [
         url: "https://placehold.co/600x400?text=changelog.md",
       },
     ],
+    created_at: "2026-08-27T09:48:00.000Z",
+  },
+  // A tombstone. Deleted messages are kept in the list by the server as a
+  // soft delete, so rendering nothing here would make a conversation jump
+  // together with no sign that something was removed.
+  {
+    id: "dev-message-8",
+    room_id: previewRoom.id,
+    sender_id: "dev-victor",
+    sender_name: "Victor",
+    sender_avatar: null,
+    content: "",
+    reactions: [],
+    mentioned_user_ids: [],
+    is_deleted: true,
+    edited_at: null,
+    reply_to_id: null,
+    created_at: "2026-08-27T09:50:00.000Z",
   },
 ];
 
@@ -176,6 +257,11 @@ export const previewMessages = [
 // every room I'm in" yet — that's what the backend needs to add. room_name/room_slug
 // below are join fields such an endpoint would need to return; rooms has no slug column,
 // so this is display-only, same convenience as sender_name on previewMessages.
+// `pins` mirrors the wire shape decisionPin.service.attachPins builds: `room` is
+// shared truth (one pinner, same for everyone), `mine` is the viewer's own scopes
+// and is a list because a decision can be both room-pinned and bookmarked. The
+// three entries below cover one of each state so the strip can be read at a
+// glance: room-pinned, bookmarked only, and neither.
 export const previewDecisions = [
   {
     id: "dev-decision-1",
@@ -189,6 +275,10 @@ export const previewDecisions = [
     created_by: "dev-victor",
     author_name: "Victor",
     created_at: "2026-08-20T00:00:00.000Z",
+    pins: {
+      room: { user_id: previewUser.id, display_name: previewUser.display_name, pinned_at: '2026-10-08T09:00:00.000Z' },
+      mine: ['user', 'room'],
+    },
   },
   {
     id: "dev-decision-2",
@@ -202,6 +292,7 @@ export const previewDecisions = [
     created_by: "dev-victor",
     author_name: "Victor",
     created_at: "2026-08-19T00:00:00.000Z",
+    pins: { room: null, mine: [] },
   },
   {
     id: "dev-decision-3",
@@ -215,6 +306,7 @@ export const previewDecisions = [
     created_by: "dev-victor",
     author_name: "Victor",
     created_at: "2026-08-18T00:00:00.000Z",
+    pins: { room: null, mine: [] },
   },
 ];
 
@@ -270,18 +362,43 @@ export const previewSocket = {
     listeners.get(event)?.delete(handler);
   },
   emit(event, payload = {}) {
-    if (event !== "send-message") return;
+    // Typing is echoed back as room-typing so the indicator renders offline.
+    // `stop-typing` is dropped deliberately: sending clears the sender's typing
+    // state, and echoing it would put them straight back on the list.
+    if (event === 'typing') {
+      queueMicrotask(() =>
+        listeners
+          .get('room-typing')
+          ?.forEach((handler) =>
+            handler({ roomId: payload.roomId, typingUserIds: [previewUser.id] }),
+          ),
+      );
+      return;
+    }
+    if (event === 'stop-typing') return;
+    if (event !== 'send-message') return;
+
     const message = {
       id: `dev-message-${Date.now()}`,
       room_id: payload.roomId,
       sender_id: previewUser.id,
       sender_name: previewUser.display_name,
-      content: payload.content,
+      sender_avatar: null,
+      content: payload.content || '',
+      // Carried through so an offline send with an attachment, a reply or a
+      // mention still renders the way a real one would. Dropping them here
+      // would make bypass mode agree with the wire only for plain text.
+      attachments: payload.attachments || [],
+      reply_to_id: payload.replyToId || null,
+      mentioned_user_ids: payload.mentionedUserIds || [],
+      reactions: [],
+      is_deleted: false,
+      edited_at: null,
       created_at: new Date().toISOString(),
     };
     queueMicrotask(() =>
       listeners
-        .get("receive-message")
+        .get('receive-message')
         ?.forEach((handler) => handler({ message })),
     );
   },

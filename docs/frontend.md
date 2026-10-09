@@ -34,7 +34,7 @@ Flow: Landing page, then Sign in, then the **Chats list**, then a Conversation.
 - The sidebar item labelled "Invite members" pointed at `/settings`. It now points at `/new`, and Settings has its own item.
 - `/digest` had no entry point anywhere in the UI. It is a rail item now, and the chat list has a Catch-up card linking to it.
 - Navbar search and bell were inert buttons. Search writes `?q=` onto `/chats`; the bell links to `/notifications`. Both carry a real unread count.
-- Opening a room never marked it read. `Room` now calls `PATCH /rooms/:roomId/seen` on open, optimistically zeroing the badge first.
+- Opening a room never marked it read. `Room` now calls `POST /rooms/:roomId/seen` on open, optimistically zeroing the badge first.
 - `chat:updated` was emitted by the server and ignored by the client. `ChatsContext` consumes it.
 - Pin and mute exist as row actions, stored per browser in `localStorage`. There is no backend for either — see section 6.
 
@@ -49,7 +49,7 @@ Flow: Landing page, then Sign in, then the **Chats list**, then a Conversation.
 **Chat**
 
 - The backend supports edit, delete, reactions, attachments and structured mentions. The UI has none of these. Attach and mention buttons are inert and the composer has a fixed height.
-- Opening a room calls `PATCH /rooms/:roomId/seen` (the audit above said `POST`; the route is a PATCH).
+- Opening a room calls `POST /rooms/:roomId/seen`. Worth stating plainly because it was wrong for a while: phase 4 shipped this as `api.patch`, but the route is registered as POST (`rooms.routes.js`), so every call 404'd and the badge cleared only from the optimistic update. Fixed in phase 5.
 - Avatars, Modal, Textarea, Select and Badge are shared components from phase 2. Presence dots are not drawn: the client does not subscribe to room presence, so a green dot would be invented.
 
 ## 4. Routes
@@ -168,7 +168,7 @@ Planned follow-up: lift `useNotifications` into a `NotificationsProvider` so the
 2. **Foundations:** refreshed tokens, dark mode, shared components (Avatar with presence, Badge, Modal and bottom sheet, Tabs, Skeleton, Toast).
 3. **Landing page and auth redesign.**
 4. **Chats shell (DONE):** routing, chat list, responsive panes, bottom nav and rail. Also took the room-seen call out of phase 5, because the unread badge cannot be judged without it.
-5. **Conversation upgrade:** bubbles, actions, reactions, edit and delete, uploads, mentions.
+5. **Conversation upgrade (DONE):** bubbles, grouping, ticks, typing, actions, reactions, edit and delete, uploads, mentions, pinned decision strip. Backend work was confirmed and included: migration 014, `decisionPin.service.js`, pin routes, and `message-read` now persisting `last_seen_at` instead of being memory-only.
 6. **Decisions, Tasks, Digest, Notifications:** real API, create and status actions, integrated into chat.
 7. **Settings, Profile edit, New chat, member management.**
 8. **QA** at 360, 390, 768, 1024, 1280 and 1440 widths, plus accessibility.
@@ -193,35 +193,39 @@ Delivery style: code written in chat, one file at a time, grouped by phase. No f
    - ~~Tagline and tone (draft: "Messaging that survives the scroll").~~ **Answered: keep the draft tagline.**
    - ~~Logo, or is the "CONCLAVE" wordmark enough?~~ **Answered: a logo file will be supplied later; render a placeholder slot in the nav until it arrives.** No logo asset exists in `client/src/assets/` today — only the icon sprite.
    - ~~Include pricing, Privacy and Terms pages, or only footer placeholders?~~ **Answered: footer placeholders only.** They render an empty shell rather than a written page; pricing especially needs copy that does not exist.
-5. **Read receipts:** confirm that v1 ships "sent" ticks only, with persisted read receipts deferred.
-6. **Search scope:** confirm room search first, global search later.
+5. ~~**Read receipts:** confirm that v1 ships "sent" ticks only, with persisted read receipts deferred.~~ **Answered in phase 5: shipped, and made persistent.** `message-read` now writes `room_members.last_seen_at` rather than only emitting, so the tick survives a reload. It means "at least one other member has caught up", not everyone.
+6. **Search scope:** confirm room search first, global search later. Still open — room-level message search is built server-side but not yet used by any client surface.
 
 Questions 5 and 6 are parked until the phases that need them (5 and 4 respectively). Questions 2 and 4 were needed for phase 3 and are now answered above.
 
 ## 14. Next step
 
-Phases 1 to 4 are complete (commits `0d91968`, `bed546b`, `e92f530`; phase 4 is built and verified but not yet committed). **Phase 5 — conversation upgrade.**
+Phases 1 to 5 are complete (commits `0d91968`, `bed546b`, `e92f530`; phases 4 and 5 are built and verified but not yet committed). **Phase 6 — Decisions, Tasks, Digest, Notifications.**
 
-Phase 4 left the following, and phase 5 should not re-litigate them:
+Phase 5 left the following, and phase 6 should not re-litigate them:
 
-- The filter chips and the search field write `?filter=` and `?q=` onto `/chats` rather than holding React state, so `/dms` is a redirect into the same list instead of a second implementation. Keep it that way.
-- Pin and mute are `localStorage` only, under `conclave-pinned-rooms` and `conclave-muted-rooms`, behind `lib/localRoomPrefs.js`. Any backend for them replaces that one module. The chat-row menu says "Saved on this device" so the limitation is visible rather than implied.
-- `unreadTotal` excludes muted rooms, matching the per-row badge. If that ever changes, change both.
-- The header search lands on `/chats` even when a room is open, because `?q=` is only meaningful to the list.
-- `RoomInfo` and `NewChat` are stubs with working routes and working links into them. They are not half-built.
+- Sending goes over the socket (`send-message`), never `POST /messages`. Both write through the same service, but only the socket handler emits `receive-message`, so a REST send leaves every other member's open conversation stale. This is not an optimisation choice.
+- `message-read` now persists `room_members.last_seen_at` and emits to the whole room. The read tick is derived by comparing that pointer to the message timestamp — a room-level fact, not a stored per-message one, which is why it survives a reload.
+- Read ticks mean "at least one other member has caught up", not everyone. In a room of forty, waiting for unanimous catch-up means a tick that almost never appears.
+- Mentions send `mentionedUserIds` (ids, not names). Display names are not unique; the name-only inference path is documented as temporary and wrong.
+- Attachments upload on pick, not on send. A 25MB failure discovered after the message is composed loses the message with the file.
+- Reaction allowlist is `👍 👎 🎉 ✅` — no heart, because ❤️ has two encodings and Postgres treats them as different strings.
+- `isComposing` (and the `keyCode === 229` fallback) must gate Enter. Enter commits an IME character; sending on it eats the character just chosen.
+- The pinned strip drives off the `pins` object the server attaches to every decision and off `decision:pinned` / `decision:unpinned`, both of which carry a whole decision — a replace, not a filter.
+- `decorateMessages` in `lib/messageMeta.js` is the single source of grouping, day labels and read status. Do not re-derive them in a component.
 
-Build order, one file at a time, verified with `npm test` and `npm run build` after each:
+**Known gaps this phase does not close.** These are open, not oversights:
 
-1. Message bubbles — own right in brand, others left on soft surface, consecutive grouping, tails on the last only.
-2. Timeline chrome — day separators, sent/pending ticks, typing dots, "jump to latest" pill.
-3. Message actions — reply, react, edit, delete, with the server's `PATCH` and `DELETE` on `messages`.
-4. Composer — grow to ~5 lines, Enter to send with IME safety.
-5. Attachments and mentions — `POST /rooms/:roomId/messages` with `attachmentIds` and `mentionedUserIds`.
-6. Pinned decision strip under the room header.
+- **No per-decision detail route.** `PinnedDecisionStrip` links to `/decisions` because nothing resolves a single decision. Adding `GET /decisions/:id` and a route is the honest fix; inventing a URL that 404s to the landing page is not.
+- **The Decisions page is still a placeholder.** It renders `previewDecisions` or an empty state and never calls `listRoomDecisions`, so the strip is currently the only real consumer of decisions data.
+- **No chat-list presence dots.** `room-presence` on join is a complete roster but `user-online` / `user-offline` are deltas with no initial roster, so a global presence map cannot be built without lying. `PresenceContext` is deliberately room-scoped and only draws dots in the open conversation.
+- **Reply targets degrade when unloaded.** There is no `GET /messages/:id`, so a reply to a message outside the loaded window renders "an earlier message" rather than fetching.
+- **The navbar unread badge is the room unread total, not a notifications count.** `GET /notifications` returns a paged feed with no unread aggregate, so any other number would be invented.
+- **Room-level message search (`GET /messages/room/:roomId/search`) is unused.** The header search matches room names only, because that endpoint cannot search across rooms.
 
-**Known gaps this phase does not close.** Presence dots are not drawn because the client never subscribes to room presence. The navbar unread badge is the room unread total, not a notifications count — `GET /notifications` returns a paged feed with no unread aggregate, so any other number would be invented. Room-level message search (`GET /messages/room/:roomId/search`) is unused; the header search matches room names only, because that endpoint cannot search across rooms.
+**Bundle-size finding (DECIDED: leave alone).** Each file in `client/src/assets/icons/` is ~8 kB, of which ~97% is an embedded `<metadata>` C2PA provenance manifest; only ~270 bytes is the actual path. svgr carries that manifest into the bundle as a JSX string, so every distinct icon imported costs ~8 kB. Phases 4 and 5 went from 28 to 43 distinct icons, and the main chunk grew from 484 kB to 637 kB — roughly 116 kB of that is manifest text. Stripping `<metadata>` from the 90 icons would have cut the icon payload by ~92% (~665 kB of source), but it was considered and **explicitly declined** — the manifests stay. The practical consequence for later phases: every new icon import is a ~8 kB cost, so reuse existing glyphs rather than adding near-duplicates, and treat the chunk warning as expected rather than as a regression.
 
-Working rule for this build: **no visual tests until Michael gives confirmation.** Verification is `npm test` and `npm run build` only. Phase 4 is almost entirely layout and is therefore the phase most likely to be wrong in ways those two commands cannot see.
+Working rule for this build: **no visual tests until Michael gives confirmation.** Verification is `npm test` and `npm run build` only. Phases 4 and 5 are almost entirely layout and are therefore the phases most likely to be wrong in ways those two commands cannot see.
 
 ## 15. Early-session audit and Notifications draft
 

@@ -16,13 +16,16 @@ export async function getRoom(roomId) {
 /**
  * Mark a room read.
  *
- * The server advances room_members.last_seen_at, which is what both the
- * unread_count on the chat row and the time window of GET /digest filter
- * against — so this call is what stops a room re-counting itself as unread
- * and what empties the catch-up card for that room.
+ * POST, not PATCH — the server registers `/:roomId/seen` as POST, and a wrong
+ * method is a 404 that looks exactly like a missing endpoint.
+ *
+ * The server advances room_members.last_seen_at and emits `room-seen` to the
+ * room, which is what stops a room re-counting itself as unread, what empties
+ * the catch-up card for that room, and what advances the read pointer other
+ * members' clients draw their ticks from.
  */
 export async function markRoomSeen(roomId) {
-  if (isDevAuthBypass) return { updated: 1 };
-  const { data } = await api.patch(`/rooms/${roomId}/seen`);
+  if (isDevAuthBypass) return { lastSeenAt: new Date().toISOString() };
+  const { data } = await api.post(`/rooms/${roomId}/seen`);
   return data.data;
 }

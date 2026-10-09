@@ -134,7 +134,7 @@ const dbTest = test;
 const TABLES = [
   'rooms', 'users', 'messages', 'attachments', 'decisions', 'tasks',
   'room_members', 'message_reactions', 'notifications', 'refresh_tokens',
-  'file_uploads',
+  'file_uploads', 'decision_pins',
 ];
 
 // --- Schema ------------------------------------------------------------------
@@ -2937,4 +2937,329 @@ dbTest('create, edit and delete all refresh the chat list', async () => {
   const plain = await createMessage({ roomId: chat.id, senderId: me.userId, content: 'no socket' });
   assert.ok(plain.id, 'a send without io still lands');
   assert.equal(refreshes().length, 3, 'and emits nothing');
+});
+
+// --- Decision pins (phase 5) -------------------------------------------------
+
+async function promoteVia(token, payload) {
+  const res = await fetch(`${baseUrl}/api/decisions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 201, body);
+  return JSON.parse(body).data;
+}
+
+async function pinVia(token, decisionId, scope) {
+  return fetch(`${baseUrl}/api/decisions/${decisionId}/pin`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ scope }),
+  });
+}
+
+async function unpinVia(token, decisionId, scope) {
+  return fetch(`${baseUrl}/api/decisions/${decisionId}/pin/${scope}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+async function listDecisionsVia(token, roomId) {
+  const url = roomId
+    ? `${baseUrl}/api/decisions?roomId=${roomId}`
+    : `${baseUrl}/api/decisions`;
+  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  return JSON.parse(body).data.decisions;
+}
+
+dbTest('a decision can hold at most one room pin', async () => {
+  // Asserted against the index rather than the endpoint, because the endpoint
+  // answers 409 by reading the row first — so a broken unique index would still
+  // look green from HTTP and only fail once two writes raced.
+  //
+  // The primary key is itself a unique index, so it is excluded explicitly;
+  // matching on indexdef alone finds two and asserts the wrong thing.
+  const { rows } = await query(
+    `SELECT pg_get_indexdef(i.indexrelid) AS indexdef
+       FROM pg_index i
+       JOIN pg_class c ON c.oid = i.indrelid
+      WHERE c.relname = 'decision_pins'
+        AND i.indisunique
+        AND NOT i.indisprimary`,
+  );
+  assert.equal(rows.length, 1, 'expected exactly one unique index beyond the primary key');
+  assert.match(rows[0].indexdef, /scope = 'room'/, 'the uniqueness is on the room scope');
+});
+
+dbTest('a personal pin is visible only to its author', async () => {
+  const me = await authedAccount('pin-user-me@test.com');
+  const them = await authedAccount('pin-user-them@test.com');
+  const room = await createRoomVia(me.token, { name: 'Pin User Room', memberIds: [them.userId] });
+  const decision = await promoteVia(me.token, {
+    roomId: room.id, title: 'Ship it', body: 'We ship on Friday.',
+  });
+
+  const res = await pinVia(me.token, decision.id, 'user');
+  assert.equal(res.status, 200, await res.text());
+
+  const mine = (await listDecisionsVia(me.token, room.id)).find((d) => d.id === decision.id);
+  assert.deepEqual(mine.pins.mine, ['user'], 'the author sees their own bookmark');
+  assert.equal(mine.pins.room, null, 'a personal pin never appears as a room pin');
+
+  const theirs = (await listDecisionsVia(them.token, room.id)).find((d) => d.id === decision.id);
+  assert.deepEqual(theirs.pins.mine, [], 'another member does not inherit the bookmark');
+  assert.equal(theirs.pins.room, null);
+});
+
+dbTest('a room pin is visible to every member and names its author', async () => {
+  const me = await authedAccount('pin-room-me@test.com');
+  const them = await authedAccount('pin-room-them@test.com');
+  const room = await createRoomVia(me.token, { name: 'Pin Room Room', memberIds: [them.userId] });
+  const decision = await promoteVia(me.token, {
+    roomId: room.id, title: 'Freeze the API', body: 'No contract changes this sprint.',
+  });
+
+  assert.equal((await pinVia(me.token, decision.id, 'room')).status, 200);
+
+  const theirs = (await listDecisionsVia(them.token, room.id)).find((d) => d.id === decision.id);
+  assert.equal(theirs.pins.room.user_id, me.userId, 'the room pin names who set it');
+  assert.ok(theirs.pins.room.display_name, 'and carries a name the strip can render');
+  assert.deepEqual(theirs.pins.mine, [], 'but it is not the viewer\'s own action');
+
+  const mine = (await listDecisionsVia(me.token, room.id)).find((d) => d.id === decision.id);
+  assert.deepEqual(mine.pins.mine, ['room'], 'the pinner may take their own pin back');
+});
+
+dbTest('a second room pinner is rejected and told who holds the pin', async () => {
+  const me = await authedAccount('pin-conflict-me@test.com');
+  const them = await authedAccount('pin-conflict-them@test.com');
+  const room = await createRoomVia(me.token, { name: 'Pin Conflict Room', memberIds: [them.userId] });
+  const decision = await promoteVia(me.token, {
+    roomId: room.id, title: 'Adopt the RFC', body: 'RFC 4 is accepted.',
+  });
+
+  await pinVia(me.token, decision.id, 'room');
+
+  const res = await pinVia(them.token, decision.id, 'room');
+  const conflict = await res.text();
+  assert.equal(res.status, 409, conflict);
+  assert.match(
+    JSON.parse(conflict).message,
+    /Already pinned to the room by/,
+    'the 409 names the holder',
+  );
+
+  // And the original owner is unchanged — the conflict did not silently
+  // transfer the pin to the person who was refused.
+  const current = (await listDecisionsVia(me.token, room.id)).find((d) => d.id === decision.id);
+  assert.equal(current.pins.room.user_id, me.userId);
+});
+
+dbTest('re-pinning your own scope is idempotent', async () => {
+  const me = await authedAccount('pin-idem@test.com');
+  const room = await createRoomVia(me.token, { name: 'Pin Idem Room' });
+  const decision = await promoteVia(me.token, {
+    roomId: room.id, title: 'Rename the staging box', body: 'staging-2 from now on.',
+  });
+
+  assert.equal((await pinVia(me.token, decision.id, 'user')).status, 200);
+  const second = await pinVia(me.token, decision.id, 'user');
+  assert.equal(second.status, 200, 'a repeat PUT is not an error');
+
+  const pins = (await listDecisionsVia(me.token, room.id)).find((d) => d.id === decision.id);
+  assert.deepEqual(pins.pins.mine, ['user'], 'still exactly one bookmark, not two');
+});
+
+dbTest('you cannot remove another member\'s personal pin', async () => {
+  const me = await authedAccount('pin-protect-me@test.com');
+  const them = await authedAccount('pin-protect-them@test.com');
+  const room = await createRoomVia(me.token, { name: 'Pin Protect Room', memberIds: [them.userId] });
+  const decision = await promoteVia(me.token, {
+    roomId: room.id, title: 'Keep the old endpoint', body: 'It is still load-bearing.',
+  });
+
+  await pinVia(them.token, decision.id, 'user');
+
+  // The author of the decision is also the room admin, and still cannot touch
+  // somebody else's private bookmark — that is the point of it being private.
+  const res = await unpinVia(me.token, decision.id, 'user');
+  assert.equal(res.status, 403, await res.text());
+
+  const still = (await listDecisionsVia(them.token, room.id)).find((d) => d.id === decision.id);
+  assert.deepEqual(still.pins.mine, ['user'], 'the bookmark survived');
+});
+
+dbTest('a room admin may remove someone else\'s room pin; a plain member may not', async () => {
+  const admin = await authedAccount('pin-admin@test.com');
+  const pinner = await authedAccount('pin-admin-pinner@test.com');
+  const bystander = await authedAccount('pin-admin-bystander@test.com');
+  const room = await createRoomVia(admin.token, {
+    name: 'Pin Admin Room', memberIds: [pinner.userId, bystander.userId],
+  });
+  const decision = await promoteVia(admin.token, {
+    roomId: room.id, title: 'Deprecate v1', body: 'v1 goes away in March.',
+  });
+
+  await pinVia(pinner.token, decision.id, 'room');
+
+  // A plain member who did not set it is refused: the pin is shared state, but
+  // it is not unowned.
+  const refused = await unpinVia(bystander.token, decision.id, 'room');
+  assert.equal(refused.status, 403, await refused.text());
+
+  // The admin can, which is what stops a pin left behind by a departed member
+  // from being permanent.
+  const removed = await unpinVia(admin.token, decision.id, 'room');
+  assert.equal(removed.status, 200, await removed.text());
+
+  const current = (await listDecisionsVia(admin.token, room.id)).find((d) => d.id === decision.id);
+  assert.equal(current.pins.room, null, 'the room pin is gone');
+});
+
+dbTest('the pinner may remove their own room pin without being an admin', async () => {
+  const me = await authedAccount('pin-self@test.com');
+  const them = await authedAccount('pin-self-them@test.com');
+  const room = await createRoomVia(me.token, { name: 'Pin Self Room', memberIds: [them.userId] });
+  const decision = await promoteVia(me.token, {
+    roomId: room.id, title: 'Split the monolith', body: 'Service per bounded context.',
+  });
+
+  await pinVia(them.token, decision.id, 'room');
+  // `them` is a plain member, and removing their own pin needs no elevated role.
+  assert.equal((await unpinVia(them.token, decision.id, 'room')).status, 200);
+});
+
+dbTest('unpinning a pin that does not exist succeeds with nothing to report', async () => {
+  const me = await authedAccount('pin-absent@test.com');
+  const room = await createRoomVia(me.token, { name: 'Pin Absent Room' });
+  const decision = await promoteVia(me.token, {
+    roomId: room.id, title: 'Nothing to unpin', body: 'Still a decision though.',
+  });
+
+  const res = await unpinVia(me.token, decision.id, 'room');
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  assert.equal(JSON.parse(body).data.unpinned, false, 'a no-op reports itself rather than 404ing');
+});
+
+dbTest('pinning a decision in a room you are not a member of is refused', async () => {
+  const owner = await authedAccount('pin-outsider-owner@test.com');
+  const outsider = await authedAccount('pin-outsider@test.com');
+  const room = await createRoomVia(owner.token, { name: 'Pin Outsider Room' });
+  const decision = await promoteVia(owner.token, {
+    roomId: room.id, title: 'Members only', body: 'Even for bookmarks.',
+  });
+
+  const res = await pinVia(outsider.token, decision.id, 'user');
+  assert.equal(res.status, 403, await res.text());
+});
+
+dbTest('an unknown pin scope is a 400, not a silent personal pin', async () => {
+  const me = await authedAccount('pin-scope@test.com');
+  const room = await createRoomVia(me.token, { name: 'Pin Scope Room' });
+  const decision = await promoteVia(me.token, {
+    roomId: room.id, title: 'Bad scope', body: 'Needs validating.',
+  });
+
+  const res = await pinVia(me.token, decision.id, 'everyone');
+  assert.equal(res.status, 400, await res.text());
+});
+
+dbTest('pinning publishes decision:pinned with shared truth, not a per-viewer payload', async () => {
+  const me = await authedAccount('pin-emit@test.com');
+  const room = await createRoomVia(me.token, { name: 'Pin Emit Room' });
+  const decision = await promoteVia(me.token, {
+    roomId: room.id, title: 'Emit the pin', body: 'So other clients update.',
+  });
+
+  const { pinDecision, unpinDecision } = require('../src/services/decisionPin.service');
+  const { captured, io } = captureEmitIo();
+
+  await pinDecision({ decisionId: decision.id, userId: me.userId, scope: 'room', io });
+  const pinned = captured.find((c) => c.event === 'decision:pinned');
+  assert.ok(pinned, 'a pin is announced to the room');
+  assert.equal(pinned.room, room.id);
+  assert.equal(pinned.payload.scope, 'room');
+  assert.equal(pinned.payload.userId, me.userId, 'the actor is named so each client can fix up its own mine');
+  assert.equal(pinned.payload.decision.pins.room.user_id, me.userId, 'shared truth rides along');
+  // pins.mine in this payload is computed for the ACTOR, who happens to be the
+  // viewer in a single-user test. Other clients must not copy it: it is per
+  // viewer, exactly like reactions' `reacted`, and each one derives its own
+  // from the userId above.
+  assert.ok(Array.isArray(pinned.payload.decision.pins.mine), 'mine is present as an array');
+
+  await unpinDecision({ decisionId: decision.id, userId: me.userId, scope: 'room', io });
+  const unpinned = captured.find((c) => c.event === 'decision:unpinned');
+  assert.ok(unpinned, 'an unpin is announced too');
+  assert.equal(unpinned.payload.decision.pins.room, null, 'and carries the now-empty room pin');
+});
+
+// --- Persistent read receipts (phase 5) --------------------------------------
+
+// The route is POST, not PATCH — easy to get wrong, and a wrong method is a
+// 404 that looks exactly like a missing endpoint.
+async function markSeenVia(token, roomId) {
+  return fetch(`${baseUrl}/api/rooms/${roomId}/seen`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+dbTest('markRoomSeen publishes room-seen with the timestamp it stored', async () => {
+  const app = require('../src/app');
+  const { captured, io } = captureEmitIo();
+  app.set('io', io);
+
+  const me = await authedAccount('seen-emit-me@test.com');
+  const them = await authedAccount('seen-emit-them@test.com');
+  const room = await createRoomVia(me.token, { name: 'Seen Emit Room', memberIds: [them.userId] });
+
+  const res = await markSeenVia(me.token, room.id);
+  const body = await res.text();
+  assert.equal(res.status, 200, body);
+  const stored = JSON.parse(body).data.lastSeenAt;
+
+  const event = captured.find((c) => c.event === 'room-seen');
+  assert.ok(event, 'the REST path announces the advance, so ticks update for everyone');
+  assert.equal(event.room, room.id);
+  assert.equal(event.payload.userId, me.userId);
+  assert.equal(
+    new Date(event.payload.lastSeenAt).getTime(),
+    new Date(stored).getTime(),
+    'the echoed timestamp is the one actually stored, not a second guess',
+  );
+
+  app.set('io', undefined);
+});
+
+dbTest('an advanced last_seen_at is what another member reads back', async () => {
+  const me = await authedAccount('seen-read-me@test.com');
+  const them = await authedAccount('seen-read-them@test.com');
+  const room = await createRoomVia(me.token, { name: 'Seen Read Room', memberIds: [them.userId] });
+  await sendVia(me.token, room.id, 'something to have read');
+
+  const before = await fetch(`${baseUrl}/api/rooms/${room.id}`, {
+    headers: { authorization: `Bearer ${them.token}` },
+  });
+  const beforeMember = JSON.parse(await before.text()).data.members
+    .find((m) => m.id === me.userId);
+
+  await new Promise((r) => setTimeout(r, 15));
+  assert.equal((await markSeenVia(me.token, room.id)).status, 200);
+
+  const after = await fetch(`${baseUrl}/api/rooms/${room.id}`, {
+    headers: { authorization: `Bearer ${them.token}` },
+  });
+  const afterMember = JSON.parse(await after.text()).data.members
+    .find((m) => m.id === me.userId);
+
+  assert.ok(
+    new Date(afterMember.last_seen_at) > new Date(beforeMember.last_seen_at),
+    'the read pointer moved forward and another member can see it — which is what makes a read tick survive a reload',
+  );
 });

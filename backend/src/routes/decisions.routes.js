@@ -5,6 +5,8 @@ const {
   promoteToDecision,
   listDecisions,
   searchDecisions,
+  pinDecision,
+  unpinDecision,
 } = require('../controllers/decisions.controller');
 
 const router = Router();
@@ -19,5 +21,9 @@ router.get('/room/:roomId', (req, res, next) => {         // backward-compatible
   return listDecisions(req, res, next);
 });
 router.get('/room/:roomId/search', searchDecisions);
+// Registered after the room routes above so `/room/:roomId` cannot swallow
+// `/:decisionId`. Both are path-parameter handlers on the decision itself.
+router.put('/:decisionId/pin', pinDecision);             // { scope: 'user' | 'room' }
+router.delete('/:decisionId/pin/:scope', unpinDecision);
 
 module.exports = router;

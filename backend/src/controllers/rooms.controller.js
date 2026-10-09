@@ -445,10 +445,17 @@ const addMember = asyncHandler(async (req, res) => {
 });
 
 // ---------- markRoomSeen ----------
-// Stamps room_members.last_seen_at for the caller. This is the only writer of
-// that column, and the digest depends on it: until it moves, every digest
-// reports everything since the user joined the room (BACKEND_TASKS.md Bug 2).
-// Called by the client when a room is opened, and by the socket on leave-room.
+// Stamps room_members.last_seen_at for the caller. This is the only REST
+// writer of that column, and the digest depends on it: until it moves, every
+// digest reports everything since the user joined the room (BACKEND_TASKS.md
+// Bug 2). Called by the client when a room is opened, and by the socket on
+// leave-room.
+//
+// It now emits `room-seen` to the room. Without this there were two writers of
+// last_seen_at — this route and the message-read socket event — and only one
+// of them told anybody. A read tick on another member's screen would therefore
+// update when they scrolled a room live and stay stale when they opened it,
+// which is the same bug from two directions.
 const markRoomSeen = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
 
@@ -464,7 +471,12 @@ const markRoomSeen = asyncHandler(async (req, res) => {
     throw new ApiError(403, "You are not a member of this room");
   }
 
-  return ok(res, { roomId, lastSeenAt: result.rows[0].last_seen_at });
+  const lastSeenAt = result.rows[0].last_seen_at;
+
+  const io = req.app.get('io');
+  if (io) io.to(roomId).emit('room-seen', { roomId, userId: req.user.id, lastSeenAt });
+
+  return ok(res, { roomId, lastSeenAt });
 });
 
 module.exports = { createRoom, listRooms, getRoom, addMember, markRoomSeen };

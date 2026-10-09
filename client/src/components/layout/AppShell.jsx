@@ -4,6 +4,7 @@ import { ChatsProvider } from '@/contexts/ChatsContext';
 import Navbar from '../Navbar';
 import BottomNav from './BottomNav';
 import NavRail from './NavRail';
+import { PresenceProvider } from '@/contexts/PresenceContext';
 
 /**
  * The app shell.
@@ -37,33 +38,38 @@ export default function AppShell() {
     // ChatsProvider sits here rather than at the root so the rooms request is
     // only made once the session is known to be valid. At the root it would
     // fire on the landing page too, and fail for everyone who is not signed in.
-    <ChatsProvider>
-      <div className="grid h-dvh min-h-0 grid-cols-1 bg-canvas text-ink md:grid-cols-[240px_1fr] lg:grid-cols-[248px_1fr]">
-        <aside className="hidden min-h-0 border-r border-line bg-surface md:block">
-          <NavRail />
-        </aside>
+    <PresenceProvider>
+      <ChatsProvider>
+        <div className="grid h-dvh min-h-0 grid-cols-1 bg-canvas text-ink md:grid-cols-[240px_1fr] lg:grid-cols-[248px_1fr]">
+          <aside className="hidden min-h-0 border-r border-line bg-surface md:block">
+            <NavRail />
+          </aside>
 
-        <div className="grid min-h-0 grid-rows-[auto_1fr_auto]">
-          <Navbar roomHeader={roomHeader} onMenuClick={() => setDrawerOpen(true)} />
-          <main className="min-h-0 min-w-0 bg-surface">
-            <Outlet context={{ setRoomHeader }} />
-          </main>
-          <BottomNav />
-        </div>
-
-        {drawerOpen && (
-          <div className="fixed inset-0 z-50 md:hidden">
-            <div
-              className="absolute inset-0 overscroll-contain bg-ink/40"
-              onClick={() => setDrawerOpen(false)}
-              aria-hidden="true"
+          <div className="grid min-h-0 grid-rows-[auto_1fr_auto]">
+            <Navbar
+              roomHeader={roomHeader}
+              onMenuClick={() => setDrawerOpen(true)}
             />
-            <div className="absolute left-0 top-0 h-full w-[220px] overscroll-contain border-r border-line bg-surface shadow-modal">
-              <NavRail onNavigate={() => setDrawerOpen(false)} />
-            </div>
+            <main className="min-h-0 min-w-0 bg-surface">
+              <Outlet context={{ setRoomHeader }} />
+            </main>
+            <BottomNav />
           </div>
-        )}
-      </div>
-    </ChatsProvider>
+
+          {drawerOpen && (
+            <div className="fixed inset-0 z-50 md:hidden">
+              <div
+                className="absolute inset-0 overscroll-contain bg-ink/40"
+                onClick={() => setDrawerOpen(false)}
+                aria-hidden="true"
+              />
+              <div className="absolute left-0 top-0 h-full w-[220px] overscroll-contain border-r border-line bg-surface shadow-modal">
+                <NavRail onNavigate={() => setDrawerOpen(false)} />
+              </div>
+            </div>
+          )}
+        </div>
+      </ChatsProvider>
+    </PresenceProvider>
   );
 }
