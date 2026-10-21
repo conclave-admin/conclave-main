@@ -26,9 +26,7 @@ const RoomInfo = lazy(() => import('./pages/RoomInfo'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 
-// Lazy because Landing statically imports GSAP, and GSAP is landing-only. A
-// signed-in user going to the chat list must never download it, so it rides
-// in this chunk rather than in the entry bundle.
+// Keep public-page illustrations and content outside the signed-in app bundle.
 const Landing = lazy(() => import('./pages/Landing'));
 
 /**

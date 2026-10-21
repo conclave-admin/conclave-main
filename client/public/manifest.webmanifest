@@ -4,7 +4,7 @@
   "description": "Team conversations, decisions and tasks.",
   "start_url": "/chats",
   "display": "standalone",
-  "background_color": "#f8f8f8",
+  "background_color": "#f7f5f0",
   "theme_color": "#5b42d6",
   "icons": [
     { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }

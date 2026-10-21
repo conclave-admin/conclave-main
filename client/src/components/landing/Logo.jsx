@@ -26,7 +26,7 @@ export default function Logo({ withWordmark = true, className = '' }) {
     <span className={`inline-flex items-center gap-2.5 ${className}`}>
       <img src={logoUrl} alt={withWordmark ? '' : 'Conclave'} width={32} height={32} className="h-8 w-8 shrink-0" />
       {withWordmark && (
-        <span className="font-display text-h2 tracking-tight text-ink">Conclave</span>
+        <span className="text-lg font-semibold tracking-tight text-ink">Conclave</span>
       )}
     </span>
   );
