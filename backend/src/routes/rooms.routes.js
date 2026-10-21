@@ -4,6 +4,8 @@ const validateUuidParams = require('../middlewares/validateParams');
 const {
   createRoom,
   listRooms,
+  discoverRooms,
+  joinPublicRoom,
   getRoom,
   updateRoom,
   addMember,
@@ -19,6 +21,8 @@ router.use(requireAuth);
 router.use(validateUuidParams);
 router.post('/', createRoom);
 router.get('/', listRooms);
+router.get('/discover', discoverRooms);
+router.post('/:roomId/join', joinPublicRoom);
 router.get('/:roomId', getRoom);
 router.patch('/:roomId', updateRoom);
 router.post('/:roomId/members', addMember);

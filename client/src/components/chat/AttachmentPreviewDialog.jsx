@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import IconAudio from '@/assets/icons/audio-file.svg?react';
 import IconClose from '@/assets/icons/close.svg?react';
 import IconDocument from '@/assets/icons/document.svg?react';
 import IconFile from '@/assets/icons/file.svg?react';
+import { limitFor } from '@/lib/media';
+import { compressVideo, videoCompressionSupported } from '@/lib/videoCompression';
 import Button from '@/components/ui/Button';
 import Modal from '@/components/ui/Modal';
 
@@ -16,11 +18,9 @@ import Modal from '@/components/ui/Modal';
  * discarded with Cancel rather than becoming an orphaned asset, and the caption
  * is written where the file can be seen.
  *
- * Nothing is lost on failure. An upload that fails leaves this dialog open with
- * the files and the caption exactly as they were and the reason spelled out, so
- * the retry is one press and the text never had to be retyped. That is the
- * whole reason the failure path does not dismiss: a preview that vanishes on
- * error turns a transient upstream problem into lost work.
+ * Send saves the files and per-item captions to the outbox before closing this
+ * dialog. A storage failure leaves the selection here; upload failures are
+ * handled by each message bubble after the draft has been saved.
  *
  * Object URLs are made here and revoked when the file list changes or the
  * dialog unmounts. They are never stored anywhere else, so a revoked URL can
@@ -29,9 +29,9 @@ import Modal from '@/components/ui/Modal';
  * @param {boolean} open
  * @param {File[]} files - the picked files; empty closes the dialog
  * @param {string} initialCaption - the composer's draft at the moment of picking
- * @param {boolean} sending - an upload is in flight; closing is blocked
+ * @param {boolean} sending - saving the draft; closing is blocked
  * @param {string} error - shown in place of a status line
- * @param {(caption: string) => void} onSend
+ * @param {(captions: string[]) => void} onSend
  * @param {() => void} onCancel
  * @param {(index: number) => void} onRemoveFile - dropping the last one closes
  */
@@ -40,21 +40,26 @@ export default function AttachmentPreviewDialog({
   files,
   initialCaption = '',
   sending = false,
-  progress = 0,
   error = '',
   onSend,
   onCancel,
   onRemoveFile,
+  onReplaceFile,
 }) {
-  const [caption, setCaption] = useState(initialCaption);
+  const [captions, setCaptions] = useState(() => new Map());
   const [activeIndex, setActiveIndex] = useState(0);
   const [urls, setUrls] = useState([]);
+  const [compression, setCompression] = useState(null);
+  const [compressionError, setCompressionError] = useState('');
+  const [compressionNote, setCompressionNote] = useState('');
+  const compressionController = useRef(null);
+  useEffect(() => () => compressionController.current?.abort(), []);
 
   // Re-seeded on open rather than on every file change: removing one file from
   // a set of three must not wipe the caption being written alongside them.
   useEffect(() => {
-    if (!open) return;
-    setCaption(initialCaption);
+    if (!open) { compressionController.current?.abort(); return; }
+    setCaptions(new Map(files.map((file, index) => [file, index === 0 ? initialCaption : ''])));
     setActiveIndex(0);
   }, [open, initialCaption]);
 
@@ -82,16 +87,30 @@ export default function AttachmentPreviewDialog({
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const oversized = files.some((file) => file.size > limitFor(file));
+  const compress = async () => {
+    const controller = new AbortController(); compressionController.current = controller;
+    setCompression({ file: active, progress: 0 }); setCompressionError(''); setCompressionNote('');
+    try {
+      const result = await compressVideo(active, { signal: controller.signal, onProgress: (progress) => setCompression({ file: active, progress }) });
+      if (result.compressed) {
+        setCaptions((current) => { const next = new Map(current); next.set(result.file, current.get(active) || ''); next.delete(active); return next; });
+        onReplaceFile(index, result.file);
+        setCompressionNote(`Video compressed locally to ${formatSize(result.file.size)}.`);
+      } else setCompressionError('The original is already smaller than the encoded result. It remains selected.');
+    } catch (err) { if (err.name !== 'AbortError') setCompressionError(err.message); }
+    finally { setCompression(null); compressionController.current = null; }
+  };
   const submit = (event) => {
     event?.preventDefault();
-    if (sending) return;
-    onSend(caption);
+    if (sending || compression || oversized) return;
+    onSend(files.map((file) => captions.get(file) || ''));
   };
 
   return (
     <Modal
       open
-      onClose={onCancel}
+      onClose={() => { compressionController.current?.abort(); onCancel(); }}
       closeDisabled={sending}
       fullscreen
       title="Send attachment"
@@ -100,8 +119,12 @@ export default function AttachmentPreviewDialog({
           <label className="min-w-0 flex-1">
             <span className="sr-only">Add a caption</span>
             <textarea
-              value={caption}
-              onChange={(event) => setCaption(event.target.value)}
+              value={captions.get(active) || ''}
+              onChange={(event) => setCaptions((current) => {
+                const next = new Map(current);
+                next.set(active, event.target.value);
+                return next;
+              })}
               rows={1}
               placeholder="Add a caption…"
               disabled={sending}
@@ -111,11 +134,11 @@ export default function AttachmentPreviewDialog({
           <Button
             variant="primary"
             type="submit"
-            disabled={sending}
+            disabled={sending || Boolean(compression) || oversized}
             className="shrink-0"
-            aria-label={sending ? 'Uploading' : 'Send'}
+            aria-label={sending ? 'Saving messages' : 'Send'}
           >
-            {sending ? 'Uploading…' : 'Send'}
+            {sending ? 'Saving…' : 'Send'}
           </Button>
         </form>
       }
@@ -149,13 +172,26 @@ export default function AttachmentPreviewDialog({
           )}
         </div>
 
+        {isVideo(active) && <div className="shrink-0 space-y-2 border-t border-line px-4 py-3 text-metadata">
+          <p className="truncate text-ink">{active.name}</p>
+          {compressionNote && <p role="status">{compressionNote}</p>}
+          <p className="text-muted">{formatSize(active.size)} · Send limit 50 MB. Optional compression changes video quality and runs locally in real time.</p>
+          {compression ? <><p role="status">Compressing video {Math.round(compression.progress * 100)}% · keep this tab open</p>
+            <progress aria-label="Video compression" max="1" value={compression.progress} className="w-full accent-brand" />
+            <Button variant="secondary" onClick={() => compressionController.current?.abort()}>Cancel compression</Button></>
+            : <Button variant="secondary" disabled={sending || !videoCompressionSupported()} onClick={compress}>Compress video</Button>}
+          {!videoCompressionSupported() && <p className="text-muted">Local compression is unavailable here. Trim large clips in your device editor.</p>}
+          {compressionError && <p role="alert" className="text-error">{compressionError}</p>}
+        </div>}
+        {oversized && <p role="alert" className="shrink-0 border-t border-line px-4 py-2 text-metadata text-error">A selected file exceeds its send limit. Compress or trim the video, or remove the oversized file before sending.</p>}
         {files.length > 1 && (
           <div className="scrollbar-none flex shrink-0 gap-2 overflow-x-auto border-t border-line px-4 py-3">
             {files.map((file, i) => (
               <div key={`${file.name}-${i}`} className="relative shrink-0">
                 <button
                   type="button"
-                  onClick={() => setActiveIndex(i)}
+                  disabled={Boolean(compression)}
+                  onClick={() => { setActiveIndex(i); setCompressionError(''); }}
                   aria-label={`Preview ${file.name}`}
                   aria-current={i === index}
                   className={`block overflow-hidden rounded-lg border-2 transition-colors ${
@@ -172,7 +208,7 @@ export default function AttachmentPreviewDialog({
                     </span>
                   )}
                 </button>
-                {!sending && (
+                {!sending && !compression && (
                   <button
                     type="button"
                     onClick={() => onRemoveFile(i)}
@@ -187,32 +223,7 @@ export default function AttachmentPreviewDialog({
           </div>
         )}
 
-        {sending && (
-          <div className="shrink-0 border-t border-line px-4 py-3" role="status">
-            <div className="flex items-center justify-between gap-3 text-metadata text-muted">
-              <span>Uploading {Math.round(progress * 100)}%</span>
-              <button
-                type="button"
-                onClick={onCancel}
-                className="text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
-              >
-                Cancel upload
-              </button>
-            </div>
-            <div
-              className="mt-2 h-1.5 overflow-hidden rounded-full bg-canvas"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(progress * 100)}
-            >
-              <div
-                className="h-full rounded-full bg-brand transition-[width] duration-150"
-                style={{ width: `${Math.round(progress * 100)}%` }}
-              />
-            </div>
-          </div>
-        )}
+        {sending && <p role="status" className="shrink-0 border-t border-line px-4 py-3 text-metadata text-muted">Saving messages on this device…</p>}
 
         {error && (
           <p role="alert" className="shrink-0 border-t border-line bg-canvas px-4 py-2.5 text-metadata text-error">

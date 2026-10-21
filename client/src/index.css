@@ -158,3 +158,8 @@ html.dark {
     transition-duration: 0.01ms !important;
   }
 }
+@keyframes message-jump-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(99 102 241 / 0%); }
+  20%, 70% { box-shadow: 0 0 0 5px rgb(99 102 241 / 30%); }
+}
+.message-jump-highlight { animation: message-jump-glow 1.8s ease-in-out; }

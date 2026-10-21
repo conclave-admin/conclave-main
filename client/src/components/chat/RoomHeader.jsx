@@ -1,6 +1,9 @@
 import { Link } from 'react-router-dom';
 import IconArrowLeft from '@/assets/icons/arrow-left.svg?react';
 import IconInfo from '@/assets/icons/info.svg?react';
+import Avatar from '@/components/ui/Avatar';
+import { useAuth } from '@/contexts/AuthContext';
+import { usePresence } from '@/contexts/PresenceContext';
 
 /**
  * The header shown while a room is open.
@@ -23,6 +26,11 @@ import IconInfo from '@/assets/icons/info.svg?react';
  */
 export default function RoomHeader({ room, isConnected }) {
   const title = room.display_name || room.name;
+  const { user } = useAuth();
+  const { isOnlineIn } = usePresence();
+  const isDm = room.type === 'dm';
+  const peer = isDm ? room.members?.find((member) => member.id !== user?.id) : null;
+  const peerActive = Boolean(peer && isOnlineIn(room.id, peer.id));
 
   return (
     <div className="flex min-w-0 items-center gap-2">
@@ -36,6 +44,7 @@ export default function RoomHeader({ room, isConnected }) {
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
+          {isDm && <Avatar name={title} src={peer?.avatar_url} size="sm" presence={peerActive ? 'online' : 'offline'} />}
           <h1 className="truncate text-sm font-bold leading-5 text-ink md:text-base">{title}</h1>
           <span
             className={`h-2 w-2 shrink-0 rounded-full md:hidden ${
@@ -45,14 +54,14 @@ export default function RoomHeader({ room, isConnected }) {
           />
         </div>
         <p className="mt-0.5 text-[11px] leading-4 text-muted md:text-xs">
-          {room.members?.length || 0} members
+          {isDm ? (peerActive ? 'Active in this chat' : 'Not active in this chat') : `${room.members?.length || 0} members`}
           <span className="md:hidden"> · {isConnected ? 'Live' : 'Reconnecting'}</span>
         </p>
       </div>
 
       <Link
         to={`/chats/${room.id}/info`}
-        aria-label="Room information"
+        aria-label={isDm ? 'Conversation details' : 'Room information'}
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink"
       >
         <IconInfo className="h-5 w-5" aria-hidden="true" />

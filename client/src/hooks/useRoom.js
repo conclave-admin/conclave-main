@@ -1,46 +1,78 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getRoom } from '../services/rooms.service';
+import { useAuth } from '../contexts/AuthContext';
+import { readRoomMetadata, saveRoomMetadata } from '../lib/fileCache';
 
-/**
- * One room, with its members.
- *
- * `reload` is returned alongside the room because membership changes are pushed
- * over the socket rather than applied optimistically: an admin acting on somebody
- * else has to see the result of a change they made in another browser, and the
- * honest way to get it is to ask the server again rather than to mirror the
- * mutation locally and hope the two agree.
- *
- * @param {string} roomId
- */
+/** Last-known room details let cached history and unsent media open offline. */
 export default function useRoom(roomId) {
+  const { user } = useAuth();
+  const userId = user?.id;
   const [room, setRoom] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const scope = `${userId}:${roomId}`;
+  const current = useRef({ scope, active: true });
+  current.current.scope = scope;
+  useEffect(() => {
+    current.current.active = true;
+    return () => { current.current.active = false; };
+  }, []);
 
   const reload = useCallback(async () => {
+    if (navigator.onLine === false) return readRoomMetadata(userId, roomId);
     try {
       const value = await getRoom(roomId);
+      if (!current.current.active || current.current.scope !== scope) return null;
       setRoom(value);
       setError('');
+      await saveRoomMetadata(userId, roomId, value);
       return value;
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not load this room.');
+      if (!current.current.active || current.current.scope !== scope) return null;
+      if ([403, 404].includes(err.response?.status)) {
+        setRoom(null);
+        await saveRoomMetadata(userId, roomId, null);
+      }
+      setError(err.response?.data?.message || 'Could not refresh this conversation.');
       return null;
     }
-  }, [roomId]);
+  }, [roomId, userId, scope]);
 
   useEffect(() => {
     let active = true;
     setIsLoading(true);
+    setRoom(null);
     setError('');
-    getRoom(roomId)
-      .then((value) => active && setRoom(value))
-      .catch((err) => active && setError(err.response?.data?.message || 'Could not load this room.'))
-      .finally(() => active && setIsLoading(false));
-    return () => {
-      active = false;
+    const load = async () => {
+      const cached = await readRoomMetadata(userId, roomId);
+      if (!active) return;
+      if (cached) { setRoom(cached); setIsLoading(false); }
+      if (navigator.onLine === false) {
+        if (!cached) setError('This conversation has not been saved on this device yet.');
+        setIsLoading(false);
+        return;
+      }
+      try {
+        const value = await getRoom(roomId);
+        if (!active) return;
+        setRoom(value);
+        setIsLoading(false);
+        await saveRoomMetadata(userId, roomId, value);
+      } catch (err) {
+        if (!active) return;
+        if ([403, 404].includes(err.response?.status)) {
+          setRoom(null);
+          await saveRoomMetadata(userId, roomId, null);
+        }
+        setError(err.response?.data?.message || 'Could not refresh this conversation.');
+      } finally {
+        if (active) setIsLoading(false);
+      }
     };
-  }, [roomId]);
+    load();
+    window.addEventListener('online', reload);
+    return () => { active = false; window.removeEventListener('online', reload); };
+  }, [roomId, userId, reload]);
 
   return { room, isLoading, error, reload };
 }

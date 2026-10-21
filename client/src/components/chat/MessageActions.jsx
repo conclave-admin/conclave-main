@@ -8,6 +8,7 @@ import IconDecisions from '@/assets/icons/decisions.svg?react';
 import IconDelete from '@/assets/icons/delete.svg?react';
 import IconMore from '@/assets/icons/more.svg?react';
 import IconPin from '@/assets/icons/pin.svg?react';
+import IconForward from '@/assets/icons/forward.svg?react';
 import IconReply from '@/assets/icons/reply.svg?react';
 import IconStar from '@/assets/icons/star.svg?react';
 import IconTasks from '@/assets/icons/tasks.svg?react';
@@ -69,6 +70,7 @@ export default function MessageActions({
   onPin,
   onUnpin,
   onOpenThread,
+  onForward,
 }) {
   const triggerRef = useRef(null);
   const setOpen = (value) =>
@@ -103,6 +105,7 @@ export default function MessageActions({
   const items = [
     { key: "thread", label: "Open thread", Icon: IconThread, onClick: onOpenThread },
     { key: "reply", label: "Reply", Icon: IconReply, onClick: onReply },
+    onForward && !message.poll && { key: "forward", label: "Forward", Icon: IconForward, onClick: onForward },
     message.content && {
       key: "copy",
       label: "Copy text",
@@ -183,6 +186,7 @@ export default function MessageActions({
 
       <PopoverMenu
         open={open}
+        followScroll
         onClose={() => setOpen(false)}
         triggerRef={menuAnchor}
         align={align}

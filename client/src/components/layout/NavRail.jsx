@@ -10,12 +10,14 @@ import IconRecent from '@/assets/icons/recent.svg?react';
 import IconSettings from '@/assets/icons/settings.svg?react';
 import IconSignOut from '@/assets/icons/sign-out.svg?react';
 import IconTasks from '@/assets/icons/tasks.svg?react';
+import IconPublic from '@/assets/icons/public.svg?react';
 
 const primaryNav = [
   { to: '/chats', label: 'Chats', Icon: IconHome, end: false },
   { to: '/tasks', label: 'Tasks', Icon: IconTasks },
   { to: '/decisions', label: 'Decisions', Icon: IconDecisions },
   { to: '/digest', label: 'Catch up', Icon: IconRecent },
+  { to: '/discover', label: 'Discover rooms', Icon: IconPublic },
 ];
 
 const itemBase =

@@ -6,9 +6,10 @@ const { getRoomOnlineUsers } = require('./presence.service');
 const { attachReactions } = require('./reaction.service');
 const { attachPins } = require('./messagePin.service');
 const { attachPolls } = require('./poll.service');
+const r2 = require('../config/r2');
 
-// Kept in step with the multer limit in routes/upload.routes.js.
-const MAX_ATTACHMENTS = 10;
+// A media item is its own message. Multiple items sent together share albumId.
+const MAX_ATTACHMENTS = 1;
 
 /**
  * Validate a client-supplied attachment list. Returns a normalised array of
@@ -58,6 +59,7 @@ function serializeAttachment(row) {
     width: row.width,
     height: row.height,
     preview_url: row.preview_url,
+    duration: row.duration,
   };
 }
 
@@ -81,16 +83,25 @@ function serializeAttachment(row) {
  *   without it the mentions simply are not pushed live.
  * @returns {object} The inserted message row enriched with sender info and attachments
  */
-async function createMessage({ roomId, senderId, clientId, content, replyToId, attachments, mentionedUserIds, inTransaction, io }) {
+async function createMessage({ roomId, senderId, clientId, content, replyToId, attachments, albumId, mentionedUserIds, forwardSource, inTransaction, io }) {
   if (clientId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientId)) {
     throw new ApiError(400, 'clientId must be a UUID');
   }
+  if (albumId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(albumId)) {
+    throw new ApiError(400, 'albumId must be a UUID');
+  }
   const cleanAttachments = validateAttachments(attachments);
-  const hasContent = typeof content === 'string' && content.trim().length > 0;
+  if (forwardSource !== undefined && (!forwardSource || typeof forwardSource !== 'object' || Array.isArray(forwardSource)
+    || typeof forwardSource.messageId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(forwardSource.messageId || '') || (forwardSource.attachmentId !== undefined && (typeof forwardSource.attachmentId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(forwardSource.attachmentId))))) throw new ApiError(400, 'Invalid forwarding source');
+  if (forwardSource && (cleanAttachments.length || replyToId || inTransaction)) throw new ApiError(400, 'Forwarding cannot include upload claims, replies or polls');
+  if (albumId && !forwardSource && cleanAttachments.length !== 1) {
+    throw new ApiError(400, 'Each album item must have exactly one attachment');
+  }
+  let hasContent = typeof content === 'string' && content.trim().length > 0;
 
   // A message may be file-only (BACKEND_TASKS.md Bug 8) — the dev fixtures
   // include one. It may not be empty in both senses.
-  if (!hasContent && cleanAttachments.length === 0) {
+  if (!forwardSource && !hasContent && cleanAttachments.length === 0) {
     throw new ApiError(
       400,
       'Message content is required unless there is at least one attachment'
@@ -99,7 +110,15 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
 
   // 1. Verify room exists and sender is a member (1 query)
   const membership = await query(
-    `SELECT r.id AS room_id
+    `SELECT r.id AS room_id, r.type AS room_type,
+            EXISTS (
+              SELECT 1
+                FROM room_members peer
+                INNER JOIN user_blocks b
+                  ON (b.blocker_id = $2 AND b.blocked_id = peer.user_id)
+                  OR (b.blocker_id = peer.user_id AND b.blocked_id = $2)
+               WHERE peer.room_id = r.id AND peer.user_id <> $2
+            ) AS blocked_in_conversation
      FROM rooms r
      INNER JOIN room_members rm ON rm.room_id = r.id AND rm.user_id = $2
      WHERE r.id = $1`,
@@ -108,6 +127,9 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
 
   if (membership.rows.length === 0) {
     throw new ApiError(404, 'Room not found or you are not a member');
+  }
+  if (membership.rows[0].room_type === 'dm' && membership.rows[0].blocked_in_conversation) {
+    throw new ApiError(403, 'Messaging is unavailable for this conversation');
   }
 
   // 2. If replying, verify the parent message exists in the same room
@@ -123,7 +145,7 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
 
   // 3. Work out who is mentioned, before the insert, so the rows can be written
   //    in the same transaction as the message.
-  let mentionedIds = await resolveMentionIds({
+  let mentionedIds = forwardSource ? [] : await resolveMentionIds({
     roomId, senderId, content, mentionedUserIds,
   });
 
@@ -141,7 +163,7 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
 
     if (clientId) {
       const existing = await client.query(
-        `SELECT id, room_id, sender_id, client_id, room_sequence, content, reply_to_id,
+        `SELECT id, room_id, sender_id, client_id, room_sequence, content, reply_to_id, album_id, forwarded,
                 edited_at, deleted_at, created_at
            FROM messages WHERE room_id = $1 AND sender_id = $2 AND client_id = $3`,
         [roomId, senderId, clientId],
@@ -150,7 +172,7 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
         message = existing.rows[0];
         isRetry = true;
         const attachmentRows = await client.query(
-          `SELECT id, filename, file_url, file_type, size_bytes, width, height, preview_url FROM attachments WHERE message_id = $1`,
+          `SELECT id, filename, file_url, file_type, size_bytes, width, height, preview_url, duration FROM attachments WHERE message_id = $1`,
           [message.id],
         );
         savedAttachments = attachmentRows.rows;
@@ -158,19 +180,59 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
     }
 
     if (!isRetry) {
+      let forwardedAttachments = [];
+      if (forwardSource) {
+        const source = await client.query(`SELECT m.id, m.content FROM messages m
+          JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
+          WHERE m.id = $1 AND m.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM polls p WHERE p.message_id = m.id)
+          FOR SHARE OF m, rm`, [forwardSource.messageId, senderId]);
+        if (!source.rows.length) throw new ApiError(404, 'Forwarding source is unavailable');
+        const sourceFiles = await client.query('SELECT * FROM attachments WHERE message_id = $1 ORDER BY id', [forwardSource.messageId]);
+        if (forwardSource.attachmentId) {
+          forwardedAttachments = sourceFiles.rows.filter((item) => item.id === forwardSource.attachmentId);
+          if (!forwardedAttachments.length) throw new ApiError(404, 'Forwarding source is unavailable');
+        } else {
+          if (sourceFiles.rows.length > 1) throw new ApiError(400, 'Choose one attachment per forwarded message');
+          forwardedAttachments = sourceFiles.rows;
+        }
+        if (albumId && forwardedAttachments.length !== 1) throw new ApiError(400, 'Album forwards require one attachment');
+        content = source.rows[0].content;
+        hasContent = typeof content === 'string' && content.trim().length > 0;
+        if (!hasContent && !forwardedAttachments.length) throw new ApiError(400, 'The forwarding source is empty');
+      }
+      // Recheck destination membership inside the same transaction as the copy.
+      if (!(await client.query('SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2 FOR SHARE', [roomId, senderId])).rowCount) throw new ApiError(404, 'Conversation unavailable');
+      if (albumId) {
+        // Scope the group even when two rooms concurrently try the same id.
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [albumId]);
+        const album = await client.query(
+          'SELECT room_id, sender_id FROM messages WHERE album_id = $1 LIMIT 1',
+          [albumId],
+        );
+        if (album.rows.length && (album.rows[0].room_id !== roomId || album.rows[0].sender_id !== senderId)) {
+          throw new ApiError(400, 'An album must belong to one conversation and sender');
+        }
+      }
       const sequence = await client.query(
         `UPDATE rooms SET message_sequence = message_sequence + 1 WHERE id = $1 RETURNING message_sequence`,
         [roomId],
       );
 
       const result = await client.query(
-        `INSERT INTO messages (room_id, sender_id, client_id, room_sequence, content, reply_to_id)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO messages (room_id, sender_id, client_id, room_sequence, content, reply_to_id, album_id, forwarded)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id, room_id, sender_id, client_id, room_sequence, content, reply_to_id,
-                   edited_at, deleted_at, created_at`,
-        [roomId, senderId, clientId || null, sequence.rows[0].message_sequence, hasContent ? content.trim() : null, replyToId || null],
+                   album_id, forwarded, edited_at, deleted_at, created_at`,
+        [roomId, senderId, clientId || null, sequence.rows[0].message_sequence, hasContent ? content.trim() : null, replyToId || null, albumId || null, Boolean(forwardSource)],
       );
       message = result.rows[0];
+      for (const owned of forwardedAttachments) {
+        const copied = await client.query(`INSERT INTO attachments(message_id, filename, file_url, file_type, size_bytes, public_id, resource_type, width, height, preview_url, duration)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          RETURNING id, filename, file_url, file_type, size_bytes, width, height, preview_url, duration`,
+          [message.id, owned.filename, owned.file_url, owned.file_type, owned.size_bytes, owned.public_id, owned.resource_type, owned.width, owned.height, owned.preview_url, owned.duration]);
+        savedAttachments.push(copied.rows[0]);
+      }
 
     // Lets a caller write rows that must live or die with the message, such as
     // a poll and its options, inside the same transaction. Runs before the
@@ -192,8 +254,8 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
             SET attached_message_id = $2
           WHERE file_url = $1
             AND uploader_id = $3
-            AND attached_message_id IS NULL
-          RETURNING filename, mime_type, size_bytes, public_id, resource_type, width, height, preview_url`,
+            AND attached_message_id IS NULL AND retired_at IS NULL
+          RETURNING filename, mime_type, size_bytes, public_id, resource_type, width, height, preview_url, duration`,
         [url, message.id, senderId],
       );
 
@@ -215,9 +277,9 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
       // to parsing file_url for those, which is worse but not broken.
       const owned = claim.rows[0];
       const attResult = await client.query(
-        `INSERT INTO attachments (message_id, filename, file_url, file_type, size_bytes, public_id, resource_type, width, height, preview_url)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING id, filename, file_url, file_type, size_bytes, width, height, preview_url`,
+        `INSERT INTO attachments (message_id, filename, file_url, file_type, size_bytes, public_id, resource_type, width, height, preview_url, duration)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING id, filename, file_url, file_type, size_bytes, width, height, preview_url, duration`,
         [
           message.id,
           owned.filename,
@@ -229,6 +291,7 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
           owned.width ?? null,
           owned.height ?? null,
           owned.preview_url ?? null,
+          owned.duration ?? null,
         ],
       );
       savedAttachments.push(attResult.rows[0]);
@@ -622,6 +685,9 @@ async function deleteMessage({ messageId, userId, io }) {
   );
 
   await emitChatUpdated(io, existing.room_id);
+
+  // The database trigger queues storage cleanup in the same commit as the tombstone.
+  // Storage failures never undo a successful moderation action.
 
   // A concurrent delete by someone else already won. Reporting success is
   // correct — the caller wanted it deleted, and it is — but there is nothing to

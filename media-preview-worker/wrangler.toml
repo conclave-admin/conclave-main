@@ -1,0 +1,17 @@
+name = "conclave-media-preview"
+main = "src/index.js"
+compatibility_date = "2026-10-20"
+workers_dev = true
+
+[cache]
+enabled = true
+
+[images]
+binding = "IMAGES"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "conclave-uploads"
+
+[vars]
+MAX_PREVIEW_TOKEN_TTL = "300"

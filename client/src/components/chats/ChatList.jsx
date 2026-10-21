@@ -54,7 +54,7 @@ export default function ChatList() {
       <CatchUpCard />
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
-        {isLoading && <Spinner label="Loading chats" />}
+        {isLoading && !rooms.length && <Spinner label="Loading chats" />}
 
         {error && (
           <p role="alert" className="m-3 rounded-lg bg-error/10 p-3 text-body text-error">
@@ -73,7 +73,7 @@ export default function ChatList() {
           />
         )}
 
-        {!isLoading && !error && visibleRooms.length > 0 && (
+        {!isLoading && visibleRooms.length > 0 && (
           <ul className="flex flex-col gap-1">
             {visibleRooms.map((room) => (
               <ChatRow key={room.id} room={room} />

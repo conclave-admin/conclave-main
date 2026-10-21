@@ -5,24 +5,14 @@ import IconFile from '@/assets/icons/file.svg?react';
 import IconImage from '@/assets/icons/image.svg?react';
 import IconSpreadsheet from '@/assets/icons/spreadsheet.svg?react';
 import { useEffect, useState } from 'react';
-import Button from '@/components/ui/Button';
+import { useMediaViewer } from './MediaViewer';
 import Modal from '@/components/ui/Modal';
-import { useToast } from '@/contexts/ToastContext';
+import useAttachmentDownload from '@/hooks/useAttachmentDownload';
 import useAttachmentImage from '@/hooks/useAttachmentImage';
 import {
-  downloadAttachment,
-  getAttachmentBlob,
-  getCachedAttachmentBlob,
-  getAttachmentStreamUrl,
+  saveAttachmentToDevice,
 } from '@/services/attachments.service';
 
-/**
- * A human-readable byte count.
- *
- * Binary units rather than decimal, matching the upload limits — showing
- * "26.2 MB" for a file under the limit is the kind of small lie that makes a
- * limit look arbitrary.
- */
 function formatSize(bytes) {
   if (typeof bytes !== 'number' || Number.isNaN(bytes)) return '';
   if (bytes < 1024) return `${bytes} B`;
@@ -47,291 +37,155 @@ function iconFor(mimeType = '') {
   return IconFile;
 }
 
-function FileAttachment({ attachment }) {
-  const Icon = iconFor(attachment.mime_type);
-  const size = formatSize(attachment.size);
-  const { toast } = useToast();
-  const [busy, setBusy] = useState(false);
-  // An optimistic row has no id yet, so there is nothing to fetch.
-  const ready = Boolean(attachment.id);
-
-  const handleClick = async () => {
-    if (!ready || busy) return;
-    setBusy(true);
-    try {
-      await downloadAttachment(attachment);
-    } catch (err) {
-      toast({ title: 'Download failed', description: err.message, tone: 'error' });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={handleClick}
-      disabled={!ready || busy}
-      className="group flex w-full max-w-sm items-center gap-3 rounded-lg border border-line bg-canvas px-3 py-2.5 text-left transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-70"
-    >
-      <Icon className="h-5 w-5 shrink-0 text-muted" aria-hidden="true" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-body text-ink">
-          {attachment.filename || 'Attachment'}
-        </span>
-        <span className="block text-metadata text-muted">{ready ? size : 'Sending…'}</span>
-      </span>
-      <IconDownload
-        className={`h-4 w-4 shrink-0 text-muted transition-colors group-hover:text-brand ${
-          busy ? 'animate-pulse' : ''
-        }`}
-        aria-hidden="true"
-      />
-      <span className="sr-only">Download {attachment.filename}</span>
-    </button>
-  );
-}
-
 function useObjectUrl(blob) {
   const [url, setUrl] = useState(null);
   useEffect(() => {
-    if (!blob) {
-      setUrl(null);
-      return undefined;
-    }
-    const next = URL.createObjectURL(blob);
-    setUrl(next);
+    if (!blob) { setUrl(null); return undefined; }
+    const next = URL.createObjectURL(blob); setUrl(next);
     return () => URL.revokeObjectURL(next);
   }, [blob]);
   return url;
 }
 
-function ProgressRing({ fraction }) {
-  const percent = Math.round(fraction * 100);
+function DownloadState({ download, attachment }) {
+  const { status, progress, persisted, error, start, cancel } = download;
   return (
-    <span
-      role="progressbar"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percent}
-      className="relative grid h-12 w-12 place-items-center rounded-full bg-surface text-metadata text-ink"
-    >
-      <svg viewBox="0 0 36 36" className="absolute inset-0 -rotate-90" aria-hidden="true">
-        <circle cx="18" cy="18" r="16" pathLength="100" className="fill-none stroke-line" strokeWidth="3" />
-        <circle
-          cx="18"
-          cy="18"
-          r="16"
-          pathLength="100"
-          className="fill-none stroke-brand"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeDasharray={`${percent} 100`}
-        />
-      </svg>
-      {percent}
-    </span>
-  );
-}
-
-function ImageAttachment({ attachment, tile = false }) {
-  const { src, failed } = useAttachmentImage(attachment);
-  const [open, setOpen] = useState(false);
-  const { toast } = useToast();
-
-  const save = () =>
-    downloadAttachment(attachment).catch((err) =>
-      toast({ title: 'Download failed', description: err.message, tone: 'error' }),
-    );
-
-  if (failed) return <FileAttachment attachment={attachment} />;
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        disabled={!src}
-        aria-label={`Open ${attachment.filename}`}
-        className={`relative block w-full overflow-hidden bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
-          tile ? '' : 'max-w-xs rounded-xl'
-        }`}
-      >
-        {src ? (
-          <img
-            src={src}
-            alt={attachment.filename}
-            width={attachment.width || undefined}
-            height={attachment.height || undefined}
-            style={attachment.width && attachment.height ? { aspectRatio: `${attachment.width} / ${attachment.height}` } : undefined}
-            className={`w-full object-cover ${tile ? 'aspect-square' : 'max-h-72'}`}
-          />
-        ) : (
-          <span
-            style={attachment.preview_url ? { backgroundImage: `url("${attachment.preview_url}")`, backgroundSize: 'cover', filter: 'blur(8px)' } : undefined}
-            className={`block w-full animate-pulse bg-line ${tile ? 'aspect-square' : attachment.width && attachment.height ? '' : 'aspect-[4/3]'}`}
-            aria-hidden="true"
-          />
-        )}
-      </button>
-
-      <Modal
-        open={open}
-        onClose={() => setOpen(false)}
-        title={attachment.filename}
-        footer={
-          <Button variant="secondary" onClick={save}>
-            Download
-          </Button>
-        }
-      >
-        {src && (
-          <img
-            src={src}
-            alt={attachment.filename}
-            className="mx-auto max-h-[65vh] w-auto max-w-full object-contain"
-          />
-        )}
-      </Modal>
-    </>
-  );
-}
-
-/**
- * A video bubble, WhatsApp style. If the file is already on this device (we
- * sent it, or opened it before) it plays at once. Otherwise it shows a tile
- * with the size and a download button, and plays from the local copy once the
- * download finishes.
- */
-function VideoAttachment({ attachment, tile = false }) {
-  const { toast } = useToast();
-  const [blob, setBlob] = useState(null);
-  const [streamUrl, setStreamUrl] = useState(null);
-  const [progress, setProgress] = useState(null);
-  const [playFailed, setPlayFailed] = useState(false);
-  const src = useObjectUrl(blob);
-  const size = formatSize(attachment.size);
-
-  useEffect(() => {
-    let active = true;
-    getCachedAttachmentBlob(attachment).then((cached) => {
-      if (!active) return;
-      if (cached) setBlob(cached);
-      else getAttachmentStreamUrl(attachment).then((result) => active && setStreamUrl(result.url)).catch(() => active && setPlayFailed(true));
-    });
-    return () => {
-      active = false;
-    };
-  }, [attachment.url]);
-
-  const load = async () => {
-    if (!attachment.id || progress !== null) return;
-    setProgress(0);
-    try {
-      setBlob(await getAttachmentBlob(attachment, { onProgress: setProgress }));
-    } catch (err) {
-      toast({ title: 'Could not load the video', description: err.message, tone: 'error' });
-    } finally {
-      setProgress(null);
-    }
-  };
-
-  if (playFailed) return <FileAttachment attachment={attachment} />;
-
-  if (src) {
-    return (
-      <video
-        src={`${src}#t=0.001`}
-        controls
-        playsInline
-        preload="metadata"
-        onError={() => setPlayFailed(true)}
-        aria-label={attachment.filename}
-        className={`w-full bg-canvas object-cover ${tile ? 'aspect-square' : 'max-h-80 max-w-xs rounded-xl'}`}
-      />
-    );
-  }
-
-  if (streamUrl && !playFailed) {
-    return <video src={streamUrl} controls playsInline preload="metadata" aria-label={attachment.filename}
-      onError={() => setPlayFailed(true)}
-      className={`w-full bg-canvas object-cover ${tile ? 'aspect-square' : 'max-h-80 max-w-xs rounded-xl'}`} />;
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={load}
-      disabled={!attachment.id || progress !== null}
-      aria-label={`Download video ${attachment.filename || ''}, ${size}`}
-      className={`grid w-full place-items-center overflow-hidden border border-line bg-canvas text-ink transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:cursor-default ${
-        tile ? 'aspect-square' : 'aspect-video max-w-xs rounded-xl'
-      }`}
-    >
-      <span className="flex max-w-full flex-col items-center gap-2 px-4 text-center">
-        {progress === null ? (
-          <span className="grid h-12 w-12 place-items-center rounded-full bg-surface text-brand">
-            <IconDownload className="h-5 w-5" aria-hidden="true" />
-          </span>
-        ) : (
-          <ProgressRing fraction={progress} />
-        )}
-        <span className="max-w-full truncate text-label">{attachment.filename || 'Video'}</span>
-        <span className="text-metadata text-muted">
-          {progress === null ? `Tap to download · ${size}` : 'Downloading…'}
-        </span>
-      </span>
-    </button>
-  );
-}
-
-const isMedia = (attachment) =>
-  Boolean(attachment.id) && /^(image|video)\//.test(attachment.mime_type || '');
-
-function MediaItem({ attachment, tile }) {
-  return (attachment.mime_type || '').startsWith('video/') ? (
-    <VideoAttachment attachment={attachment} tile={tile} />
-  ) : (
-    <ImageAttachment attachment={attachment} tile={tile} />
-  );
-}
-
-/** A message's attachments: photos and videos as one grid, files as cards. */
-export function AttachmentGroup({ attachments = [] }) {
-  const media = attachments.filter(isMedia);
-  const files = attachments.filter((attachment) => !isMedia(attachment));
-  const tiled = media.length > 1;
-
-  return (
-    <div className="flex w-full flex-col gap-1.5">
-      {media.length > 0 && (
-        <div
-          className={
-            tiled
-              ? 'grid w-full max-w-xs grid-cols-2 gap-1 overflow-hidden rounded-xl'
-              : 'w-full max-w-xs'
-          }
-        >
-          {media.map((attachment) => (
-            <MediaItem
-              key={attachment.id || attachment.url}
-              attachment={attachment}
-              tile={tiled}
-            />
-          ))}
-        </div>
-      )}
-      {files.map((attachment) => (
-        <FileAttachment key={attachment.id || attachment.url} attachment={attachment} />
-      ))}
+    <div data-download-state={status} className="min-w-0 text-metadata text-muted">
+      <p role="status">{status === 'downloading' ? `Downloading ${Math.round(progress * 100)}%`
+        : status === 'downloaded' ? persisted ? 'Downloaded · available offline' : 'Available this visit · could not save offline'
+        : status === 'failed' ? 'Download failed' : 'Original not downloaded'}</p>
+      {status === 'downloading' && <>
+        <progress aria-label={`Downloading ${attachment.filename}`} max="1" value={progress} className="mt-1 w-full accent-brand" />
+        <button type="button" onClick={cancel} className="mt-1 text-brand hover:underline" aria-label={`Cancel download ${attachment.filename}`}>Cancel download</button>
+      </>}
+      {status === 'failed' && <>
+        <p role="alert" className="break-words text-error">{error}</p>
+        <button type="button" onClick={start} className="mt-1 text-brand hover:underline" aria-label={`Retry download ${attachment.filename}`}>Retry download</button>
+      </>}
     </div>
   );
 }
 
-export default function AttachmentCard({ attachment }) {
-  return isMedia(attachment) ? (
-    <MediaItem attachment={attachment} tile={false} />
-  ) : (
-    <FileAttachment attachment={attachment} />
+function FileAttachment({ attachment }) {
+  const Icon = iconFor(attachment.mime_type);
+  const download = useAttachmentDownload(attachment);
+  const save = async () => {
+    const blob = await download.start();
+    if (blob) saveAttachmentToDevice(attachment, blob);
+  };
+  return (
+    <div className="w-full max-w-sm rounded-lg border border-line bg-canvas px-3 py-2.5">
+      <button type="button" onClick={save} disabled={download.status === 'downloading' || !(attachment.id || attachment.local_blob)}
+        aria-label={`Download ${attachment.filename}`}
+        className="group flex w-full items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-70">
+        <Icon className="h-5 w-5 shrink-0 text-muted" aria-hidden="true" />
+        <span className="min-w-0 flex-1"><span className="block truncate text-body text-ink">{attachment.filename || 'Attachment'}</span>
+          <span className="block text-metadata text-muted">{formatSize(attachment.size)}</span></span>
+        <IconDownload className="h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+      </button>
+      <div className="mt-2"><DownloadState download={download} attachment={attachment} /></div>
+    </div>
   );
+}
+
+function mediaStyle(attachment, tile, fallback = '4 / 3') {
+  const ratio = attachment.width && attachment.height ? attachment.width / attachment.height : 4 / 3;
+  return { maxWidth: tile ? undefined : `${Math.min(320, 320 * ratio)}px`,
+    aspectRatio: tile ? '1 / 1' : attachment.width && attachment.height
+    ? `${attachment.width} / ${attachment.height}` : fallback,
+    maxHeight: tile ? undefined : '20rem' };
+}
+
+function ImageAttachment({ attachment, tile = false }) {
+  const viewer = useMediaViewer();
+  const preview = useAttachmentImage(attachment);
+  const download = useAttachmentDownload(attachment);
+  const originalSrc = useObjectUrl(download.blob);
+  const [open, setOpen] = useState(false);
+  const [originalFailed, setOriginalFailed] = useState(false);
+  useEffect(() => setOriginalFailed(false), [download.blob]);
+  const displaySrc = (originalFailed ? null : originalSrc) || preview.src;
+  const imageError = () => { if (originalSrc && !originalFailed) setOriginalFailed(true); else preview.fail(); };
+  const openOriginal = () => { if (viewer) viewer.open(attachment); else { setOpen(true); download.start(); } };
+  const save = async () => {
+    const blob = await download.start();
+    if (blob) saveAttachmentToDevice(attachment, blob);
+  };
+  return (
+    <div className="w-full min-w-0 max-w-xs">
+      <button type="button" onClick={openOriginal} aria-label={`Open ${attachment.filename}`}
+        style={mediaStyle(attachment, tile)}
+        className={`relative block w-full overflow-hidden bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${tile ? '' : 'rounded-xl'}`}>
+        {displaySrc ? <img src={displaySrc} alt={attachment.filename} onError={imageError}
+          width={attachment.width || undefined} height={attachment.height || undefined} className="h-full w-full object-cover" />
+          : <span className="flex h-full w-full items-center justify-center bg-line p-4 text-metadata text-muted">{preview.failed ? 'Preview unavailable · open original' : 'Loading preview…'}</span>}
+      </button>
+      {preview.failed && !originalSrc && <button type="button" onClick={preview.retry} aria-label={`Retry preview ${attachment.filename}`}
+        className="py-1 text-metadata text-brand hover:underline">Retry preview</button>}
+      <DownloadState download={download} attachment={attachment} />
+      <Modal open={open} onClose={() => setOpen(false)} title={attachment.filename}
+        footer={<button type="button" onClick={save} disabled={download.status === 'downloading'} className="text-brand disabled:opacity-50">Download</button>}>
+        {displaySrc && <img src={displaySrc} onError={imageError} alt={attachment.filename} className="mx-auto max-h-[65vh] w-auto max-w-full object-contain" />}
+        {originalFailed && <p className="mt-2 text-metadata text-error">This image cannot be displayed. Download it to open in another app.</p>}
+        <DownloadState download={download} attachment={attachment} />
+        {download.status === 'available' && <button type="button" onClick={download.start} className="mt-3 text-brand">Download original</button>}
+      </Modal>
+    </div>
+  );
+}
+
+function formatDuration(duration) {
+  if (!Number.isFinite(duration) || duration <= 0) return '';
+  const seconds = Math.floor(duration);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function VideoAttachment({ attachment, tile = false }) {
+  const viewer = useMediaViewer();
+  const download = useAttachmentDownload(attachment);
+  const src = useObjectUrl(download.blob);
+  const [playFailed, setPlayFailed] = useState(false);
+  const size = formatSize(attachment.size);
+  return (
+    <div className="w-full min-w-0 max-w-xs">
+      {src && !playFailed && !tile ? <video src={src} controls playsInline preload="metadata" onError={() => setPlayFailed(true)}
+        poster={attachment.preview_url || undefined} style={mediaStyle(attachment, tile, '16 / 9')}
+        aria-label={attachment.filename} className={`w-full bg-canvas object-contain ${tile ? '' : 'rounded-xl'}`} />
+        : <button type="button" onClick={() => tile && viewer ? viewer.open(attachment) : download.start()} disabled={download.status === 'downloading' || !(attachment.id || attachment.local_blob)}
+          aria-label={`Download video ${attachment.filename || ''}, ${size}`} style={mediaStyle(attachment, tile, '16 / 9')}
+          className={`relative grid w-full place-items-center overflow-hidden border border-line bg-canvas text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${tile ? '' : 'rounded-xl'}`}>
+          {attachment.preview_url && <img src={attachment.preview_url} alt="" className="absolute inset-0 h-full w-full object-cover" />}
+          <span className="relative flex max-w-full flex-col items-center gap-1 rounded-lg bg-surface/90 px-3 py-2 text-center">
+            <IconDownload className="h-6 w-6 text-brand" aria-hidden="true" />
+            <span className="max-w-full truncate text-label">{attachment.filename || 'Video'}</span>
+            <span className="text-metadata">{formatDuration(attachment.duration)} · {size}</span>
+          </span>
+        </button>}
+      {playFailed && <p className="text-metadata text-error">This browser cannot play this video. Save it to open in another app.</p>}
+      <DownloadState download={download} attachment={attachment} />
+      {viewer && !tile && <button type="button" onClick={() => viewer.open(attachment)} className="py-1 text-metadata text-brand" aria-label={`Open ${attachment.filename}`}>Open video</button>}
+      {download.blob && <button type="button" onClick={() => saveAttachmentToDevice(attachment, download.blob)}
+        aria-label={`Save ${attachment.filename}`} className="py-1 text-metadata text-brand hover:underline">Save video</button>}
+    </div>
+  );
+}
+
+const isMedia = (attachment) => /^(image|video)\//.test(attachment.mime_type || '');
+function MediaItem({ attachment, tile }) {
+  return (attachment.mime_type || '').startsWith('video/')
+    ? <VideoAttachment attachment={attachment} tile={tile} /> : <ImageAttachment attachment={attachment} tile={tile} />;
+}
+export function AttachmentGroup({ attachments = [], albumTile = false }) {
+  const media = attachments.filter(isMedia);
+  const files = attachments.filter((attachment) => !isMedia(attachment));
+  const tiled = albumTile || media.length > 1;
+  return <div className="flex w-full flex-col gap-1.5">
+    {media.length > 0 && <div className={tiled ? 'grid w-full max-w-xs grid-cols-2 gap-1 overflow-hidden rounded-xl' : 'w-full max-w-xs'}>
+      {media.map((attachment) => <MediaItem key={attachment.id || attachment.url} attachment={attachment} tile={tiled} />)}
+    </div>}
+    {files.map((attachment) => <FileAttachment key={attachment.id || attachment.url} attachment={attachment} />)}
+  </div>;
+}
+export default function AttachmentCard({ attachment }) {
+  return isMedia(attachment) ? <MediaItem attachment={attachment} tile={false} /> : <FileAttachment attachment={attachment} />;
 }

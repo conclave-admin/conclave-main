@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import useNetworkStatus from '@/hooks/useNetworkStatus';
 import Spinner from '@/components/ui/Spinner';
 import ThemeSwitch from '@/components/ui/ThemeSwitch';
 import { useToast } from '@/contexts/ToastContext';
@@ -49,6 +50,7 @@ export default function Settings() {
   const [preferences, setPreferences] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [savingKey, setSavingKey] = useState(null);
+  const network = useNetworkStatus();
   const [mediaPreferences, setMediaPreferences] = useState(getMediaPreferences);
   const [storageBytes, setStorageBytes] = useState(0);
 
@@ -205,10 +207,10 @@ export default function Settings() {
 
       <section className="mt-6 rounded-xl border border-line bg-surface p-6">
         <h2 className="text-h2 text-ink">Storage and downloads</h2>
-        <p className="mt-2 text-body text-muted">Choose which media types are kept on this device after opening.</p>
+        <p className="mt-2 text-body text-muted">Choose which originals download automatically. Photos load a small preview; open a photo to download its original. Opened or manually downloaded files are cached when device storage allows.</p>
         <div className="mt-4 divide-y divide-line rounded-lg border border-line">
           {[
-            ['images', 'Images'], ['video', 'Video'], ['documents', 'Documents'],
+            ['video', 'Automatically download videos'], ['documents', 'Automatically download documents and audio'],
           ].map(([key, label]) => (
             <label key={key} className="flex cursor-pointer items-center justify-between gap-4 px-3 py-3 text-body text-ink">
               {label}
@@ -219,6 +221,21 @@ export default function Settings() {
               }} className="h-4 w-4 rounded border-line text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30" />
             </label>
           ))}
+        </div>
+        <div className="mt-4 space-y-3">
+          <label className="block text-label text-ink">Network for automatic downloads
+            <select value={mediaPreferences.network || 'any'} onChange={(event) => {
+              const next = { ...mediaPreferences, network: event.target.value }; setMediaPreferences(next); saveMediaPreferences(next);
+            }} className="mt-2 block min-h-11 w-full rounded-lg border border-line bg-surface px-3 text-body">
+              <option value="any">Any connection</option><option value="unmetered">Wi-Fi or Ethernet only</option><option value="fast">Fast connections only</option>
+            </select>
+          </label>
+          <p className="text-metadata text-muted">{network.type === 'unknown' ? 'This browser does not report Wi-Fi or cellular. Wi-Fi-only downloads stay paused when the connection is unknown.' : `Reported connection: ${network.type}.`} Fast means the browser reports a 4G-level speed estimate; it does not mean Wi-Fi. Manual downloads remain available.</p>
+          <label className="flex items-center justify-between gap-3 text-body text-ink">Pause automatic downloads when Data Saver is enabled
+            <input type="checkbox" checked={mediaPreferences.respectSaveData !== false} onChange={(event) => {
+              const next = { ...mediaPreferences, respectSaveData: event.target.checked }; setMediaPreferences(next); saveMediaPreferences(next);
+            }} className="h-4 w-4 rounded border-line text-brand" />
+          </label>
         </div>
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
           <p className="text-body text-muted">Downloaded media: {(storageBytes / (1024 * 1024)).toFixed(1)} MB</p>

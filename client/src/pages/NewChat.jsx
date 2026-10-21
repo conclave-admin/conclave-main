@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useOutletContext } from 'react-router-dom';
+import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import IconGroup from '@/assets/icons/group.svg?react';
 import IconSearch from '@/assets/icons/search.svg?react';
 import IconThread from '@/assets/icons/thread.svg?react';
@@ -43,6 +43,7 @@ export default function NewChat() {
   const [isSearching, setIsSearching] = useState(false);
   const [selected, setSelected] = useState([]);
   const [groupName, setGroupName] = useState('');
+  const [visibility, setVisibility] = useState('private');
   const [isCreating, setIsCreating] = useState(false);
   const debounceRef = useRef(null);
 
@@ -119,7 +120,7 @@ export default function NewChat() {
     if (selected.length === 0) return;
     setIsCreating(true);
     try {
-      const room = await createRoom({ type: 'group', name: groupName.trim(), memberIds: selected });
+      const room = await createRoom({ type: visibility, name: groupName.trim(), memberIds: selected });
       navigate(`/chats/${room.id}`);
     } catch (err) {
       toast({
@@ -140,6 +141,7 @@ export default function NewChat() {
       <p className="mt-2 text-body leading-relaxed text-muted">
         Message someone directly, or gather several people into a new room.
       </p>
+      <Link to="/discover" className="mt-3 inline-flex text-label text-brand hover:underline">Browse public rooms</Link>
 
       <div role="tablist" aria-label="Conversation type" className="mt-6 inline-flex gap-1 rounded-full border border-line bg-canvas p-1">
         {[
@@ -248,6 +250,13 @@ export default function NewChat() {
 
       {mode === 'group' && (
         <form onSubmit={createGroup} className="mt-6 space-y-4 border-t border-line pt-6">
+          <label className="block text-label text-ink">
+            Room visibility
+            <select value={visibility} onChange={(event) => setVisibility(event.target.value)} className="mt-2 block min-h-12 w-full rounded-lg border border-line bg-surface px-3.5 text-body text-ink">
+              <option value="private">Private — invitation required</option>
+              <option value="public">Public — members can discover and join</option>
+            </select>
+          </label>
           <Input
             label="Room name"
             value={groupName}

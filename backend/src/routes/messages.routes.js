@@ -13,6 +13,7 @@ const {
   pinMessageHandler,
   unpinMessageHandler,
   listPinnedMessages,
+  listRoomMedia,
 } = require('../controllers/messages.controller');
 
 const router = Router();
@@ -22,6 +23,7 @@ router.use(validateUuidParams);
 router.post('/', rateLimit({ max: 30 }), sendMessage);
 router.get('/room/:roomId', listMessages);
 router.get('/room/:roomId/search', searchMessages);
+router.get('/room/:roomId/media', listRoomMedia);
 // Registered after the two room routes above so `/room/:roomId/pinned` is not
 // read as `/room/:roomId` with `pinned` left over. Same two-segment rule that
 // governs `/:messageId` below.

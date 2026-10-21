@@ -33,6 +33,8 @@ const GAP = 4;
  * @param {{ current: HTMLElement | null }} triggerRef - the control to anchor to
  * @param {'top'|'bottom'} [side] - preferred opening direction
  * @param {'start'|'end'} [align] - align the menu's start or end edge to the trigger's
+ * @param {boolean} [followScroll] - retain message actions through layout-driven
+ *   scrolling; an intentional wheel/touch scroll outside still dismisses them
  * @param {string} [label] - accessible name for the menu itself
  * @param {string} [className] - width and any extra styling
  * @param {React.ReactNode} children
@@ -43,6 +45,7 @@ export default function PopoverMenu({
   triggerRef,
   side = 'bottom',
   align = 'end',
+  followScroll = false,
   label,
   className = '',
   children,
@@ -108,19 +111,32 @@ export default function PopoverMenu({
     };
 
     const dismiss = () => onClose?.();
+    const onScroll = (event) => {
+      if (menuRef.current?.contains(event.target)) return;
+      if (followScroll) place(); else dismiss();
+    };
+    const userScroll = (event) => {
+      if (!menuRef.current?.contains(event.target)) dismiss();
+    };
 
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('pointerdown', onPointerDown, true);
     window.addEventListener('resize', dismiss);
-    document.addEventListener('scroll', dismiss, true);
+    document.addEventListener('scroll', onScroll, true);
+    if (followScroll) {
+      document.addEventListener('wheel', userScroll, { passive: true, capture: true });
+      document.addEventListener('touchmove', userScroll, { passive: true, capture: true });
+    }
 
     return () => {
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('resize', dismiss);
-      document.removeEventListener('scroll', dismiss, true);
+      document.removeEventListener('scroll', onScroll, true);
+      document.removeEventListener('wheel', userScroll, true);
+      document.removeEventListener('touchmove', userScroll, true);
     };
-  }, [open, onClose, triggerRef]);
+  }, [open, onClose, triggerRef, followScroll, place]);
 
   if (!open) return null;
 

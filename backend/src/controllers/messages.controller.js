@@ -1,3 +1,4 @@
+const { parseMediaPage, mediaCursor, UUID } = require('../utils/mediaPagination');
 const { query } = require("../config/db");
 const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
@@ -21,7 +22,7 @@ const PAGE_SIZE = 50;
 // write through message.service.createMessage so history stays consistent.
 const sendMessage = asyncHandler(async (req, res) => {
   const { roomId } = req.body;
-  const { content, replyToId, attachments, mentionedUserIds, clientId } = req.body;
+  const { content, replyToId, attachments, albumId, mentionedUserIds, clientId, forwardSource } = req.body;
 
   if (!roomId) {
     throw new ApiError(400, "roomId is required");
@@ -34,7 +35,9 @@ const sendMessage = asyncHandler(async (req, res) => {
     content,
     replyToId,
     attachments,
+    albumId,
     mentionedUserIds,
+    forwardSource,
     io: req.app.get("io"),
   });
 
@@ -58,11 +61,21 @@ const listMessages = asyncHandler(async (req, res) => {
     throw new ApiError(403, "You are not a member of this room");
   }
 
+  let anchorSequence = null;
+  if (req.query.around !== undefined) {
+    if (typeof req.query.around !== 'string' || !UUID.test(req.query.around) || before !== undefined || afterSeq !== undefined) throw new ApiError(400, 'around must identify one message without another history cursor');
+    const anchor = await query('SELECT room_sequence FROM messages WHERE id = $1 AND room_id = $2 AND deleted_at IS NULL', [req.query.around, roomId]);
+    if (!anchor.rows.length) throw new ApiError(404, 'Message no longer available');
+    anchorSequence = anchor.rows[0].room_sequence;
+  }
+
   // 2. Fetch messages — cursor-based pagination via created_at
   let sql = `
     SELECT
       m.id,
       m.client_id,
+      m.album_id,
+      m.forwarded,
       m.room_sequence,
       m.room_id,
       m.sender_id,
@@ -87,7 +100,8 @@ const listMessages = asyncHandler(async (req, res) => {
             'url',       a.file_url,
             'width',     a.width,
             'height',    a.height,
-            'preview_url', a.preview_url
+            'preview_url', a.preview_url,
+            'duration', a.duration
           )
         ) FILTER (WHERE a.id IS NOT NULL),
         '[]'
@@ -111,7 +125,10 @@ const listMessages = asyncHandler(async (req, res) => {
   `;
   const params = [roomId];
 
-  if (afterSeq !== undefined) {
+  if (anchorSequence !== null) {
+    params.push(anchorSequence);
+    sql += ` AND m.room_sequence <= $${params.length}`;
+  } else if (afterSeq !== undefined) {
     const seq = Number(afterSeq);
     if (!Number.isSafeInteger(seq) || seq < 0) throw new ApiError(400, 'afterSeq must be a non-negative integer');
     params.push(seq);
@@ -146,7 +163,7 @@ const listMessages = asyncHandler(async (req, res) => {
   const ascending = afterSeq !== undefined;
   sql += `
     GROUP BY m.id, m.room_id, m.sender_id, u.display_name, u.avatar_url,
-             m.client_id, m.room_sequence, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
+             m.client_id, m.album_id, m.forwarded, m.room_sequence, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
     ORDER BY m.room_sequence ${ascending ? 'ASC' : 'DESC'} LIMIT $${params.length + 1}`;
   params.push(ascending ? 200 : PAGE_SIZE);
 
@@ -187,7 +204,7 @@ const listMessages = asyncHandler(async (req, res) => {
  */
 async function getMessagePayload(messageId, viewerId) {
   const result = await query(
-    `SELECT m.id, m.room_id, m.sender_id, m.client_id, m.room_sequence,
+    `SELECT m.id, m.room_id, m.sender_id, m.client_id, m.album_id, m.forwarded, m.room_sequence,
             u.display_name AS sender_name,
             u.avatar_url   AS sender_avatar,
             CASE WHEN m.deleted_at IS NOT NULL THEN NULL ELSE m.content END AS content,
@@ -206,7 +223,8 @@ async function getMessagePayload(messageId, viewerId) {
                   'url',       a.file_url,
                   'width',     a.width,
                   'height',    a.height,
-                  'preview_url', a.preview_url
+                  'preview_url', a.preview_url,
+                  'duration', a.duration
                 )
               ) FILTER (WHERE a.id IS NOT NULL),
               '[]'
@@ -222,7 +240,8 @@ async function getMessagePayload(messageId, viewerId) {
      LEFT JOIN attachments a ON a.message_id = m.id
      WHERE m.id = $1
      GROUP BY m.id, m.room_id, m.sender_id, m.client_id, m.room_sequence, u.display_name, u.avatar_url,
-              m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at`,
+              m.album_id,
+      m.forwarded, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at`,
     [messageId],
   );
 
@@ -279,6 +298,8 @@ const searchMessages = asyncHandler(async (req, res) => {
        m.room_id,
        m.sender_id,
        m.client_id,
+       m.album_id,
+      m.forwarded,
        m.room_sequence,
        u.display_name AS sender_name,
        u.avatar_url   AS sender_avatar,
@@ -298,7 +319,8 @@ const searchMessages = asyncHandler(async (req, res) => {
              'url',       a.file_url,
              'width',     a.width,
              'height',    a.height,
-             'preview_url', a.preview_url
+             'preview_url', a.preview_url,
+             'duration', a.duration
            )
          ) FILTER (WHERE a.id IS NOT NULL),
          '[]'
@@ -323,7 +345,8 @@ const searchMessages = asyncHandler(async (req, res) => {
        AND m.deleted_at IS NULL
        AND to_tsvector('english', m.content) @@ plainto_tsquery('english', $2)
      GROUP BY m.id, m.room_id, m.sender_id, m.client_id, m.room_sequence, u.display_name, u.avatar_url,
-              m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
+              m.album_id,
+      m.forwarded, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
      ORDER BY rank DESC, m.created_at DESC
      LIMIT 50`,
     [roomId, q.trim()],
@@ -487,4 +510,35 @@ const listPinnedMessages = asyncHandler(async (req, res) => {
   return ok(res, { messages: await listRoomPins(roomId, req.user.id) });
 });
 
-module.exports = { sendMessage, listMessages, searchMessages, editMessage: editMessageHandler, deleteMessage: deleteMessageHandler, addReaction: addReactionHandler, removeReaction: removeReactionHandler, pinMessageHandler, unpinMessageHandler, listPinnedMessages };
+const listRoomMedia = asyncHandler(async (req, res) => {
+  const { roomId } = req.params;
+  const membership = await query('SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+  if (!membership.rows.length) throw new ApiError(404, 'Room not found');
+  const { kind, limit, after, cursor } = parseMediaPage(req.query, roomId);
+  const filters = {
+    media: "(a.file_type LIKE 'image/%' OR a.file_type LIKE 'video/%')",
+    audio: "a.file_type LIKE 'audio/%'",
+    documents: "(COALESCE(a.file_type, '') NOT LIKE 'image/%' AND COALESCE(a.file_type, '') NOT LIKE 'video/%' AND COALESCE(a.file_type, '') NOT LIKE 'audio/%')",
+  };
+  const params = [roomId];
+  let bounds = '';
+  if (after) { params.push(after); bounds += ` AND m.created_at > $${params.length}::timestamptz`; }
+  if (cursor) { params.push(cursor.sequence, cursor.id); bounds += ` AND (m.room_sequence, a.id) < ($${params.length - 1}::bigint, $${params.length}::uuid)`; }
+  params.push(limit + 1);
+  const result = await query(
+    `SELECT a.id, a.filename, a.size_bytes AS size, a.file_type AS mime_type,
+            a.file_url AS url, a.width, a.height, a.preview_url, a.duration,
+            m.id AS message_id, m.created_at, m.room_sequence,
+            m.sender_id, u.display_name AS sender_name
+       FROM messages m
+       INNER JOIN attachments a ON a.message_id = m.id
+       INNER JOIN users u ON u.id = m.sender_id
+      WHERE m.room_id = $1 AND m.deleted_at IS NULL AND m.room_sequence IS NOT NULL AND ${filters[kind]} ${bounds}
+      ORDER BY m.room_sequence DESC, a.id DESC LIMIT $${params.length}`, params,
+  );
+  const hasMore = result.rows.length > limit;
+  const media = result.rows.slice(0, limit);
+  return ok(res, { media, nextCursor: hasMore ? mediaCursor(media[media.length - 1], roomId, kind, after) : null });
+});
+
+module.exports = { sendMessage, listMessages, searchMessages, editMessage: editMessageHandler, deleteMessage: deleteMessageHandler, addReaction: addReactionHandler, removeReaction: removeReactionHandler, pinMessageHandler, unpinMessageHandler, listPinnedMessages, listRoomMedia };

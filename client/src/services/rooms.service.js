@@ -12,6 +12,48 @@ export async function listRooms() {
   return data.data;
 }
 
+export async function discoverRooms({ q = '', page = 1 } = {}) {
+  if (isDevAuthBypass) {
+    const room = {
+      id: 'preview-public-room',
+      name: 'Conclave Community',
+      description: 'Open announcements and product feedback for the preview workspace.',
+      slug: 'conclave-community',
+      member_count: 24,
+    };
+    const term = q.trim().toLowerCase();
+    const rooms = previewRooms.some((item) => item.id === room.id)
+      ? []
+      : (!term || `${room.name} ${room.description}`.toLowerCase().includes(term) ? [room] : []);
+    return { rooms: page === 1 ? rooms : [], page, hasMore: false };
+  }
+  const { data } = await api.get('/rooms/discover', { params: { q, page } });
+  return data.data;
+}
+
+export async function joinPublicRoom(roomId) {
+  if (isDevAuthBypass) {
+    if (!previewRooms.some((room) => room.id === roomId)) {
+      previewRooms.push({
+        id: roomId,
+        name: 'Conclave Community',
+        display_name: 'Conclave Community',
+        description: 'Open announcements and product feedback for the preview workspace.',
+        slug: 'conclave-community',
+        type: 'public',
+        member_count: 1,
+        my_role: 'member',
+        has_message: false,
+        unread_count: 0,
+        members: [{ ...previewUser, role: 'member', joined_at: new Date().toISOString() }],
+      });
+    }
+    return { roomId, joined: true, existing: false };
+  }
+  const { data } = await api.post(`/rooms/${roomId}/join`);
+  return data.data;
+}
+
 export async function updateRoomPreferences(roomId, updates) {
   if (isDevAuthBypass) return updates;
   const { data } = await api.patch(`/rooms/${roomId}/preferences`, updates);
@@ -98,6 +140,10 @@ export async function updateRoom(roomId, updates) {
         if (room.type !== 'dm') room.display_name = room.name;
       }
       if (typeof updates.description === 'string') room.description = updates.description;
+      if (typeof updates.avatar_url === 'string' || updates.avatar_url === null) {
+        room.avatar_url = updates.avatar_url;
+        room.display_avatar = updates.avatar_url;
+      }
     }
     return room ? { ...room } : null;
   }

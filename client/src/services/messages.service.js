@@ -1,10 +1,13 @@
 import { api } from '../lib/api';
 import { isDevAuthBypass, previewMessages, previewPinnedMessages } from '../config/devPreview';
 
-export async function listMessages(roomId, before, afterSeq) {
+export async function listMessages(roomId, before, afterSeq, around) {
   if (isDevAuthBypass) {
+    const anchor = around ? previewMessages.find((message) => message.id === around && !message.is_deleted && !message.deleted_at) : null;
+    if (around && !anchor) throw new Error('Message no longer available');
+    const rows = anchor ? previewMessages.slice(0, previewMessages.indexOf(anchor) + 1) : previewMessages;
     return {
-      messages: [...previewMessages].reverse().map((message) => ({
+      messages: [...rows].reverse().map((message) => ({
         ...message,
         room_id: roomId,
       })),
@@ -12,7 +15,7 @@ export async function listMessages(roomId, before, afterSeq) {
     };
   }
   const { data } = await api.get(`/messages/room/${roomId}`, {
-    params: afterSeq !== undefined ? { afterSeq } : before ? { before } : undefined,
+    params: around ? { around } : afterSeq !== undefined ? { afterSeq } : before ? { before } : undefined,
   });
   return data.data;
 }
@@ -77,9 +80,10 @@ export async function removeReaction(messageId, emoji) {
  * read back from the upload record so a client cannot claim its own file is a
  * different size or type than the bytes it just sent.
  */
-export async function uploadFile(file, { onProgress, signal } = {}) {
+export async function uploadFile(file, { onProgress, signal, filename, metadata } = {}) {
   const form = new FormData();
-  form.append('file', file);
+  form.append('file', file, filename || file.name || 'upload');
+  if (metadata) form.append('mediaMetadata', JSON.stringify(metadata));
   const { data } = await api.post('/upload', form, {
     signal,
     onUploadProgress: (event) => {
@@ -125,4 +129,20 @@ export async function listPinnedMessages(roomId) {
   }
   const { data } = await api.get(`/messages/room/${roomId}/pinned`);
   return data.data.messages;
+}
+
+export async function listRoomMedia(roomId, { kind = 'media', cursor, limit = 24, after, signal } = {}) {
+  if (isDevAuthBypass) {
+    const rows = previewMessages.filter((message) => !message.is_deleted && !message.deleted_at && (!after || new Date(message.created_at) > new Date(after)))
+      .flatMap((message) => (message.attachments || []).map((item, index) => ({ ...item,
+        id: item.id || `${message.id}-file-${index}`, message_id: message.id, created_at: message.created_at, sender_name: message.sender_name,
+      }))).filter((item) => {
+        const type = item.mime_type || '';
+        return kind === 'media' ? /^(image|video)\//.test(type) : kind === 'audio' ? type.startsWith('audio/') : !/^(image|video|audio)\//.test(type);
+      }).reverse();
+    const start = cursor ? Number(cursor) : 0;
+    return { media: rows.slice(start, start + limit), nextCursor: start + limit < rows.length ? String(start + limit) : null };
+  }
+  const { data } = await api.get(`/messages/room/${roomId}/media`, { params: { kind, cursor, limit, after }, signal, timeout: 20000 });
+  return data.data;
 }

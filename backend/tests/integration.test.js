@@ -24,7 +24,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Client } = require('pg');
-const { randomBytes } = require('node:crypto');
+const { randomBytes, randomUUID } = require('node:crypto');
 
 // --- Locate a Postgres to talk to, before anything reads env.js ---------------
 require('dotenv').config({ quiet: true });
@@ -43,6 +43,7 @@ process.env.REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 process.env.JWT_ACCESS_SECRET ||= 'integration-test-access-secret';
 process.env.JWT_REFRESH_SECRET ||= 'integration-test-refresh-secret';
 process.env.CLIENT_ORIGIN ||= 'http://localhost:5173';
+process.env.TRUST_PROXY_HOPS ||= '1';
 
 const { query } = require('../src/config/db');
 const { createMessage } = require('../src/services/message.service');
@@ -339,7 +340,7 @@ async function startServer() {
 async function authedUser(email) {
   const reg = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': `198.51.100.${randomBytes(3).readUIntBE(0, 3) % 250 + 1}` },
     body: JSON.stringify({ email, password: 'correct-horse-battery', displayName: 'Slug Tester' }),
   });
   // Read the body once. Passing `await res.text()` as an assert message
@@ -356,7 +357,7 @@ async function authedUser(email) {
 async function authedAccount(email) {
   const reg = await fetch(`${baseUrl}/api/auth/register`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': `198.51.100.${randomBytes(3).readUIntBE(0, 3) % 250 + 1}` },
     body: JSON.stringify({ email, password: 'correct-horse-battery', displayName: 'Task Tester' }),
   });
   const body = await reg.text();
@@ -589,7 +590,7 @@ dbTest('an attachment-only message is accepted and shaped like listMessages', as
   assert.equal(m.attachments.length, 1);
   assert.deepEqual(
     Object.keys(m.attachments[0]),
-    ['id', 'filename', 'size', 'mime_type', 'url'],
+    ['id', 'filename', 'size', 'mime_type', 'url', 'width', 'height', 'preview_url', 'duration'],
     'must match the shape listMessages returns',
   );
   assert.equal(m.attachments[0].url, url);
@@ -668,6 +669,16 @@ dbTest('an upload is attached exactly once', async () => {
   const first = await createMessage({ roomId: room.id, senderId: u.id, content: 'first', attachments: [{ url }] });
   assert.equal(first.attachments.length, 1);
 
+  const albumId = randomUUID();
+  const secondUrl = `https://x/album-${Date.now()}.png`;
+  await seedUpload({ uploaderId: u.id, url: secondUrl, mimeType: 'image/png' });
+  const albumItem = await createMessage({
+    roomId: room.id, senderId: u.id, content: 'second caption',
+    attachments: [{ url: secondUrl }], albumId,
+  });
+  assert.equal(albumItem.album_id, albumId);
+  assert.equal(albumItem.attachments.length, 1);
+
   const before = (await query('SELECT COUNT(*)::int n FROM messages WHERE room_id = $1', [room.id])).rows[0].n;
   await assert.rejects(
     () => createMessage({ roomId: room.id, senderId: u.id, content: 'second', attachments: [{ url }] }),
@@ -679,6 +690,53 @@ dbTest('an upload is attached exactly once', async () => {
 
   const claimed = await query('SELECT attached_message_id FROM file_uploads WHERE file_url = $1', [url]);
   assert.equal(claimed.rows[0].attached_message_id, first.id, 'the claim must still point at the first message');
+});
+
+dbTest('media album metadata survives retries and history and rejects another room or sender', async () => {
+  const sender = await authedAccount(`album-sender-${randomUUID()}@test.com`);
+  const peer = await authedAccount(`album-peer-${randomUUID()}@test.com`);
+  const localRooms = [];
+  for (const suffix of ['a', 'b']) {
+    const created = (await query(
+      `INSERT INTO rooms (name, type, created_by, slug) VALUES ('Album room', 'group', $1, $2) RETURNING id`,
+      [sender.userId, `album-${randomUUID()}-${suffix}`],
+    )).rows[0];
+    localRooms.push(created.id);
+    await query(`INSERT INTO room_members (room_id, user_id) VALUES ($1, $2), ($1, $3)`,
+      [created.id, sender.userId, peer.userId]);
+  }
+  const albumId = randomUUID();
+  const urls = Array.from({ length: 4 }, () => `https://fixture/${randomUUID()}.png`);
+  for (const url of urls.slice(0, 3)) await seedUpload({ uploaderId: sender.userId, url, mimeType: 'image/png' });
+  await seedUpload({ uploaderId: peer.userId, url: urls[3], mimeType: 'image/png' });
+  const first = await createMessage({ roomId: localRooms[0], senderId: sender.userId,
+    clientId: randomUUID(), content: 'First item caption', attachments: [{ url: urls[0] }], albumId });
+  const request = { roomId: localRooms[0], senderId: sender.userId, clientId: randomUUID(),
+    content: 'Second item caption', replyToId: first.id, attachments: [{ url: urls[1] }], albumId };
+  const second = await createMessage(request);
+  const replay = await createMessage(request);
+  assert.equal(replay.id, second.id);
+  assert.equal(replay.album_id, albumId);
+  assert.equal(replay.attachments.length, 1);
+  assert.equal(replay.attachments[0].id, second.attachments[0].id);
+  const history = await fetch(`${baseUrl}/api/messages/room/${localRooms[0]}`, {
+    headers: { authorization: `Bearer ${sender.token}` },
+  });
+  assert.equal(history.status, 200);
+  const rows = (await history.json()).data.messages;
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((row) => row.album_id === albumId && row.attachments.length === 1));
+  assert.equal(rows.find((row) => row.id === second.id).reply_to_id, first.id);
+  await assert.rejects(() => createMessage({ roomId: localRooms[1], senderId: sender.userId,
+    content: 'Wrong room', attachments: [{ url: urls[2] }], albumId }),
+  (error) => error.status === 400 && /one conversation and sender/.test(error.message));
+  await assert.rejects(() => createMessage({ roomId: localRooms[0], senderId: peer.userId,
+    content: 'Wrong sender', attachments: [{ url: urls[3] }], albumId }),
+  (error) => error.status === 400 && /one conversation and sender/.test(error.message));
+  await assert.rejects(() => createMessage({ roomId: localRooms[0], senderId: sender.userId,
+    content: 'Text cannot become an album item', albumId }), (error) => error.status === 400);
+  const unclaimed = await query('SELECT attached_message_id FROM file_uploads WHERE file_url = ANY($1::text[])', [urls.slice(2)]);
+  assert.ok(unclaimed.rows.every((row) => row.attached_message_id === null));
 });
 
 dbTest('the same URL cannot be claimed twice within one message', async () => {
@@ -2733,6 +2791,71 @@ async function listRoomsVia(token) {
   return JSON.parse(body).data;
 }
 
+dbTest('GET /rooms/:roomId includes safe member profile details for conversation info', async () => {
+  const me = await authedAccount('room-info-me@test.com');
+  const them = await authedAccount('room-info-them@test.com');
+  const profile = await fetch(`${baseUrl}/api/users/me`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${them.token}` },
+    body: JSON.stringify({ bio: 'A short public introduction.' }),
+  });
+  assert.equal(profile.status, 200, await profile.text());
+
+  const dm = await createRoomVia(me.token, { type: 'dm', memberIds: [them.userId] });
+  const response = await fetch(`${baseUrl}/api/rooms/${dm.id}`, {
+    headers: { authorization: `Bearer ${me.token}` },
+  });
+  const body = await response.text();
+  assert.equal(response.status, 200, body);
+  const peer = JSON.parse(body).data.members.find((member) => member.id === them.userId);
+  assert.equal(peer.bio, 'A short public introduction.');
+  assert.ok(peer.account_created_at);
+  assert.equal('email' in peer, false, 'room member details must not expose email addresses');
+});
+
+dbTest('shared groups, user reports, and DM blocking are scoped to the signed-in user', async () => {
+  const reporter = await authedAccount('info-safety-reporter@test.com');
+  const target = await authedAccount('info-safety-target@test.com');
+  const group = await createRoomVia(reporter.token, {
+    type: 'group', name: 'Common group', memberIds: [target.userId],
+  });
+
+  const common = await fetch(`${baseUrl}/api/users/${target.userId}/shared-rooms`, {
+    headers: { authorization: `Bearer ${reporter.token}` },
+  });
+  assert.equal(common.status, 200);
+  assert.equal((await common.json()).data.rooms[0].id, group.id);
+
+  const report = await fetch(`${baseUrl}/api/users/${target.userId}/report`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${reporter.token}` },
+    body: JSON.stringify({ reason: 'harassment', details: 'Test report', roomId: group.id }),
+  });
+  assert.equal(report.status, 201, await report.text());
+
+  const blocked = await fetch(`${baseUrl}/api/users/${target.userId}/block`, {
+    method: 'POST', headers: { authorization: `Bearer ${reporter.token}` },
+  });
+  assert.equal(blocked.status, 200);
+  const deniedDm = await fetch(`${baseUrl}/api/rooms`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${reporter.token}` },
+    body: JSON.stringify({ type: 'dm', memberIds: [target.userId] }),
+  });
+  assert.equal(deniedDm.status, 403);
+
+  const unblock = await fetch(`${baseUrl}/api/users/${target.userId}/block`, {
+    method: 'DELETE', headers: { authorization: `Bearer ${reporter.token}` },
+  });
+  assert.equal(unblock.status, 200);
+  const allowedDm = await fetch(`${baseUrl}/api/rooms`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${reporter.token}` },
+    body: JSON.stringify({ type: 'dm', memberIds: [target.userId] }),
+  });
+  assert.equal(allowedDm.status, 201, await allowedDm.text());
+});
+
 async function sendVia(token, roomId, content) {
   const res = await fetch(`${baseUrl}/api/messages`, {
     method: 'POST',
@@ -3409,7 +3532,7 @@ async function prefsVia(token, method = 'GET', body) {
 dbTest('a member leaves by removing themselves, and disappears from the room', async () => {
   const me = await authedAccount('phase7-leaver@test.com');
   const them = await authedAccount('phase7-leaver-them@test.com');
-  const room = await createRoomVia(me.token, { name: 'Leaving Room', memberIds: [them.userId] });
+  const room = await createRoomVia(me.token, { type: 'group', name: 'Leaving Room', memberIds: [them.userId] });
 
   const res = await removeMemberVia(them.token, room.id, them.userId);
   const body = await res.text();
@@ -3479,7 +3602,7 @@ dbTest('the last admin cannot be removed — that would orphan the room forever'
 dbTest('an admin can be promoted and demoted, and the room keeps an admin', async () => {
   const admin = await authedAccount('phase7-role-admin@test.com');
   const member = await authedAccount('phase7-role-member@test.com');
-  const room = await createRoomVia(admin.token, { name: 'Role Changes', memberIds: [member.userId] });
+  const room = await createRoomVia(admin.token, { type: 'group', name: 'Role Changes', memberIds: [member.userId] });
 
   const promoted = await setMemberRoleVia(admin.token, room.id, member.userId, 'admin');
   const promotedBody = await promoted.text();
@@ -3553,14 +3676,102 @@ dbTest('user search finds people by name and never returns an email', async () =
   assert.equal(users.length, 1, 'the search finds the account by its email');
   const row = users[0];
   assert.ok(row.id && row.display_name);
-  // The whole point of this endpoint: listUsers returns email to any caller,
-  // and a compose picker must not hand every address to anyone who can type.
+  // Directory results are useful for compose without exposing account email.
   assert.equal(row.email, undefined, 'search results carry no email');
   assert.deepEqual(
     Object.keys(row).sort(),
     ['avatar_url', 'display_name', 'id'],
     'search returns exactly the picker fields'
   );
+});
+
+dbTest('public rooms are discoverable and joinable, but their messages stay membership protected', async () => {
+  const owner = await authedAccount('public-room-owner@test.com');
+  const visitor = await authedAccount('public-room-visitor@test.com');
+  const privateVisitor = await authedAccount('public-room-private-visitor@test.com');
+  const publicRoom = await createRoomVia(owner.token, { name: 'Open Design Room', type: 'public' });
+  const privateRoom = await createRoomVia(owner.token, { name: 'Private Design Room', type: 'private' });
+
+  const discover = await fetch(`${baseUrl}/api/rooms/discover?q=Open`, {
+    headers: { authorization: `Bearer ${visitor.token}` },
+  });
+  const discoverBody = await discover.text();
+  assert.equal(discover.status, 200, discoverBody);
+  const { rooms } = JSON.parse(discoverBody).data;
+  assert.deepEqual(rooms.map((room) => room.id), [publicRoom.id]);
+  assert.equal(Object.hasOwn(rooms[0], 'email'), false);
+
+  const beforeJoin = await fetch(`${baseUrl}/api/messages/room/${publicRoom.id}`, {
+    headers: { authorization: `Bearer ${visitor.token}` },
+  });
+  assert.notEqual(beforeJoin.status, 200, 'discovery does not grant message access');
+
+  const joined = await fetch(`${baseUrl}/api/rooms/${publicRoom.id}/join`, {
+    method: 'POST', headers: { authorization: `Bearer ${visitor.token}` },
+  });
+  const joinedBody = await joined.text();
+  assert.equal(joined.status, 201, joinedBody);
+  assert.equal(JSON.parse(joinedBody).data.joined, true);
+
+  const repeated = await fetch(`${baseUrl}/api/rooms/${publicRoom.id}/join`, {
+    method: 'POST', headers: { authorization: `Bearer ${visitor.token}` },
+  });
+  const repeatedBody = await repeated.text();
+  assert.equal(repeated.status, 200, repeatedBody);
+  assert.equal(JSON.parse(repeatedBody).data.existing, true);
+
+  const listed = await fetch(`${baseUrl}/api/rooms/${publicRoom.id}`, {
+    headers: { authorization: `Bearer ${visitor.token}` },
+  });
+  assert.equal(listed.status, 200, 'a joined member can read room metadata');
+
+  const blocked = await fetch(`${baseUrl}/api/rooms/${privateRoom.id}/join`, {
+    method: 'POST', headers: { authorization: `Bearer ${privateVisitor.token}` },
+  });
+  assert.equal(blocked.status, 403, 'private rooms cannot be joined through discovery');
+  const hidden = await fetch(`${baseUrl}/api/rooms/discover`, {
+    headers: { authorization: `Bearer ${privateVisitor.token}` },
+  });
+  assert.equal((await hidden.json()).data.rooms.some((room) => room.id === privateRoom.id), false);
+});
+
+dbTest('direct messages stay two-person conversations and reject room membership changes', async () => {
+  const first = await authedAccount('dm-two-person-first@test.com');
+  const second = await authedAccount('dm-two-person-second@test.com');
+  const third = await authedAccount('dm-two-person-third@test.com');
+  const dm = await createRoomVia(first.token, { type: 'dm', memberIds: [second.userId] });
+
+  const add = await fetch(`${baseUrl}/api/rooms/${dm.id}/members`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${first.token}` },
+    body: JSON.stringify({ userId: third.userId }),
+  });
+  assert.equal(add.status, 409, await add.text());
+
+  const leave = await fetch(`${baseUrl}/api/rooms/${dm.id}/members/${first.userId}`, {
+    method: 'DELETE', headers: { authorization: `Bearer ${first.token}` },
+  });
+  assert.equal(leave.status, 409, await leave.text());
+
+  const changeRole = await fetch(`${baseUrl}/api/rooms/${dm.id}/members/${second.userId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${first.token}` },
+    body: JSON.stringify({ role: 'admin' }),
+  });
+  assert.equal(changeRole.status, 409, await changeRole.text());
+});
+
+dbTest('the user directory never returns another member email address', async () => {
+  const caller = await authedAccount('directory-caller@test.com');
+  await authedAccount('directory-target-private@test.com');
+  const response = await fetch(`${baseUrl}/api/users?q=directory-target-private`, {
+    headers: { authorization: `Bearer ${caller.token}` },
+  });
+  const responseBody = await response.text();
+  assert.equal(response.status, 200, responseBody);
+  const { users } = JSON.parse(responseBody).data;
+  assert.equal(users.length, 1);
+  assert.equal(Object.hasOwn(users[0], 'email'), false);
 });
 
 dbTest('an empty search returns nothing rather than the whole directory', async () => {
@@ -3837,16 +4048,11 @@ dbTest('an unknown attachment id is a 404, and a malformed one a 400', async () 
   await malformed.text();
 });
 
-dbTest('uploads record a resource_type of raw for documents, not image', async () => {
-  const { resourceTypeFor } = require('../src/controllers/upload.controller');
-
-  // `auto` filed PDFs under the image store, which is why an uploaded PDF could
-  // never be served back. The decision is now explicit and stored.
-  assert.equal(resourceTypeFor('application/pdf'), 'raw');
-  assert.equal(resourceTypeFor('application/zip'), 'raw');
-  assert.equal(resourceTypeFor('text/csv'), 'raw');
-  assert.equal(resourceTypeFor('image/png'), 'image');
-  assert.equal(resourceTypeFor('image/svg+xml'), 'image');
+test('new uploads use opaque R2 attachment keys', () => {
+  const { buildKey, resolveMimetype } = require('../src/controllers/upload.controller');
+  const key = buildKey('report.pdf');
+  assert.match(key, /^conclave\/attachments\/[0-9a-f-]{36}-report.pdf$/);
+  assert.equal(resolveMimetype('application/pdf', 'report.pdf'), 'application/pdf');
 });
 
 dbTest('a filename cannot smuggle a header break into Content-Disposition', async () => {
@@ -3930,7 +4136,7 @@ dbTest('room edits are validated and admin-only', async () => {
   const admin = await authedAccount('wave3-guard-admin@test.com');
   const member = await authedAccount('wave3-guard-member@test.com');
   const stranger = await authedAccount('wave3-guard-stranger@test.com');
-  const room = await createRoomVia(admin.token, { name: 'Guarded', memberIds: [member.userId] });
+  const room = await createRoomVia(admin.token, { type: 'group', name: 'Guarded', memberIds: [member.userId] });
 
   const byMember = await updateRoomVia(member.token, room.id, { name: 'Hijacked' });
   assert.equal(byMember.status, 403, 'a plain member cannot edit the room');
@@ -4042,7 +4248,7 @@ dbTest('adding a member tells the members who were already there', async () => {
   const already = await authedAccount('wave3-join-already@test.com');
   const newcomer = await authedAccount('wave3-join-new@test.com');
   const room = await createRoomVia(inviter.token, {
-    name: 'Join Notices', memberIds: [already.userId],
+    type: 'group', name: 'Join Notices', memberIds: [already.userId],
   });
 
   const res = await fetch(`${baseUrl}/api/rooms/${room.id}/members`, {
@@ -4840,4 +5046,138 @@ dbTest('a poll question cannot be edited, because the votes underneath it would 
     body: JSON.stringify({ content: 'Still just words' }),
   });
   assert.equal(plainEdit.status, 200, await plainEdit.text());
+});
+
+
+dbTest('storage cleanup protects avatars, retires unclaimed files and retries deletion jobs durably', async () => {
+  const storage = require('../src/config/r2');
+  const cleanup = require('../src/services/storageCleanup.service');
+  const legacy = require('../src/config/cloudinary'); const legacyDestroy = legacy.uploader.destroy;
+  legacy.uploader.destroy = async () => ({ result: 'ok' });
+  const originalDelete = storage.deleteObject; const configured = storage.isConfigured;
+  const suffix = randomUUID(); const orphanKey = `test-orphan-${suffix}`; const avatarKey = `test-avatar-${suffix}`;
+  const avatarUrl = `r2://test/${avatarKey}`; const orphanUrl = `r2://test/${orphanKey}`;
+  await query(`INSERT INTO file_uploads(uploader_id,file_url,filename,mime_type,size_bytes,public_id,resource_type,created_at)
+    VALUES($1,$2,'avatar.png','image/png',10,$3,'r2',NOW()-INTERVAL '2 days'),($1,$4,'orphan.png','image/png',10,$5,'r2',NOW()-INTERVAL '2 days')`,
+    [user.id,avatarUrl,avatarKey,orphanUrl,orphanKey]);
+  await query('UPDATE users SET avatar_url=$2 WHERE id=$1',[user.id,avatarUrl]);
+  let reject = true; const removed = [];
+  storage.isConfigured = () => true;
+  storage.deleteObject = async (key) => { if (key === orphanKey && reject) throw Object.assign(new Error('Temporary storage outage'),{name:'StorageUnavailable'}); removed.push(key); };
+  try {
+    await cleanup.runStorageCleanup({limit:500});
+    assert.equal(removed.includes(avatarKey),false);
+    assert.equal((await query('SELECT retired_at FROM file_uploads WHERE file_url=$1',[avatarUrl])).rows[0].retired_at,null);
+    assert.ok((await query('SELECT retired_at FROM file_uploads WHERE file_url=$1',[orphanUrl])).rows[0].retired_at);
+    const failed = (await query('SELECT * FROM storage_deletion_jobs WHERE object_key=$1',[orphanKey])).rows[0];
+    assert.equal(failed.attempts,1); assert.equal(failed.last_error,'StorageUnavailable');
+    await assert.rejects(query('UPDATE users SET avatar_url=$2 WHERE id=$1',[user.id,orphanUrl]),{code:'23514'});
+    reject = false;
+    await query('UPDATE storage_deletion_jobs SET next_attempt_at=NOW() WHERE id=$1',[failed.id]);
+    await cleanup.runStorageCleanup({limit:500});
+    assert.equal((await query('SELECT 1 FROM storage_deletion_jobs WHERE id=$1',[failed.id])).rowCount,0);
+    assert.equal(removed.includes(orphanKey),true);
+    // A queued object can still be an active avatar: postpone, then delete once unused.
+    await query("INSERT INTO storage_deletion_jobs(provider,object_key) VALUES('r2',$1)",[avatarKey]);
+    await cleanup.runStorageCleanup({limit:500});
+    const protectedJob = (await query('SELECT * FROM storage_deletion_jobs WHERE object_key=$1',[avatarKey])).rows[0];
+    assert.equal(protectedJob.last_error,'ActiveReference');
+    assert.equal(removed.includes(avatarKey),false);
+    await query('UPDATE users SET avatar_url=NULL WHERE id=$1',[user.id]);
+    await query('UPDATE storage_deletion_jobs SET next_attempt_at=NOW() WHERE id=$1',[protectedJob.id]);
+    await cleanup.runStorageCleanup({limit:500});
+    assert.equal(removed.includes(avatarKey),true);
+    assert.equal((await query('SELECT 1 FROM storage_deletion_jobs WHERE id=$1',[protectedJob.id])).rowCount,0);
+
+  } finally { legacy.uploader.destroy = legacyDestroy; storage.deleteObject = originalDelete; storage.isConfigured = configured; await query('UPDATE users SET avatar_url=NULL WHERE id=$1',[user.id]); }
+});
+
+dbTest('shared files use bounded stable cursors, include documents/audio, and enforce room access', async () => {
+  const me = await authedAccount(`shared-files-${randomUUID()}@test.com`);
+  const stranger = await authedAccount(`shared-stranger-${randomUUID()}@test.com`);
+  const chat = await createRoomVia(me.token, { name: 'Shared file pages' });
+  const seeded = await query(`INSERT INTO messages(room_id,sender_id,room_sequence,content,created_at)
+    SELECT $1,$2,n,'SHARED-CONTEXT-'||n,'2026-01-01T00:00:00Z'::timestamptz FROM generate_series(1,60) n RETURNING id,room_sequence`, [chat.id, me.userId]);
+  await query('UPDATE rooms SET message_sequence=60 WHERE id=$1', [chat.id]);
+  await query(`INSERT INTO attachments(message_id,filename,file_url,file_type,size_bytes)
+    SELECT m.id, kind.ext, 'r2://test/'||m.id||kind.ext, kind.mime, 10 FROM messages m
+    CROSS JOIN (VALUES ('photo.png','image/png'),('clip.mp4','video/mp4'),('report.pdf','application/pdf'),('voice.ogg','audio/ogg')) kind(ext,mime)
+    WHERE m.room_id=$1`, [chat.id]);
+  const headers = { authorization: `Bearer ${me.token}` };
+  const get = async (params = '', token = me.token) => fetch(`${baseUrl}/api/messages/room/${chat.id}/media${params}`, { headers: { authorization: `Bearer ${token}` } });
+  const firstRes = await get('?limit=7'); assert.equal(firstRes.status,200);
+  const first = (await firstRes.json()).data;
+  assert.equal(first.media.length,7); assert.ok(first.nextCursor);
+  assert.ok(first.media.every((item) => /^(image|video)\//.test(item.mime_type) && item.message_id && item.room_sequence));
+  const inserted = await sendVia(me.token,chat.id,'New while browsing');
+  await query("INSERT INTO attachments(message_id,filename,file_url,file_type,size_bytes) VALUES($1,'new.png','r2://test/new','image/png',10)",[inserted.id]);
+  const oldest = seeded.rows.find((item) => Number(item.room_sequence) === 1);
+  await query('UPDATE messages SET deleted_at=NOW() WHERE id=$1',[oldest.id]);
+  const ids = new Set(first.media.map((item) => item.id)); let cursor=first.nextCursor;
+  while (cursor) {
+    const response = await get(`?limit=7&cursor=${encodeURIComponent(cursor)}`); assert.equal(response.status,200);
+    const page = (await response.json()).data; assert.ok(page.media.length <=7);
+    page.media.forEach((item) => { assert.equal(ids.has(item.id),false,'no duplicate page items'); ids.add(item.id); }); cursor=page.nextCursor;
+  }
+  assert.equal(ids.size,118,'new inserts do not shift old pages; deleted files disappear');
+  for (const [kind,mime] of [['documents','application/pdf'],['audio','audio/ogg']]) {
+    const response=await get(`?kind=${kind}&limit=100`); const page=(await response.json()).data;
+    assert.equal(page.media.length,59); assert.equal(page.nextCursor,null); assert.ok(page.media.every((item)=>item.mime_type===mime));
+  }
+  assert.equal((await get('',stranger.token)).status,404);
+  for (const params of ['?limit=101','?limit=0','?kind=unknown','?cursor=invalid',`?kind=audio&cursor=${first.nextCursor}`,'?after=invalid']) assert.equal((await get(params)).status,400,params);
+  const cleared = (await (await get('?after='+encodeURIComponent(new Date(Date.now()+86400000).toISOString()))).json()).data;
+  assert.deepEqual(cleared,{media:[],nextCursor:null});
+  const anchor = seeded.rows.find((item) => Number(item.room_sequence) === 55);
+  const contextRes = await fetch(`${baseUrl}/api/messages/room/${chat.id}?around=${anchor.id}`,{headers});
+  assert.equal(contextRes.status,200); const context=(await contextRes.json()).data;
+  assert.equal(context.messages.length,50); assert.equal(context.messages[0].id,anchor.id); assert.equal(context.nextCursor,'6');
+  assert.equal(context.messages.some((item)=>item.id===inserted.id),false,'anchor does not pull newer history');
+  assert.equal((await fetch(`${baseUrl}/api/messages/room/${chat.id}?around=${oldest.id}`,{headers})).status,404);
+  assert.equal((await fetch(`${baseUrl}/api/messages/room/${chat.id}?around=${anchor.id}&before=60`,{headers})).status,400);
+  const other = await createRoomVia(me.token,{name:'Other shared room'});
+  assert.equal((await fetch(`${baseUrl}/api/messages/room/${other.id}?around=${anchor.id}`,{headers})).status,404);
+});
+
+dbTest('forwarding reuses immutable media with independent access, idempotency and durable cleanup', async () => {
+  const me = await authedAccount(`forward-self-${randomUUID()}@test.com`);
+  const recipient = await authedAccount(`forward-recipient-${randomUUID()}@test.com`);
+  const source = await createRoomVia(me.token,{name:'Private source'});
+  const target = await createRoomVia(me.token,{type:'group',name:'Forward destination',memberIds:[recipient.userId]});
+  const key=`test-forward-${randomUUID()}`;
+  const original = await seedAttachmentVia(me.token,{roomId:source.id,publicId:key,resourceType:'r2',filename:'private-photo.png',fileType:'image/png'});
+  const clientId=randomUUID();
+  const body={roomId:target.id,clientId,content:'tampered caption',forwardSource:{messageId:original.messageId}};
+  const send=(token,payload)=>fetch(`${baseUrl}/api/messages`,{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify(payload)});
+  const forwardedRes=await send(me.token,body); assert.equal(forwardedRes.status,201,await forwardedRes.clone().text());
+  const forwarded=(await forwardedRes.json()).data;
+  assert.equal(forwarded.forwarded,true); assert.equal(forwarded.content,'holding private-photo.png');
+  assert.equal(forwarded.attachments.length,1); assert.notEqual(forwarded.attachments[0].id,original.attachmentId);
+  const coordinates=await query('SELECT public_id,file_url FROM attachments WHERE id=ANY($1::uuid[])',[[original.attachmentId,forwarded.attachments[0].id]]);
+  assert.equal(coordinates.rows[0].public_id,coordinates.rows[1].public_id); assert.equal(coordinates.rows[0].file_url,coordinates.rows[1].file_url);
+  const retry=await send(me.token,body); assert.equal((await retry.json()).data.id,forwarded.id);
+  assert.equal((await send(recipient.token,{...body,clientId:randomUUID()})).status,404,'destination membership never grants source access');
+  assert.equal((await send(me.token,{...body,roomId:randomUUID(),clientId:randomUUID()})).status,404);
+  assert.equal((await send(me.token,{...body,clientId:randomUUID(),attachments:[{url:'r2://invented'}]})).status,400);
+  const dm=await createRoomVia(me.token,{type:'dm',memberIds:[recipient.userId]});
+  await query('INSERT INTO user_blocks(blocker_id,blocked_id) VALUES($1,$2)',[recipient.userId,me.userId]);
+  assert.equal((await send(me.token,{...body,roomId:dm.id,clientId:randomUUID()})).status,403,'blocked DMs reject forwards');
+  await query('DELETE FROM user_blocks WHERE blocker_id=$1 AND blocked_id=$2',[recipient.userId,me.userId]);
+  assert.equal((await send(me.token,{...body,clientId:randomUUID(),forwardSource:{messageId:[original.messageId]}})).status,400);
+  const history=await fetch(`${baseUrl}/api/messages/room/${target.id}`,{headers:{authorization:`Bearer ${recipient.token}`}});
+  assert.equal((await history.json()).data.messages[0].forwarded,true);
+  const storage=require('../src/config/r2'); const cleanup=require('../src/services/storageCleanup.service');
+  const oldDelete=storage.deleteObject; const oldConfigured=storage.isConfigured;const removed=[];
+  storage.isConfigured=()=>true;storage.deleteObject=async object=>{removed.push(object);};
+  try {
+    const deleted=await fetch(`${baseUrl}/api/messages/${original.messageId}`,{method:'DELETE',headers:{authorization:`Bearer ${me.token}`}});assert.equal(deleted.status,200);
+    assert.equal((await send(me.token,{...body,clientId:randomUUID()})).status,404);
+    assert.equal((await send(me.token,body)).status,201,'lost acknowledgement can recover an already-created forward after source deletion');
+    assert.equal((await fetch(`${baseUrl}/api/attachments/${original.attachmentId}`,{headers:{authorization:`Bearer ${recipient.token}`}})).status,404);
+    const signed=await fetch(`${baseUrl}/api/attachments/${forwarded.attachments[0].id}/url`,{headers:{authorization:`Bearer ${recipient.token}`}});assert.equal(signed.status,200);
+    await cleanup.runStorageCleanup({limit:500});assert.equal(removed.includes(key),false,'a live forward protects bytes even without file_uploads provenance');
+    const last=await fetch(`${baseUrl}/api/messages/${forwarded.id}`,{method:'DELETE',headers:{authorization:`Bearer ${me.token}`}});assert.equal(last.status,200);
+    await query('UPDATE storage_deletion_jobs SET next_attempt_at=NOW() WHERE object_key=$1',[key]);
+    await cleanup.runStorageCleanup({limit:500});assert.equal(removed.includes(key),true);
+  } finally {storage.deleteObject=oldDelete;storage.isConfigured=oldConfigured;}
 });

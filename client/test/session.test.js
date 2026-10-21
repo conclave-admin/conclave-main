@@ -12,7 +12,7 @@ globalThis.window = new EventTarget();
 let respond;
 axios.defaults.adapter = (config) => respond(config);
 const { api, refreshAccessToken } = await import('../src/lib/api.js');
-const { saveSession } = await import('../src/lib/session.js');
+const { saveSession, getCachedSessionUser, saveSessionUser, clearSession } = await import('../src/lib/session.js');
 
 function reject(config, status) {
   return Promise.reject(new axios.AxiosError('Request failed', 'ERR_BAD_RESPONSE', config, null, { status, config }));
@@ -84,4 +84,20 @@ test('a refresh in flight cannot overwrite a new session', async () => {
   finish();
   await assert.rejects(pending, /Session changed/);
   assert.equal(stored.get('accessToken'), 'new-login');
+});
+
+test('offline profile restoration matches the active account and clears on logout', () => {
+  const token = (sub) => `e30.${Buffer.from(JSON.stringify({ sub })).toString('base64url')}.signature`;
+  const user = { id: 'account-a', display_name: 'A' };
+  saveSession({ accessToken: token(user.id), refreshToken: 'refresh-a', user });
+  assert.deepEqual(getCachedSessionUser(), user);
+  saveSession({ accessToken: token('account-b'), refreshToken: 'refresh-b' });
+  assert.equal(getCachedSessionUser(), null, 'another account must not inherit the cached profile');
+  saveSessionUser(user);
+  assert.equal(getCachedSessionUser(), null, 'a late response from account A must not replace account B');
+  saveSessionUser({ id: 'account-b', display_name: 'B' });
+  assert.equal(getCachedSessionUser().id, 'account-b');
+  clearSession();
+  assert.equal(getCachedSessionUser(), null);
+  assert.equal(stored.size, 0);
 });

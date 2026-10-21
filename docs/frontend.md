@@ -128,7 +128,7 @@ Other existing facts that hold:
 - **Verified, no backend change.** Find-or-create DM already works: `POST /rooms { name, memberIds: [userId] }` returns the existing 2-member DM rather than minting a second one. It only requires a `name`, which the client can take from `GET /users` results. (`POST /rooms/dm` is Victor's Item F and was deliberately left alone.)
 - `GET /rooms/:roomId` returns members as `[{ id, display_name, avatar_url, role, joined_at, last_seen_at }]` plus `my_role`.
 - `POST /rooms/:roomId/seen` is a POST, not a PATCH. Sending must use the `send-message` socket event — the REST path does not emit `receive-message` and would leave every other member's view stale.
-- Reaction allowlist is `👍 👎 🎉 ✅`. `MAX_ATTACHMENTS` is 10 and the upload cap is 25 MB per file; there is no video type.
+- Reaction allowlist is `👍 👎 🎉 ✅`. A message has one attachment; a multi-item send creates one message per item and groups them with an `albumId`. The uploader permits images, documents and videos (video limit 50 MB); media captions are per item.
 - All new responses go through the existing `apiResponse` util and `ApiError`.
 - Read receipts: shipped in phase 5 and made persistent — `message-read` writes `room_members.last_seen_at`.
 - Search: room search first. Global message search later, restricted to the caller's rooms.
@@ -244,7 +244,7 @@ Phase 5 left the following, and phase 7 should not re-litigate them:
 
 **Known gaps this phase does not close.** These are open, not oversights:
 
-- **No chat-list presence dots.** `room-presence` on join is a complete roster but `user-online` / `user-offline` are deltas with no initial roster, so a global presence map cannot be built without lying. `PresenceContext` is deliberately room-scoped and only draws dots in the open conversation.
+- **No chat-list presence dots.** Presence is intentionally room-scoped and is sent only to members subscribed to that room. `PresenceContext` draws presence only in the open conversation.
 - **Reply targets degrade when unloaded.** There is no `GET /messages/:id`, so a reply to a message outside the loaded window renders "an earlier message" rather than fetching.
 - **Room-level message search (`GET /messages/room/:roomId/search`) is unused.** The header search matches room names only, because that endpoint cannot search across rooms.
 - **The Tasks board does not update live for someone sitting on it.** `task:updated` is emitted to the task's room, and joining is per-room and on demand, so a cross-room viewer has not joined the rooms listed. Closing this needs a per-user subscription; the page refreshes on reload rather than pretending otherwise. Recorded in `tasks.controller.js` too.
@@ -599,3 +599,146 @@ The icon sprite at `client/src/assets/icons/` covers almost everything the redes
 **Separately, the logo.** Not a sprite entry. A brand asset for the slot currently drawn as an empty dashed box in `components/landing/Logo.jsx`, which appears in the landing nav, the auth screens and the footer. When it arrives it replaces that slot directly; nothing else in the component changes. There is no `og:image` on the landing either, for the same reason — pointing a share card at a missing image renders worse than shipping a text-only one, so that gets added at the same time.
 
 Everything else the remaining phases need already exists in the sprite: `sent` and `pending` ticks, `reaction`, `pin`, `attach`, `mention`, `reply`, `decisions`, `tasks`, `notify`, `compose`, `menu`, `close`, `chevron-*` and the rest.
+
+
+## Media outbox — 20 October 2026
+
+Media drafts and text now share `contexts/OutboxContext.jsx`. The account-level
+worker in `lib/outbox.js` survives route navigation and serializes uploads. The
+composer commits an entire selection to IndexedDB before closing the editor;
+`useMessages` derives local bubbles from these records and matches saved rows by
+`client_id`. Each media record has one Blob, caption, reply target, client ID and
+optional shared album ID. Files are retained in the outbox until acknowledgement
+or cancellation, independently of downloaded-media cache eviction.
+
+Upload success is checkpointed before the socket send. Lost acknowledgements
+retry the same client ID and attachment claim, without uploading again. Message-confirmation
+failures retry with bounded backoff; upload failures show the cause and require
+manual retry.
+Queued/uploading messages offer cancellation. An attempted delivery with an
+unknown outcome must be resolved before it can be discarded. IndexedDB write
+failures keep selected files in the editor or expose a send-progress error in
+the bubble. No file Blob or local object URL enters the socket payload.
+
+Session/profile and room metadata caches permit local history and pending media
+to open during a temporary API outage. The production service worker caches only
+the public shell and loaded `/assets/` modules. It does not cache API responses
+or private media. The account worker stops on logout or account changes; explicit
+logout clears device data under the existing logout policy. Uploads continue
+while the app is open and recover from persisted drafts on reopening.
+
+`media-outbox.spec.js` covers the editor, IndexedDB and message bubbles on desktop
+and mobile with mocked R2. `playwright.media-production.config.js` exercises the
+built application and its service worker with a real offline reload.
+
+
+### Media previews and receiving originals
+
+`mediaMetadata.js` generates bounded JPEG thumbnails (240 px maximum edge,
+12 KiB maximum bytes), image/video dimensions and available video duration before
+upload. The outbox checkpoints these display fields and includes them in the
+multipart `mediaMetadata` field. PDF first-page rendering is deferred.
+
+`useAttachmentImage` checks the sender's device copy, then a cached preview, then
+the inline thumbnail or an authorized Worker preview. Failed previews offer
+retry without downloading the original. The Worker allows credential-free CORS
+fetches of signed preview URLs; redeploy it to enable legacy preview caching.
+
+`useAttachmentDownload` uses the shared `mediaDownloads` controller for original
+bytes: available, downloading, downloaded and failed. Progress, cancel and retry
+are shared across consumers. Video players are mounted only after download.
+Manual opens/downloads always attempt to cache bytes independently of automatic
+download preferences. Photos remain preview-only until opened; video/document
+and audio originals can auto-download when enabled in Settings.
+
+Media cache keys include the account and immutable file reference. Previews use
+a separate suffix and share the 250 MiB LRU budget with originals. Clearing or
+evicting a file invalidates active download indicators across tabs. Focus
+rechecks browser storage. Failed cache writes show a temporary-copy notice rather
+than claiming offline availability. These caches are separate from durable
+unsent Blobs; clearing downloaded media does not clear the outbox.
+
+
+Upload failures require explicit retry and display the cause in the bubble.
+Rate-limited retries respect the server's wait time. A connection event can start
+previously queued work, but cannot silently retry a failed upload. A completed
+upload followed by lost message acknowledgement still uses the safe automatic
+message retry path with its original client ID and uploaded reference.
+
+
+### Albums and resumable transfers
+
+`mediaAlbums` groups adjacent visual media from the same room, sender and album,
+respecting date/unread boundaries. Every tile retains its message identity and
+independent caption, actions and send state. `MediaViewerProvider` uses stable
+client IDs across acknowledgement replacement; it supports keyboard/swipe
+navigation, image zoom/pan and jump/highlight.
+
+`mediaUploads.service` reads upload capabilities. When direct uploads are enabled,
+`multipartUpload` checkpoints the server session before transferring bytes, skips
+server-confirmed parts on manual retry and finalizes before sending the message.
+R2 PUT requests use a separate client without the API bearer token. Failed uploads
+never retry automatically; cancelled sessions are also cancelled on the server.
+The server upload path remains available while direct uploads are disabled.
+
+`resumableDownload` stores completed 2 MiB chunks with their ETag in the account's
+cache. Range/If-Range requests resume missing chunks; an ETag change invalidates
+partial bytes. Legacy full responses remain supported. Partials share the 250 MiB
+cache budget and are removed after a successful full-cache write.
+
+Deployment and privacy rules are in [MEDIA_STORAGE.md](MEDIA_STORAGE.md).
+
+
+### Shared files
+
+`SharedMediaBrowser` on room/DM info pages browses Media, Documents and Audio
+using 24-item cursor pages. Loading, empty, failed-first-page and failed-next-page
+states are distinct; retrying a next page keeps existing rows. Switching sections
+or rooms cancels outstanding requests. A refresh starts a new first page.
+The device clear-history cutoff is also applied to shared files.
+
+Attachment previews and downloads use the existing private attachment components
+and account cache. Merely browsing does not force original downloads; existing
+explicit auto-download preferences continue to apply.
+
+Show message opens `/chats/:roomId?message=<id>`. `useMessages` requests a bounded
+history page ending at that anchor and the timeline scrolls/highlights it. Context
+views skip reconnect gap-filling and latest-history cache writes. Return to latest
+restores ordinary history; sending from a context view also returns to latest.
+Unavailable/deleted or locally cleared targets show a visible error.
+Migration 030 indexes attachment lookups for shared-file queries.
+
+
+The production service worker also claims clients during the ready-page asset
+handshake. This covers navigation during activation, when a ready worker may not
+have taken control of the newly opened document. Asset caching still accepts only
+same-origin `/assets/` URLs; private API responses remain outside the shell cache.
+
+
+### Media follow-up controls
+
+The attachment editor offers optional native video compression. It accepts videos
+up to 200 MiB for local processing, supports clips up to two minutes, caps the long
+edge at 1280 px and targets 2 Mbps video/128 kbps audio. Encoding runs in real time
+using canvas, MediaRecorder and Web Audio; audio is routed into the recording stream.
+MP4 or WebM is selected using codec support. The smaller result replaces the local
+file while retaining its caption. Unsupported/failed compression keeps the original;
+files above the 50 MiB send limit cannot be submitted. Cancelling or hiding the tab
+stops encoding. No transcoding service or encoding dependency is downloaded.
+
+`ForwardMessageDialog` queues reference-based forwards in the durable outbox.
+`forwardPreview` is device-only display metadata, separate from the socket payload's
+`forwardSource`. The server supplies the authoritative content and attachment fields.
+Forward destinations use saved conversation summaries so queued forwards can open
+while offline, including rooms not previously opened on the device.
+
+Settings controls automatic downloads by any connection, reported Wi-Fi/Ethernet,
+or a reported 4G-level speed estimate, and optionally respects Data Saver. Unknown
+connection details pause restricted automatic downloads. Network/preference changes
+cancel automatic transfers; a manual open promotes an active transfer to manual,
+so user-requested downloads remain available. Device copies and partial chunks keep
+the existing account scope and cache budget.
+
+Primary browser references: [canvas capture](https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/captureStream),
+[MediaRecorder codec support](https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder/isTypeSupported_static),
+[Data Saver](https://developer.mozilla.org/en-US/docs/Web/API/NetworkInformation/saveData).

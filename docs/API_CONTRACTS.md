@@ -1,6 +1,6 @@
 # API Contracts
 
-Base URL: `http://localhost:5000/api`
+Base URL: `http://localhost:7000/api`
 Auth: `Authorization: Bearer <accessToken>` on every route except `/auth/*` and `/health`.
 
 Every response uses the same envelope, from `utils/apiResponse.js`:
@@ -28,9 +28,9 @@ on it.
 
 ## Auth
 
-Registration is open to everyone. Invitations control group collaboration, not
-account creation. Public group discovery/joining is not implemented; existing
-room reads require membership.
+Registration is open to everyone. Invitations control private-room
+collaboration, not account creation. Public rooms can be discovered and joined
+by signed-in users; room reads still require membership.
 
 | Method | Path           | Body                               | Returns                               | Notes                                                                                                                                                            |
 | ------ | -------------- | ---------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -48,18 +48,29 @@ room reads require membership.
 | ------ | --------- | ------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | GET    | /users/me | —                                          | user                                 | 404 if soft-deleted.                                                                                                                                           |
 | PATCH  | /users/me | any of `display_name`, `avatar_url`, `bio` | user                                 | Whitelist-only. Per-field limits: 100 / 2048 / 1000 chars.                                                                                                     |
+| GET    | /users/avatar-url?url=<opaque R2 key> | — | `{ url, expiresAt }` | Authenticated. Signs an image only while it is an active user avatar or a room avatar visible to the caller. |
 | DELETE | /users/me | —                                          | `{ message }`                        | **Soft delete.** Anonymises the row, revokes all sessions, removes room memberships. Messages, decisions and tasks are preserved and render as "Deleted user". |
-| GET    | /users    | `?q=&page=`                                | `{ users, page, pageSize, hasMore }` | Directory for "add member" pickers. ⚠️ Soft-deleted users are excluded, but this currently returns every live user's email to any authenticated caller.        |
+| GET    | /users    | `?q=&page=`                                | `{ users, page, pageSize, hasMore }` | Authenticated directory; searches may match email, but responses never expose email addresses. Soft-deleted users are excluded. |
+| GET    | /users/:userId/shared-rooms | — | `{ rooms }` | Lists rooms shared by the caller and target, excluding DMs. Used by the DM info page's “Groups in common” section. |
+| GET    | /users/:userId/block | — | `{ blocked }` | Whether the caller has blocked the target. |
+| POST   | /users/:userId/block | — | `{ userId, blocked }` | Idempotent. Prevents new and existing direct messages between the pair. |
+| DELETE | /users/:userId/block | — | `{ userId, blocked: false }` | Removes the caller's block. |
+| POST   | /users/:userId/report | `{ reason, details?, roomId? }` | report | Records an open report. Reasons: `spam`, `harassment`, `inappropriate_content`, `impersonation`, `other`. When `roomId` is supplied, both users must belong to it. |
 
 ## Rooms
 
 | Method | Path                   | Body                          | Returns                                 | Notes                                                                                                                                                                                                                               |
 | ------ | ---------------------- | ----------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | POST   | /rooms                 | `{ name, type?, memberIds? }` | room + `members[]`                      | `type` ∈ `dm, group, public, private, department`. Caller becomes admin. A DM between the same pair is **not** duplicated — the existing one is returned with `existing: true`. Slug is derived server-side and cannot be supplied. |
-| GET    | /rooms                 | —                             | room[]                                  | Everything the sidebar needs in one round trip. Includes `slug`, `type`, `member_count`, `my_role`, `last_seen_at`, plus **`display_name`** and **`display_avatar`** (a DM returns the *other* member's identity, not the room title), **`has_message`**, **`last_message`** and **`unread_count`**. Ordered by last activity, then creation. |
-| GET    | /rooms/:roomId         | —                             | room + `members[]`                      | Membership required.                                                                                                                                                                                                                |
+| GET    | /rooms                 | —                             | room[]                                  | Everything the sidebar needs in one round trip. Includes `slug`, `type`, `member_count`, `my_role`, `last_seen_at`, plus **`display_name`** and **`display_avatar`** (a DM returns the *other* member's identity, not the room title; groups return their room photo), **`has_message`**, **`last_message`** and **`unread_count`**. Ordered by last activity, then creation. |
+| GET    | /rooms/discover        | `?q=&page=`                   | `{ rooms, page, hasMore }`              | Authenticated directory of public rooms the caller has not joined. Search matches room name or description; page size is 25. |
+| POST   | /rooms/:roomId/join    | —                             | `{ roomId, joined, existing }`          | Joins a public room. Idempotent; private rooms return 403. Membership is required before reading messages. |
+| GET    | /rooms/:roomId         | —                             | room + `members[]`                      | Membership required. Member profiles include `bio` and `account_created_at` alongside room role, join time, and room-scoped last-seen/read pointers. Email addresses are never included. |
 | POST   | /rooms/:roomId/members | `{ userId }`                  | `{ roomId, userId, displayName, role }` | Admin only. 404 if the target is soft-deleted. Writes a `room_invite` notification row but does **not** emit it on the socket.                                                                                                      |
 | POST   | /rooms/:roomId/seen    | —                             | `{ roomId, lastSeenAt }`                | **Call this when a room is opened.** It is the only thing that advances `room_members.last_seen_at` apart from socket `leave-room`, and the entire digest depends on it.                                                            |
+| PATCH  | /rooms/:roomId         | `{ name?, description?, avatar_url? }` | room | Admin only; DMs cannot be edited as rooms. Group avatar uploads are selected from the room info page. |
+| DELETE | /rooms/:roomId/members/:userId | — | `{ roomId, userId, removed }` | Members may remove themselves to leave. Only admins may remove another member; a room must retain an admin. |
+| PATCH  | /rooms/:roomId/members/:userId | `{ role: "admin" | "member" }` | `{ roomId, userId, role }` | Admin only. DMs have no member roles. |
 
 ### The chat-list row
 
@@ -93,13 +104,18 @@ badge can never disagree.
 
 | Method | Path                          | Body                                             | Returns                    | Notes                                                                                                                                                                                                                                                                                                                |
 | ------ | ----------------------------- | ------------------------------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | /messages                     | `{ roomId, content?, replyToId?, attachments?, mentionedUserIds? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. `attachments[]` is `{ url }` only, max 10 files. Send the `url` returned by `POST /upload`; `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. `mentionedUserIds[]` is the ids of users the message mentions — see below. |
-| GET    | /messages/room/:roomId        | `?before=<cursor>`                               | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. Feed it into "load older"; it is currently discarded client-side.                                                                                                                                                         |
+| POST   | /messages                     | `{ roomId, clientId?, content?, replyToId?, attachments?, albumId?, mentionedUserIds? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. Each message may attach at most one `{ url }` returned by `POST /upload`; a multi-item send creates one message per item and shares a UUID `albumId`. `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. `mentionedUserIds[]` is the ids of users the message mentions — see below. |
+| GET    | /messages/room/:roomId        | `before?, afterSeq?, around?`                               | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. The client uses it to load older history. `around` opens a bounded shared-message context; see below.                                                                                                                                                         |
 | GET    | /messages/room/:roomId/search | `?q=`                                            | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns the **same message shape** as `listMessages`, plus a `rank`.                                                                                                                                                                                          |
+| GET    | /messages/room/:roomId/media | `kind?, cursor?, limit?, after?` | `{ media, nextCursor }` | Membership required. Bounded shared-file pages; see below. |
 | PATCH  | /messages/:messageId          | `{ content }`                                   | message                    | Author only, no time limit. Sets `edited_at`. Empty content is a 400 unless the message has an attachment. Mentions and notifications are **not** affected.                                                                                                                                        |
 | DELETE | /messages/:messageId          | —                                                | message                    | Author **or room admin**. Soft delete: sets `deleted_at` and overwrites `content` to NULL. Returns the tombstone (`is_deleted: true`).                                                                                                                                                                   |
 | PUT    | /messages/:messageId/reactions | `{ emoji }`                                    | message                    | Idempotent — reacting twice does not stack. `emoji` ∈ `👍 👎 🎉 ✅`; anything else is a 400.                                                                                                                                                                          |
 | DELETE | /messages/:messageId/reactions/:emoji | —                                    | message                    | Removes your own reaction. `emoji` must be URL-encoded. Removing an absent reaction succeeds.                                                                                                                                                                          |
+
+“Clear messages for me” is client-side and per signed-in user/device: it hides
+messages at or before the local clear time while leaving shared room history
+untouched. New messages remain visible.
 
 A message row is:
 
@@ -225,7 +241,7 @@ rows, where a name may have changed since the message was sent.
 
 | Method | Path    | Status | Body             | Returns                              |
 | ------ | ------- | ------ | ---------------- | ------------------------------------ |
-| POST   | /upload | 201    | multipart `file` | `{ filename, url, mime_type, size }` |
+| POST   | /upload | 201    | multipart `file` | `{ filename, url, mime_type, size, width, height, preview_url }` |
 
 Auth required. 25MB maximum. The response is wrapped in the standard
 `{ success, data }` envelope, so read it from `data`.
@@ -235,15 +251,25 @@ Auth required. 25MB maximum. The response is wrapped in the standard
   "success": true,
   "data": {
     "filename": "checklist.pdf",
-    "url": "https://res.cloudinary.com/…/checklist_abc123.pdf",
+    "url": "r2://conclave-uploads/conclave/attachments/<opaque-key>",
     "mime_type": "application/pdf",
     "size": 4096
   }
 }
 ```
 
-Errors: **400** no file · **413** over 25MB · **415** disallowed type · **502**
-Cloudinary unavailable · **503** not configured on this server.
+Errors: **400** no file · **413** over the type-specific limit (25MB, or 50MB
+for video) · **415** disallowed type · **502** storage unavailable · **503**
+R2 is not configured. Upload bytes are stored server-side in Cloudflare R2; the
+opaque `url` is only an attachment claim key. Downloads use the authenticated
+attachment proxy, which checks room membership. Existing Cloudinary attachments
+continue to use the legacy delivery path.
+
+For image attachments, `GET /attachments/:attachmentId/preview-url` checks room
+membership and returns a five-minute HMAC URL for the private image-preview
+Worker. The Worker transforms the R2 original into one fixed WebP preview and
+checks the token before consulting its edge cache. Legacy and unsupported image
+types return `url: null` and continue through the authenticated original path.
 
 **Send only `url` back.** `POST /messages` takes `attachments: [{ url }]` and
 resolves `filename`, `mime_type` and `size` from the upload record, so any
@@ -252,8 +278,8 @@ message**, by the user who uploaded it — a second use is a 400.
 
 Accepted types: images (`jpeg`, `png`, `gif`, `webp`, `svg`), documents (`pdf`,
 plain text, markdown, csv), Word, Excel and PowerPoint (both `.docx`-style and
-legacy), `zip`, `gzip`, and audio (`mpeg`, `ogg`, `wav`, `webm`, `mp4`).
-**Video is not accepted yet.**
+legacy), `zip`, `gzip`, audio (`mpeg`, `ogg`, `wav`, `webm`, `mp4`) and video
+(`mp4`, `webm`, `quicktime`, `3gpp`).
 
 ## Tasks
 
@@ -353,9 +379,9 @@ from your badge. A repeated `all: true` returns `0`.
 Errors: **400** neither `notificationId` nor `all: true` · **404** no such
 notification of yours.
 
-Types currently written: `room_invite` (on being added to a room) and `mention`.
-`new_message`, `file_uploaded` and `member_joined` are accepted by the service but
-nothing writes them yet.
+Types currently written: `room_invite` (on being added to a room), `member_joined`
+(on joining a public room), and `mention`. `new_message` and `file_uploaded` are
+accepted by the service but nothing writes them yet.
 
 ## Not built yet
 
@@ -368,8 +394,7 @@ an existing DM by user id, home summary, or a global cross-room search. See
 ## Socket events
 
 Server → client, as documented at the top of `backend/src/sockets/index.js`:
-`receive-message`, `chat:updated`, `user-online`, `user-offline`,
-`room-presence`, `room-typing`, `typing`, `stop-typing`, `message-read`,
+`receive-message`, `chat:updated`, `room-presence`, `room:members`, `room-typing`, `typing`, `stop-typing`, `message-read`,
 `task:updated`, `message:updated`, `message:deleted`, `message:reaction`,
 `notification`, `notification:seen`, and `error:message`.
 
@@ -389,10 +414,123 @@ Errors are emitted on **`error:message`**, not `error` — Socket.IO reserves
 `error` for its own internals.
 
 Client → server payloads: `join-room { roomId }`, `leave-room { roomId }`,
-`send-message { roomId, content, replyToId?, attachments?, mentionedUserIds? }`,
+`send-message { roomId, clientId?, content?, replyToId?, attachments?, albumId?, mentionedUserIds? }`,
 `typing { roomId }`, `stop-typing { roomId }`, `message-read { roomId, messageId }`,
 `heartbeat {}`.
 
 `send-message` takes the same body as `POST /messages` and returns the same
 message row on `receive-message`. Pass `mentionedUserIds` — see the warning above
 for what omitting it costs.
+
+
+### Durable media sends and album ownership
+
+The client saves selected file Blobs and captions in its account-scoped outbox
+before uploading. Each item has its own stable UUID `clientId`. After upload, the
+client sends the usual message payload with one attachment; file Blobs and local
+object URLs never enter that payload. Retrying a completed upload uses the same
+attachment claim and client ID. Creation, history, search and message updates
+return `client_id` and nullable `album_id`.
+
+`albumId` is a UUID shared by messages from the same selection. Each album item
+must have one attachment, and the server rejects reuse of an album ID by another
+sender or conversation. This check and message creation occur in one transaction.
+The album ID does not replace any membership or upload-ownership checks.
+
+Socket acknowledgements return `{ ok: true, data: message }` for a persisted send
+or `{ ok: false, error, status }` for a failure. The status distinguishes temporary
+server/rate-limit failures from permanent validation or access failures. A lost
+acknowledgement is resolved by retrying the same client ID. A send with an unknown
+outcome must not be discarded as though the server had definitely rejected it.
+
+
+### Media display metadata (migration 027)
+
+`POST /upload` accepts one `file` and an optional multipart text field
+`mediaMetadata`, a JSON object with optional `width`, `height`, `preview_url`
+and `duration`. Width/height must be paired positive integers no greater than
+32768. `preview_url` accepts only a JPEG data URL capped at 12 KiB decoded;
+external URLs and SVG thumbnails are rejected. Duration is video-only, in seconds,
+greater than zero and no greater than 604800. These are device-supplied display
+hints, not authoritative file-signature or security metadata.
+
+The upload record owns these fields; attachment claims ignore message-supplied
+metadata. Upload responses and live/history/search/shared-media attachment shapes
+include `width`, `height`, `preview_url` and nullable `duration`. Legacy rows may
+have null display metadata. New inline thumbnails are included only in authorized
+message responses and do not require a public thumbnail object.
+
+Original delivery continues through authenticated attachment endpoints. Browser
+caching is local and account-scoped; it does not make R2 objects public. Previously
+cached bytes can remain on a device independently of remote access changes.
+
+
+### Resumable uploads and Range delivery (migrations 028–029)
+
+- `GET /upload/capabilities`: `{ multipart, partSize }`; authenticated and safe to
+  cache for the current app session. `multipart` requires the deployment flag.
+- `POST /upload/sessions`: `{ roomId, clientId, filename, mime_type, size,
+  metadata?, restart? }` returns 201 with `{ id, partSize, parts, expiresAt? }` or
+  a completed `attachment`. Reusing an account/client ID is idempotent; changing
+  its file identity is a 409. Membership and upload ownership are enforced.
+- `GET /upload/sessions/:sessionId`: resumes from actual R2 parts. Each part has
+  `{ partNumber, size, etag }`. Expired/cancelled sessions return 410.
+- `POST /upload/sessions/:sessionId/parts`: `{ partNumber }` returns
+  `{ url, size, expiresIn: 300 }`. Browser PUTs bytes directly to that URL.
+- `POST /upload/sessions/:sessionId/complete`: validates actual bytes and returns
+  the attachment descriptor. Idempotent after a lost response.
+- `DELETE /upload/sessions/:sessionId`: retires an unclaimed upload and queues
+  abort/deletion. An attached file returns 409.
+
+`GET /attachments/:attachmentId` accepts single Range/If-Range requests for R2.
+206 exposes Content-Range, Content-Length, Accept-Ranges and ETag. Invalid ranges
+return 416 with `Content-Range: bytes */<size>`. Membership/deleted checks run
+before storage access. Originals use private, no-store HTTP caching; local
+account-scoped chunks and originals support offline reopening.
+
+See [media operations](MEDIA_STORAGE.md) for rollout, retention, expiry and cleanup.
+
+
+### Shared-file browsing
+
+`GET /messages/room/:roomId/media` returns `{ media, nextCursor }`.
+`kind` is `media` (photos/videos, default), `documents` (other non-audio files)
+or `audio`. `limit` defaults to 24 and must be an integer from 1 to 100.
+Each item includes the existing authorized attachment fields plus `message_id`,
+`room_sequence`, `sender_id`, `sender_name` and `created_at`. Deleted messages
+are excluded. Non-members receive 404.
+
+Pass the opaque `nextCursor` back as `cursor` for older items. Ordering uses
+room sequence and attachment UUID descending, so legacy messages with several
+attachments page without omissions and new inserts do not shift older pages.
+Cursors are bound to room, section and the optional `after` ISO timestamp.
+`after` filters messages strictly newer than that date and lets the client honor
+its existing device-specific clear-history cutoff. It does not change server
+history or grant access. Invalid filters/cursors return 400.
+
+`GET /messages/room/:roomId?around=<message UUID>` returns up to 50 history
+messages ending at that message, in the usual newest-first message shape.
+The ordinary `nextCursor` continues toward older history. It cannot be combined
+with `before` or `afterSeq`. The anchor must be undeleted and in the same room;
+a missing/deleted/cross-room anchor returns 404 after the normal membership check.
+This bounded lookup avoids downloading every intervening page to follow a
+shared-file link. The client offers Return to latest, keeps the context window
+out of its latest-history cache, and resumes normal history when leaving it.
+
+
+### Reference-based forwarding
+
+`POST /messages` and `send-message` accept optional
+`forwardSource: { messageId, attachmentId? }`. Include a stable `clientId` for retry.
+The caller must currently belong to the source and destination conversations.
+Destination DM blocks apply. Source deletion, lost membership, polls and invalid
+attachment choices are rejected. Forward requests cannot mix upload claims or replies.
+When a legacy source has several attachments, specify one `attachmentId` per new
+message; these messages may share a new `albumId`.
+
+Source content and attachment metadata are copied by the server, without copying
+storage bytes or firing mentions from the old text. A new attachment ID authorizes
+each destination independently. Public payloads include `forwarded: true`; internal
+source identifiers are not exposed to recipients. An idempotent retry of an already
+created destination message returns that message even if the source later disappears.
+Migration 031 adds the forwarded marker.

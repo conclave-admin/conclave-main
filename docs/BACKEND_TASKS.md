@@ -13,17 +13,17 @@ checks in [DEPLOYMENT.md](../DEPLOYMENT.md).
 | Messages, decisions, tasks, digest | APIs implemented; further frontend integration remains | Michael / Isaac |
 | Chat list | `GET /rooms` enriched (`display_name`, `display_avatar`, `last_message`, `unread_count`, activity order) and `chat:updated` emitted per member on create/edit/delete | Michael |
 | Notifications | List/seen APIs, room invitations and mentions implemented | Michael |
-| Uploads | Cloudinary upload and server-owned attachment records implemented | Michael |
+| Uploads | R2 uploads and server-owned attachment records; Cloudinary retained for legacy files | Michael |
 | Frontend | Room chat wired; several screens use fixtures/placeholders | Isaac |
 | Deployment | Configuration committed; public deployment not verified here | Victor coordinates |
 
 ## Victor's backlog
 
-- **G — Group access:** registration is intentionally open to everyone. Implement
-  public group discovery/joining and private group invitations according to
-  user/admin preferences. Existing room reads require membership even for rooms
-  typed `public`; anonymous reading has not been specified.
-- **Auth rate limiting:** agree the library/store choice before implementation.
+- **G — Group access:** public room discovery and idempotent joining are
+  implemented for signed-in users. Private rooms remain invitation-only, and
+  reading messages still requires membership.
+- **Auth rate limiting:** registration, login, and refresh use shared Redis
+  limits with development/test fallbacks.
 - **F — Room management:** editing, leave/remove/promote/delete and find-or-create
   DMs. Coordinate membership changes with Michael because digest windows and
   authorization depend on membership rows.
@@ -42,9 +42,9 @@ checks in [DEPLOYMENT.md](../DEPLOYMENT.md).
 - **B — Notifications:** recipient-scoped pagination, unread count and mark-seen,
   with live room-invite/mention delivery. `new_message` fan-out is intentionally
   deferred pending a product decision about notification volume.
-- **C — Uploads:** allowlisted files stream to Cloudinary and create ownership
-  records. Message creation claims the upload once and reads metadata from the
-  server record. Cloudinary credentials are needed for a real round-trip check.
+- **C — Uploads:** allowlisted files stream to R2 and create ownership records.
+  Message creation claims the upload once and reads metadata from the server
+  record. The attachment proxy retains Cloudinary delivery for legacy files.
 - **H — Structured mentions:** IDs are persisted and used by notifications/digest.
   Remove text-matching fallback after Isaac's client sends `mentionedUserIds`.
 - **I — Message mutations:** author edits, author/admin deletion and four allowed
@@ -74,8 +74,8 @@ follows [CLAUDE.md](CLAUDE.md) and remains Isaac's lane.
 
 Run the commands in [CONTRIBUTING.md](../CONTRIBUTING.md). On 2026-10-06, local
 Node 22 checks passed 22 backend regression tests, 104 database/upload checks
-and six client session tests. Four Cloudinary round-trip checks skipped because
-credentials were absent. All 13 migrations applied to fresh PostgreSQL 18.4;
+and six client session tests. Provider-backed R2 round-trip coverage requires
+R2 credentials and reachable PostgreSQL. All 13 migrations applied to fresh PostgreSQL 18.4;
 a second run was a no-op. Database isolation/cleanup and failure on unavailable
 PostgreSQL were verified. The client production build also passed.
 

@@ -1,5 +1,5 @@
 import { api } from '../lib/api';
-import { isDevAuthBypass, previewPreferences, previewUser, previewUsers } from '../config/devPreview';
+import { isDevAuthBypass, previewPreferences, previewRooms, previewUser, previewUsers } from '../config/devPreview';
 
 /**
  * The people directory and the signed-in user's own account.
@@ -54,6 +54,30 @@ export async function uploadAvatar(file) {
   return data.data.url;
 }
 
+const resolvedAvatarUrls = new Map();
+
+/** Turn an opaque R2 avatar key into a short-lived image URL for <img>. */
+export async function resolveAvatarUrl(value) {
+  if (typeof value !== 'string' || !value.startsWith('r2://')) return value || null;
+
+  const cached = resolvedAvatarUrls.get(value);
+  if (cached?.expiresAt > Date.now() / 1000 + 60) return cached.url;
+  if (cached?.promise) return cached.promise;
+
+  const promise = api.get('/users/avatar-url', { params: { url: value } })
+    .then(({ data }) => {
+      const result = data.data;
+      resolvedAvatarUrls.set(value, { url: result.url, expiresAt: result.expiresAt });
+      return result.url;
+    })
+    .catch((error) => {
+      resolvedAvatarUrls.delete(value);
+      throw error;
+    });
+  resolvedAvatarUrls.set(value, { promise });
+  return promise;
+}
+
 // axios sets the multipart boundary itself. Setting content-type by hand here is
 // the classic way to produce a request the server cannot parse, and the failure
 // surfaces as "No file provided" rather than as anything about headers.
@@ -87,5 +111,46 @@ export async function updatePreferences(updates) {
     return { ...previewPreferences };
   }
   const { data } = await api.patch('/users/me/preferences', updates);
+  return data.data;
+}
+
+export async function getSharedRooms(userId) {
+  if (isDevAuthBypass) {
+    return previewRooms.filter((room) => room.type !== 'dm' && room.members?.some((m) => m.id === userId));
+  }
+  const { data } = await api.get(`/users/${userId}/shared-rooms`);
+  return data.data.rooms;
+}
+
+export async function reportUser(userId, payload) {
+  if (isDevAuthBypass) return { id: `report-${Date.now()}`, status: 'open' };
+  const { data } = await api.post(`/users/${userId}/report`, payload);
+  return data.data;
+}
+
+export async function blockUser(userId) {
+  if (isDevAuthBypass) {
+    const blocked = JSON.parse(localStorage.getItem('conclave:blocked-users') || '[]');
+    if (!blocked.includes(userId)) blocked.push(userId);
+    localStorage.setItem('conclave:blocked-users', JSON.stringify(blocked));
+    return { blocked: true };
+  }
+  const { data } = await api.post(`/users/${userId}/block`);
+  return data.data;
+}
+
+export async function getBlockStatus(userId) {
+  if (isDevAuthBypass) return { blocked: Boolean(JSON.parse(localStorage.getItem('conclave:blocked-users') || '[]').includes(userId)) };
+  const { data } = await api.get(`/users/${userId}/block`);
+  return data.data;
+}
+
+export async function unblockUser(userId) {
+  if (isDevAuthBypass) {
+    const blocked = JSON.parse(localStorage.getItem('conclave:blocked-users') || '[]').filter((id) => id !== userId);
+    localStorage.setItem('conclave:blocked-users', JSON.stringify(blocked));
+    return { blocked: false };
+  }
+  const { data } = await api.delete(`/users/${userId}/block`);
   return data.data;
 }
