@@ -7,6 +7,7 @@ const env = require('./config/env');
 const { connectRedis, redisClient } = require('./config/redis');
 const { pool } = require('./config/db');
 const presence = require('./services/presence.service');
+const storageCleanup = require('./services/storageCleanup.service');
 const registerSocketHandlers = require('./sockets');
 
 // Every rolling deploy, container restart and `docker compose down` delivers
@@ -41,6 +42,7 @@ async function shutdown(signal) {
     // Stop the sweep before anything else so it cannot fire against clients
     // that are already being disconnected.
     presence.stopHeartbeatSweep();
+    await storageCleanup.stopStorageCleanup();
 
     // io.close() disconnects every socket and, because the server was attached,
     // closes the underlying HTTP server too.
@@ -73,6 +75,7 @@ async function main() {
   // Do not advertise a healthy API when PostgreSQL is unreachable.
   await pool.query('SELECT 1');
   await connectRedis();
+  storageCleanup.startStorageCleanup();
 
   httpServer = http.createServer(app);
   io = new Server(httpServer, {

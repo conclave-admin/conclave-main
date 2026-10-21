@@ -5,8 +5,9 @@ instance have not been verified from this workspace. See the
 [backend backlog](docs/BACKEND_TASKS.md) for product gaps and release priorities.
 
 The configuration is ready for a staging deployment. Before inviting users,
-complete the rate-limiting and live acceptance checks below. Registration is
-intentionally open; group visibility does not yet provide public discovery/joining.
+complete live acceptance, privacy policy, backup and restore checks below.
+Registration remains open. Public rooms can be discovered and joined by signed-in
+users; private room content remains membership-restricted.
 
 ## Deployment shape
 
@@ -28,17 +29,19 @@ Sources: [Render WebSockets](https://render.com/docs/websocket),
 
 ## Before publishing
 
-1. Registration is open to everyone (Victor’s decision). Group invitations and
-   public/private group preferences govern collaboration. Existing room APIs
-   remain membership-restricted; public discovery/joining is not implemented.
-2. Add auth rate limiting. The repository leaves the implementation choice open.
-3. Confirm provider accounts and connect the GitHub repository
+1. Registration is open to everyone (product decision). Confirm that open
+   registration remains appropriate for the first public launch.
+2. Confirm provider accounts and connect the GitHub repository
    `conclave-admin/conclave-main`. Push the reviewed local changes before importing
    the Blueprint; a provider cannot deploy changes that exist only on this machine.
-4. Run the checks below and a real database/realtime acceptance test. Unit tests
+3. Run the checks below and a real database/realtime acceptance test. Unit tests
    alone do not prove migrations, SQL queries, or Redis work in production.
-5. Arrange how initial rooms and memberships will be created: the APIs exist, but
-   their creation/management UI is unfinished.
+4. Replace the marked operator-specific entries in the privacy and terms pages
+   (legal entity, contact, provider regions, retention and dispute venue) before
+   accepting real users or user-generated content.
+5. Perform a backup restore drill against a disposable database and record the
+   verified recovery point and recovery time. Configure provider alerts for API,
+   PostgreSQL, Redis and Cloudinary outages.
 
 ## Local checks and CI
 
@@ -65,7 +68,7 @@ the Connect panel. Use the provider's TLS settings and properly encoded password
 Keep this URL only in server-side secrets as `DATABASE_URL`.
 
 Session pooling works with this persistent Node server and the migration runner's
-session advisory lock. Transaction pooling *does* support transactions, but it
+session advisory lock. Transaction pooling _does_ support transactions, but it
 must not be used for this runner because session locks require connection affinity.
 See [Supabase connection guidance](https://supabase.com/docs/guides/database/connecting-to-postgres).
 
@@ -85,20 +88,20 @@ budget fits presence heartbeats plus three Redis connections per API instance.
 Import the root `render.yaml` as a Render Blueprint. It explicitly selects the
 free web-service plan and creates only the API service, with these settings:
 
-| Setting | Value |
-| --- | --- |
-| Root directory | `backend` |
-| Runtime | Node 22 |
-| Build | `npm ci --omit=dev` |
-| Start | `sh docker-entrypoint.sh` |
-| Health path | `/health` |
+| Setting        | Value                     |
+| -------------- | ------------------------- |
+| Root directory | `backend`                 |
+| Runtime        | Node 22                   |
+| Build          | `npm ci --omit=dev`       |
+| Start          | `sh docker-entrypoint.sh` |
+| Health path    | `/health`                 |
 
 Supply these values in Render's environment settings:
 
-| Variable | Value |
-| --- | --- |
-| `DATABASE_URL` | Supabase session-pooler URL |
-| `REDIS_URL` | Redis TCP connection URL |
+| Variable        | Value                                                 |
+| --------------- | ----------------------------------------------------- |
+| `DATABASE_URL`  | Supabase session-pooler URL                           |
+| `REDIS_URL`     | Redis TCP connection URL                              |
 | `CLIENT_ORIGIN` | Exact frontend HTTPS origin, without a trailing slash |
 
 The Blueprint generates separate JWT signing secrets automatically. Keep them
@@ -131,6 +134,7 @@ local auth-preview bypass.
 ## Acceptance before sharing
 
 - `/health` returns 200; `/api/nope` returns JSON 404; anonymous `/api/rooms` returns 401.
+- `/ready` returns 200 only when PostgreSQL and Redis both respond; it returns 503 without exposing provider errors otherwise.
 - Register/login with the intended access policy; confirm login contains no password hash.
 - Create a room and add a second tester using the existing API.
 - Open two separate browser sessions and confirm messages appear live in both.
@@ -139,7 +143,19 @@ local auth-preview bypass.
 - Exercise access-token expiry and refresh rotation, including a second refresh.
 - Verify members can read decisions/digests and nonmembers cannot.
 - Confirm backups and record the actual frontend/API URLs and provider projects.
+- Trigger an API restart and a Redis reconnect in staging; confirm readiness changes
+  and messaging resumes without duplicate messages.
 
-Task, notification and upload APIs are implemented, but their frontend integration
-remains. Uploads return 503 until Cloudinary is configured. Several frontend
-screens remain fixtures or empty placeholders.
+Cloudinary-backed upload round trips still require configured credentials.
+Exercise discovery/join, private-room denial, message history, and socket events
+with two real accounts before making the service public.
+
+
+## Albums and resumable media
+
+Apply backend migrations 028 and 029. Review [private media operations](docs/MEDIA_STORAGE.md)
+before enabling `R2_DIRECT_UPLOADS_ENABLED=true`. `npm run storage:configure`
+prints a merged CORS/lifecycle plan; its `--apply` option writes reviewed bucket
+settings. Leave the direct-upload flag false until the real client origins and
+exposed ETag header are configured. The API process runs durable cleanup; hosts
+that sleep can schedule `npm run media:cleanup` separately.

@@ -110,13 +110,13 @@ export default function AppShell() {
 
             {/* grid-cols-1 is the grid-blowout guard: without it one long title
                 widens the whole shell. */}
-            <div className="grid min-h-0 grid-cols-1 grid-rows-[auto_1fr_auto]">
+            <div className="grid min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)_auto]">
               <Navbar
                 roomHeader={roomHeader}
                 onMenuClick={toggleSidebar}
                 menuLabel={sidebarLabel}
               />
-              <main className="min-h-0 min-w-0 bg-surface">
+              <main className="min-h-0 min-w-0 overflow-hidden bg-surface">
                 <Outlet context={{ setRoomHeader }} />
               </main>
               <BottomNav />

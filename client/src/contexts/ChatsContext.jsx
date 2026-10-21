@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listRooms, markRoomSeen, updateRoomPreferences } from '@/services/rooms.service';
 import { useRealtime } from './RealtimeContext';
+import { useAuth } from './AuthContext';
+import { readChatList, saveChatList } from '../lib/fileCache';
 
 const ChatsContext = createContext(null);
 
@@ -23,6 +25,8 @@ const ChatsContext = createContext(null);
  */
 export function ChatsProvider({ children }) {
   const { socket } = useRealtime();
+  const { user } = useAuth();
+  const userId = user?.id;
   const [rooms, setRooms] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -35,22 +39,38 @@ export function ChatsProvider({ children }) {
   const refresh = useCallback(async () => {
     setIsLoading(true);
     setError('');
-    try {
-      const loaded = await listRooms();
+    const apply = (loaded) => {
       setRooms(loaded);
       setPinned(loaded.filter((room) => room.is_pinned).map((room) => room.id));
       setMuted(loaded.filter((room) => room.is_muted).map((room) => room.id));
       setArchived(loaded.filter((room) => room.is_archived).map((room) => room.id));
+    };
+    const cached = await readChatList(userId);
+    if (cached.length) { apply(cached); setIsLoading(false); }
+    if (navigator.onLine === false) {
+      if (!cached.length) setError('No conversations have been saved on this device yet.');
+      setIsLoading(false);
+      return;
+    }
+    try {
+      const loaded = await listRooms();
+      apply(loaded);
     } catch (err) {
       setError(err.response?.data?.message || 'Could not load chats.');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     refresh();
+    window.addEventListener('online', refresh);
+    return () => window.removeEventListener('online', refresh);
   }, [refresh]);
+
+  useEffect(() => {
+    if (rooms.length) saveChatList(userId, rooms);
+  }, [userId, rooms]);
 
   // Phase 1 emits this after every message create, edit and delete, to each
   // member's personal channel. The client was not listening to it at all until

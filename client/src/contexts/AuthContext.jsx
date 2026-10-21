@@ -2,12 +2,13 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { isDevAuthBypass, previewUser } from "../config/devPreview";
 import * as authService from "../services/auth.service";
 import { clearLocalData } from "../lib/fileCache";
+import { getCachedSessionUser, getSessionUserId, saveSessionUser } from '../lib/session';
 import { deleteAccount as deleteAccountRequest, updateProfile as updateProfileRequest } from "../services/users.service";
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(isDevAuthBypass ? previewUser : null);
+  const [user, setUser] = useState(() => isDevAuthBypass ? previewUser : getCachedSessionUser());
   const [isLoading, setIsLoading] = useState(!isDevAuthBypass);
   useEffect(() => {
     if (isDevAuthBypass) return;
@@ -19,22 +20,32 @@ export function AuthProvider({ children }) {
     if (isDevAuthBypass) return;
     let active = true;
     async function restore() {
+      const restoringUserId = getSessionUserId();
       if (!authService.getAccessToken()) {
         setIsLoading(false);
         return;
       }
+      if (navigator.onLine === false) {
+        if (active) { setUser(getCachedSessionUser()); setIsLoading(false); }
+        return;
+      }
       try {
         const current = await authService.getCurrentUser();
-        if (active) setUser(current);
-      } catch {
-        authService.clearSession();
+        if (active && getSessionUserId() === current.id) setUser(current);
+      } catch (error) {
+        // A temporary outage must not erase drafts or the retained session.
+        // The API interceptor already ends definitively rejected refreshes.
+        if ([401, 403].includes(error.response?.status) && getSessionUserId() === restoringUserId) authService.clearSession();
+        else if (active) setUser(getCachedSessionUser());
       } finally {
         if (active) setIsLoading(false);
       }
     }
     restore();
+    window.addEventListener('online', restore);
     return () => {
       active = false;
+      window.removeEventListener('online', restore);
     };
   }, []);
   async function login(values) {
@@ -58,6 +69,7 @@ export function AuthProvider({ children }) {
       setUser(previewUser);
       return;
     }
+    window.dispatchEvent(new Event('conclave:outbox-stop'));
     await authService.logout();
     await clearLocalData();
     setUser(null);
@@ -68,7 +80,8 @@ export function AuthProvider({ children }) {
   // just told you it saved would be the one place it had not.
   async function updateProfile(updates) {
     const next = await updateProfileRequest(updates);
-    setUser((prev) => ({ ...prev, ...next }));
+    saveSessionUser(next);
+    setUser((prev) => prev?.id === next.id ? { ...prev, ...next } : prev);
     return next;
   }
   // The server already killed every session and dropped every membership, so the
@@ -76,6 +89,7 @@ export function AuthProvider({ children }) {
   // 401s on every request until the next reload.
   async function deleteAccount() {
     await deleteAccountRequest();
+    window.dispatchEvent(new Event('conclave:outbox-stop'));
     await clearLocalData();
     setUser(null);
   }

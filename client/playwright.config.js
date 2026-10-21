@@ -18,7 +18,11 @@ const desktop = {
 export default defineConfig({
   testDir: './e2e',
   outputDir: './e2e/test-results',
-  fullyParallel: true,
+  // Each Vite server keeps a filesystem watcher open. Serial local execution
+  // makes the suite usable on machines with a low inotify limit; CI can still
+  // scale this explicitly with PLAYWRIGHT_WORKERS.
+  fullyParallel: false,
+  workers: Number(process.env.PLAYWRIGHT_WORKERS) || (process.env.CI ? 2 : 1),
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter: [['list']],
@@ -34,7 +38,7 @@ export default defineConfig({
    * bundle at dev-server start (`import.meta.env.DEV && VITE_DEV_AUTH_BYPASS`),
    * so it cannot be toggled at runtime from the browser.
    *
-   * 5173 is the app: bypass ON, every service returns fixtures, and the
+   * 5175 is the app: bypass ON, every service returns fixtures, and the
    * visitor is treated as signed in. That covers every authenticated route
    * plus /login and /register, which PublicOnlyRoute deliberately lets
    * through under bypass.
@@ -55,15 +59,15 @@ export default defineConfig({
     {
       command: 'npm run dev -- --port 5175',
       url: APP,
-      env: { ...process.env, VITE_DEV_AUTH_BYPASS: 'true' },
+      env: { ...process.env, VITE_DEV_AUTH_BYPASS: 'true', CHOKIDAR_USEPOLLING: 'true' },
       reuseExistingServer: false,
       timeout: 90_000,
     },
     {
-      command: 'VITE_DEV_AUTH_BYPASS=false npm run dev -- --port 5174',
+      command: 'npm run dev -- --port 5174',
       url: PUBLIC,
-      env: { ...process.env, VITE_DEV_AUTH_BYPASS: 'false' },
-      reuseExistingServer: true,
+      env: { ...process.env, VITE_DEV_AUTH_BYPASS: 'false', CHOKIDAR_USEPOLLING: 'true' },
+      reuseExistingServer: false,
       timeout: 90_000,
     },
   ],

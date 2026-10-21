@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { getConversationClearTime } from '../lib/clearedConversations';
 import { useRealtime } from '../contexts/RealtimeContext';
-import { deleteOutbox, listOutbox, putOutbox, readRoomMessages, saveRoomMessages } from '../lib/fileCache';
+import { readRoomMessages, saveRoomMessages } from '../lib/fileCache';
+import { useOutbox } from '../contexts/OutboxContext';
+import { draftMessage } from '../lib/outbox';
 import {
   addReaction as addReactionApi,
   deleteMessage as deleteMessageApi,
@@ -11,8 +14,6 @@ import {
   removeReaction as removeReactionApi,
   unpinMessage as unpinMessageApi,
 } from '../services/messages.service';
-
-const PAGE_SIZE = 50;
 
 // How long a typing indicator survives without a fresh `typing` event. The
 // server expires them in Redis but emits nothing when it does, so a client that
@@ -31,13 +32,6 @@ function mergeMessages(current, rows) {
   return [...merged.values()].sort(byTime);
 }
 
-let tempId = 0;
-const nextTempId = () => `optimistic-${Date.now()}-${tempId++}`;
-const nextClientId = () => globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
-  const value = Math.floor(Math.random() * 16);
-  return (char === 'x' ? value : (value & 0x3) | 0x8).toString(16);
-});
-
 /**
  * One room's timeline: history, live updates, delivery state and read
  * pointers.
@@ -48,41 +42,51 @@ const nextClientId = () => globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4
  * conversation stale for every other member. So the socket is not an
  * optimisation here, it is the only path that delivers.
  *
- * Because the echo comes back through the room rather than as an
- * acknowledgement, an optimistic row is inserted on send and withdrawn when the
- * real one arrives, matched on sender and content. That match is imperfect —
- * sending the identical text twice in a row can withdraw the wrong row — but
- * the alternative is a composer that appears to do nothing for the round trip,
- * which is worse and is the failure people actually report.
+ * Pending messages come from the account-level outbox. They are matched to
+ * saved messages by client_id, including history fetched after a reconnect.
  *
  * @param {string|null} roomId
  * @param {Array} roomMembers - from `GET /rooms/:roomId`, seeds the read pointers
  */
-export default function useMessages(roomId, roomMembers = []) {
+export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   const { socket } = useRealtime();
   const { user } = useAuth();
   const viewerId = user?.id;
+  const outbox = useOutbox();
 
   const [messages, setMessages] = useState([]);
+  const [clearedAt, setClearedAt] = useState(() => getConversationClearTime(viewerId, roomId));
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [nextCursor, setNextCursor] = useState(null);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [typingUserIds, setTypingUserIds] = useState([]);
-  const [pendingIds, setPendingIds] = useState(() => new Set());
-  const [failedIds, setFailedIds] = useState(() => new Set());
   const [readPointers, setReadPointers] = useState(() => new Map());
   const [readSequences, setReadSequences] = useState(() => new Map());
   const [deliveredSequences, setDeliveredSequences] = useState(() => new Map());
   const [lastSeenSequence, setLastSeenSequence] = useState(0);
+  const historyVersion = useRef(0);
+  const historyReady = useRef(false);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+
+  useEffect(() => {
+    setClearedAt(getConversationClearTime(viewerId, roomId));
+    const onCleared = (event) => {
+      if (event.detail?.userId === viewerId && event.detail?.roomId === roomId) setClearedAt(event.detail.clearedAt);
+    };
+    window.addEventListener('conclave:conversation-cleared', onCleared);
+    return () => window.removeEventListener('conclave:conversation-cleared', onCleared);
+  }, [viewerId, roomId]);
 
   const typingTimers = useRef(new Map());
 
   // --- history ---------------------------------------------------------------
   useEffect(() => {
     let active = true;
+    historyVersion.current += 1;
+    historyReady.current = false;
+    setIsLoadingOlder(false);
     if (!roomId) {
       setMessages([]);
       setIsLoading(false);
@@ -92,54 +96,39 @@ export default function useMessages(roomId, roomMembers = []) {
     setError('');
     setMessages([]);
     setNextCursor(null);
-    readRoomMessages(viewerId, roomId).then((cached) => {
+    if (!anchorId) readRoomMessages(viewerId, roomId).then((cached) => {
       if (active && cached.length) {
-        setMessages(mergeMessages([], cached));
+        setMessages((current) => mergeMessages(current, cached));
         setIsLoading(false);
       }
     });
-    listOutbox(viewerId, roomId).then((queued) => {
-      if (!active || !queued.length) return;
-      setIsLoading(false);
-      setMessages((current) => mergeMessages(current, queued.map((item) => ({
-        id: item.tempId,
-        client_id: item.clientId,
-        room_id: roomId,
-        sender_id: viewerId,
-        sender_name: user?.display_name || 'You',
-        content: item.payload.content || '',
-        reply_to_id: item.payload.replyToId || null,
-        attachments: item.payload.attachments || [],
-        reactions: [],
-        created_at: item.createdAt || new Date().toISOString(),
-        _optimistic: true,
-      }))));
-      setPendingIds((current) => new Set([...current, ...queued.map((item) => item.tempId)]));
-    });
-
-    listMessages(roomId)
+    listMessages(roomId, undefined, undefined, anchorId)
       .then(({ messages: rows, nextCursor: cursor }) => {
         if (!active) return;
+        if (anchorId) {
+          const target = rows.find((row) => row.id === anchorId);
+          if (target && new Date(target.created_at).getTime() <= getConversationClearTime(viewerId, roomId)) throw new Error('This message was cleared on this device.');
+        }
         setMessages((current) => mergeMessages(current, rows));
         setNextCursor(cursor);
-        saveRoomMessages(viewerId, roomId, rows);
+        if (!anchorId) saveRoomMessages(viewerId, roomId, rows);
         if (socket?.connected) rows.filter((message) => message.sender_id !== viewerId).forEach((message) => socket.emit('message-delivered', { roomId, messageId: message.id }));
       })
       .catch((err) => {
-        if (active) setError(err.response?.data?.message || 'Could not load messages.');
+        if (active) setError(err.response?.data?.message || err.message || 'Could not load messages.');
       })
       .finally(() => {
-        if (active) setIsLoading(false);
+        if (active) { historyReady.current = true; setIsLoading(false); }
       });
 
     return () => {
       active = false;
     };
-  }, [roomId, viewerId, user?.display_name, socket]);
+  }, [roomId, viewerId, user?.display_name, socket, anchorId]);
 
   useEffect(() => {
-    if (messages.length) saveRoomMessages(viewerId, roomId, messages);
-  }, [messages, roomId, viewerId]);
+    if (!anchorId && messages.length) saveRoomMessages(viewerId, roomId, messages);
+  }, [messages, roomId, viewerId, anchorId]);
 
   // --- read pointers ---------------------------------------------------------
   // Seeded from the room's member list, which already carries each member's
@@ -165,8 +154,8 @@ export default function useMessages(roomId, roomMembers = []) {
   // --- live ------------------------------------------------------------------
   useEffect(() => {
     if (!socket || !roomId) return undefined;
-
     const fillGap = async () => {
+      if (anchorId || !historyReady.current) return;
       try {
         let sequence = Math.max(0, ...messagesRef.current.map((item) => Number(item.room_sequence) || 0));
         let missing;
@@ -183,46 +172,12 @@ export default function useMessages(roomId, roomMembers = []) {
     const join = () => {
       socket.emit('join-room', { roomId });
       fillGap();
-      listOutbox(viewerId, roomId).then((items) => items.forEach((item) => {
-        socket.emit('send-message', item.payload, (ack) => {
-          if (!ack?.ok) return;
-          deleteOutbox(item.key);
-          setMessages((current) => mergeMessages(current.filter((m) => m.client_id !== item.clientId), [ack.data]));
-          setPendingIds((current) => { const next = new Set(current); next.delete(item.tempId); return next; });
-          setFailedIds((current) => { const next = new Set(current); next.delete(item.tempId); return next; });
-        });
-      }));
     };
 
     const receive = ({ message }) => {
       if (message.room_id !== roomId) return;
       if (message.sender_id !== viewerId && socket.connected) socket.emit('message-delivered', { roomId, messageId: message.id });
-      setMessages((current) => {
-        let next = current;
-        // Withdraw the optimistic row this one is the acknowledgement of.
-        if (message.sender_id === viewerId) {
-          // A file-only message is `''` locally and `null` from the server, so
-          // the two never matched and every attachment-only send left a stuck
-          // "pending" copy next to the real one. Counting attachments as well
-          // stops a text message from stealing an acknowledgement that belongs
-          // to a different pending row with the same words.
-          const index = current.findIndex(
-            (item) =>
-              item._optimistic && item.client_id === message.client_id,
-          );
-          if (index !== -1) {
-            const withdrawn = current[index];
-            next = current.filter((_, i) => i !== index);
-            setPendingIds((prev) => {
-              const copy = new Set(prev);
-              copy.delete(withdrawn.id);
-              return copy;
-            });
-          }
-        }
-        if (next.some((item) => item.id === message.id)) return next;
-        return [...next, message].sort(byTime);
-      });
+      if (!anchorId || messagesRef.current.some((row) => row.id === message.id)) setMessages((current) => mergeMessages(current, [message]));
     };
 
     const onDelivered = ({ roomId: eventRoom, userId, lastDeliveredSequence }) => {
@@ -345,72 +300,30 @@ export default function useMessages(roomId, roomMembers = []) {
       socket.off('room-seen', onReadPointer);
       if (socket.connected) socket.emit('leave-room', { roomId });
     };
-  }, [roomId, socket, viewerId]);
+  }, [roomId, socket, viewerId, anchorId]);
 
   // --- actions ---------------------------------------------------------------
 
-  /**
-   * Send, optimistically.
-   *
-   * `attachments` and `mentionedUserIds` are only meaningful on the socket
-   * payload as well as the REST body — the socket handler forwards both to the
-   * same createMessage call, so omitting them here would silently drop a file
-   * or fall back to inferring mentions from display names.
-   */
+  // Persist before reporting success to the composer. Uploads and delivery
+  // continue in OutboxProvider even after this room unmounts.
   const sendMessage = useCallback(
-    ({ content, replyToId, attachments, mentionedUserIds } = {}) => {
+    ({ content, replyToId, attachments = [], albumId, mentionedUserIds = [] } = {}) => {
       const text = (content || '').trim();
-      if (!text && !(attachments && attachments.length)) return;
-
-      const id = nextTempId();
-      const clientId = nextClientId();
-      const payload = { roomId, clientId, content: text, replyToId, attachments, mentionedUserIds };
-      const outboxKey = `${viewerId}:${roomId}:${clientId}`;
-      setPendingIds((prev) => new Set(prev).add(id));
-      setFailedIds((prev) => {
-        const copy = new Set(prev);
-        copy.delete(id);
-        return copy;
-      });
-      setMessages((current) =>
-        [
-          ...current,
-          {
-            id,
-            client_id: clientId,
-            room_id: roomId,
-            sender_id: viewerId,
-            sender_name: user?.display_name || 'You',
-            content: text,
-            reply_to_id: replyToId || null,
-            attachments: attachments || [],
-            reactions: [],
-            mentioned_user_ids: mentionedUserIds || [],
-            created_at: new Date().toISOString(),
-            _optimistic: true,
-          },
-        ].sort(byTime),
-      );
-
-      const item = { key: outboxKey, userId: viewerId, roomId, clientId, tempId: id, payload, createdAt: Date.now() };
-      putOutbox(item);
-      if (socket?.connected) socket.emit('send-message', payload, (ack) => {
-        if (!ack?.ok) {
-          setFailedIds((prev) => new Set(prev).add(id));
-          setPendingIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
-          return;
-        }
-        deleteOutbox(outboxKey);
-        setMessages((current) => mergeMessages(current.filter((m) => m.client_id !== clientId), [ack.data]));
-        setPendingIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
-        setFailedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
-      });
-      // No `typing` emit here. Sending clears the sender's typing state on the
-      // server, so announcing one would put them back on the list the moment
-      // they stopped.
+      if (!text && !attachments.length) return Promise.resolve();
+      return outbox.enqueue(roomId, [{ content: text, replyToId, attachments, albumId, mentionedUserIds }]);
     },
-    [roomId, socket, user, viewerId],
+    [roomId, outbox.enqueue],
   );
+  const sendMedia = useCallback((items) => outbox.enqueue(roomId, items), [roomId, outbox.enqueue]);
+
+  useEffect(() => {
+    const sent = (event) => {
+      if (event.detail?.userId !== viewerId || event.detail.message.room_id !== roomId) return;
+      setMessages((current) => mergeMessages(current, [event.detail.message]));
+    };
+    window.addEventListener('conclave:outbox-sent', sent);
+    return () => window.removeEventListener('conclave:outbox-sent', sent);
+  }, [roomId, viewerId]);
 
   const stopTyping = useCallback(() => {
     if (socket?.connected) socket.emit('stop-typing', { roomId });
@@ -418,9 +331,12 @@ export default function useMessages(roomId, roomMembers = []) {
 
   const loadOlder = useCallback(async () => {
     if (!nextCursor || isLoadingOlder || !roomId) return;
+    const version = historyVersion.current;
     setIsLoadingOlder(true);
+    setError('');
     try {
       const { messages: rows, nextCursor: cursor } = await listMessages(roomId, nextCursor);
+      if (historyVersion.current !== version) return;
       // Prepend without re-sorting the whole list: the cursor walks backwards in
       // time, so older rows always sort before everything already held.
       setMessages((current) => {
@@ -430,9 +346,9 @@ export default function useMessages(roomId, roomMembers = []) {
       });
       setNextCursor(cursor);
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not load earlier messages.');
+      if (historyVersion.current === version) setError(err.response?.data?.message || 'Could not load earlier messages.');
     } finally {
-      setIsLoadingOlder(false);
+      if (historyVersion.current === version) setIsLoadingOlder(false);
     }
   }, [nextCursor, isLoadingOlder, roomId]);
 
@@ -460,7 +376,19 @@ export default function useMessages(roomId, roomMembers = []) {
     [],
   );
 
-  const deliveryIds = useMemo(() => ({ pendingIds, failedIds }), [pendingIds, failedIds]);
+  const roomDrafts = useMemo(() => outbox.entries.filter((item) => item.roomId === roomId), [outbox.entries, roomId]);
+  const deliveryIds = useMemo(() => ({
+    pendingIds: new Set(roomDrafts.filter((item) => ['uploading', 'awaiting_ack'].includes(item.state)).map((item) => item.tempId)),
+    queuedIds: new Set(roomDrafts.filter((item) => item.state === 'queued').map((item) => item.tempId)),
+    failedIds: new Set(roomDrafts.filter((item) => item.state === 'failed').map((item) => item.tempId)),
+    onRetry: outbox.retry, onCancel: outbox.cancel,
+  }), [roomDrafts, outbox.retry, outbox.cancel]);
+  const visibleMessages = useMemo(() => {
+    const known = new Set(messages.map((message) => message.client_id).filter(Boolean));
+    const pending = roomDrafts.filter((item) => !known.has(item.clientId)).map((item) => draftMessage(item, user?.display_name));
+    return mergeMessages(messages.filter((message) => !message._optimistic), pending)
+      .filter((message) => new Date(message.created_at).getTime() > clearedAt);
+  }, [messages, roomDrafts, clearedAt, user?.display_name]);
 
   // Both scopes. The panel and the message menu call these same two functions,
   // so a pin started in one place behaves identically to one started in the
@@ -471,13 +399,14 @@ export default function useMessages(roomId, roomMembers = []) {
   const unpinMessage = (messageId, scope) => unpinMessageApi(messageId, scope);
 
   return {
-    messages,
-    isLoading,
+    messages: visibleMessages,
+    isLoading: isLoading && !visibleMessages.length,
     error,
     hasMore: Boolean(nextCursor),
     isLoadingOlder,
     loadOlder,
     sendMessage,
+    sendMedia,
     stopTyping,
     editMessage,
     removeMessage,

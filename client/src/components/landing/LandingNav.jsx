@@ -10,15 +10,6 @@ const LINKS = [
   { href: '#how', label: 'How it works' },
 ];
 
-/**
- * The landing header.
- *
- * Sticky and translucent so the grid lines read through it, rather than a
- * solid bar that severs the page at the top. Below `md` the links collapse
- * into a menu — a hamburger that does nothing is worse than no hamburger, so
- * this one actually opens a panel, closes on Escape and on link click, and
- * reports its state through `aria-expanded`.
- */
 export default function LandingNav() {
   const [open, setOpen] = useState(false);
 
@@ -32,8 +23,8 @@ export default function LandingNav() {
   }, [open]);
 
   return (
-    <header className="sticky top-0 z-40 border-b border-line/60 bg-canvas/80 backdrop-blur-md">
-      <nav className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6 md:px-10 lg:px-16" aria-label="Primary">
+    <header className="sticky top-0 z-40 border-b border-line/70 bg-canvas/90 backdrop-blur-md">
+      <nav className="mx-auto flex h-20 max-w-6xl items-center justify-between px-5 md:px-10" aria-label="Primary">
         <Link to="/" className="rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30">
           <Logo />
         </Link>
@@ -64,7 +55,7 @@ export default function LandingNav() {
           </Link>
           <Link
             to="/register"
-            className="inline-flex min-h-10 items-center justify-center rounded-lg bg-brand px-4 text-sm font-semibold text-surface transition-colors hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+            className="inline-flex min-h-10 items-center justify-center rounded-full bg-brand px-5 text-sm font-semibold text-surface transition-colors hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
           >
             Get started
           </Link>
@@ -76,7 +67,7 @@ export default function LandingNav() {
           aria-expanded={open}
           aria-controls="landing-menu"
           aria-label={open ? 'Close menu' : 'Open menu'}
-          className="rounded-lg p-2 text-ink transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 md:hidden"
+          className="grid h-11 w-11 place-items-center rounded-full text-ink transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 md:hidden"
         >
           {open ? <IconClose className="h-5 w-5" aria-hidden="true" /> : <IconMenu className="h-5 w-5" aria-hidden="true" />}
         </button>
@@ -111,7 +102,7 @@ export default function LandingNav() {
               <Link
                 to="/register"
                 onClick={() => setOpen(false)}
-                className="inline-flex min-h-10 items-center justify-center rounded-lg bg-brand px-4 text-sm font-semibold text-surface transition-colors hover:bg-brand/90"
+                className="inline-flex min-h-10 items-center justify-center rounded-full bg-brand px-5 text-sm font-semibold text-surface transition-colors hover:bg-brand/90"
               >
                 Get started
               </Link>

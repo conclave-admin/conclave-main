@@ -25,6 +25,8 @@ const TYPING_TTL_SECONDS = 5;
 const SCAN_COUNT = 100;
 
 const userRoomsKey = (userId) => `user:${userId}:rooms`;
+const socketRoomsKey = (socketId) => `socket:${socketId}:rooms`;
+const roomUserSocketsKey = (roomId, userId) => `room:${roomId}:user:${userId}:sockets`;
 
 // SCAN a pattern without blocking. Returns every matching key.
 async function scanKeys(pattern) {
@@ -132,17 +134,25 @@ async function socketDisconnected(userId, socketId) {
 
 // ---------- Per-room presence ----------
 
-async function userJoinedRoom(userId, roomId) {
+async function userJoinedRoom(userId, roomId, socketId = `legacy:${userId}`) {
   if (!redisClient.isOpen) return;
-  await redisClient.sAdd(`room:${roomId}:online`, userId);
-  // Track the reverse index so cleanupUserFromRooms does not have to scan.
+  await redisClient.sAdd(roomUserSocketsKey(roomId, userId), socketId);
+  await redisClient.sAdd(socketRoomsKey(socketId), roomId);
   await redisClient.sAdd(userRoomsKey(userId), roomId);
+  await redisClient.sAdd(`room:${roomId}:online`, userId);
 }
 
-async function userLeftRoom(userId, roomId) {
-  if (!redisClient.isOpen) return;
-  await redisClient.sRem(`room:${roomId}:online`, userId);
+async function userLeftRoom(userId, roomId, socketId = `legacy:${userId}`) {
+  if (!redisClient.isOpen) return false;
+  const socketKey = roomUserSocketsKey(roomId, userId);
+  await redisClient.sRem(socketKey, socketId);
+  await redisClient.sRem(socketRoomsKey(socketId), roomId);
+  const remaining = await redisClient.sCard(socketKey);
+  if (remaining > 0) return false;
+  await redisClient.del(socketKey);
   await redisClient.sRem(userRoomsKey(userId), roomId);
+  await redisClient.sRem(`room:${roomId}:online`, userId);
+  return true;
 }
 
 async function getRoomOnlineUsers(roomId) {
@@ -151,25 +161,42 @@ async function getRoomOnlineUsers(roomId) {
 }
 
 /**
- * Clean up a user from all room presence sets (called on disconnect).
- * Returns the list of roomIds they were in, so the caller can
- * broadcast user-offline to each room if needed.
+ * Clean up one socket from room presence sets (called on disconnect).
+ * Returns rooms where that was the user's last connected socket.
  */
-async function cleanupUserFromRooms(userId) {
+async function cleanupSocketFromRooms(userId, socketId) {
   if (!redisClient.isOpen) return [];
 
-  // Read the reverse index we maintain rather than scanning room:*:online.
-  const roomIds = await redisClient.sMembers(userRoomsKey(userId));
+  // Each socket owns its own reverse index. One tab disconnecting must not
+  // mark a user offline in a room where another tab is still open.
+  const roomIds = await redisClient.sMembers(socketRoomsKey(socketId));
   if (roomIds.length === 0) return [];
-
-  await redisClient.del(userRoomsKey(userId));
-
-  const pipeline = redisClient.multi();
+  await redisClient.del(socketRoomsKey(socketId));
+  const left = [];
   for (const roomId of roomIds) {
-    pipeline.sRem(`room:${roomId}:online`, userId);
+    const socketKey = roomUserSocketsKey(roomId, userId);
+    await redisClient.sRem(socketKey, socketId);
+    const remaining = await redisClient.sCard(socketKey);
+    if (remaining > 0) continue;
+    await redisClient.del(socketKey);
+    await redisClient.sRem(userRoomsKey(userId), roomId);
+    await redisClient.sRem(`room:${roomId}:online`, userId);
+    left.push(roomId);
   }
-  await pipeline.exec();
+  return left;
+}
 
+async function cleanupUserFromRooms(userId) {
+  if (!redisClient.isOpen) return [];
+  const roomIds = await redisClient.sMembers(userRoomsKey(userId));
+  await redisClient.del(userRoomsKey(userId));
+  for (const roomId of roomIds) {
+    const socketKey = roomUserSocketsKey(roomId, userId);
+    const socketIds = await redisClient.sMembers(socketKey);
+    await redisClient.del(socketKey);
+    await redisClient.sRem(`room:${roomId}:online`, userId);
+    for (const socketId of socketIds) await redisClient.sRem(socketRoomsKey(socketId), roomId);
+  }
   return roomIds;
 }
 
@@ -219,9 +246,16 @@ function startHeartbeatSweep(io) {
   if (sweepTimer) return;
 
   sweepTimer = setInterval(async () => {
-    const staleUsers = await sweepStaleUsers();
-    for (const userId of staleUsers) {
-      io.emit('user-offline', { userId });
+    try {
+      const staleUsers = await sweepStaleUsers();
+      for (const userId of staleUsers) {
+        const roomIds = await cleanupUserFromRooms(userId);
+        for (const roomId of roomIds) {
+          io.to(roomId).emit('room-presence', { roomId, onlineUserIds: await getRoomOnlineUsers(roomId) });
+        }
+      }
+    } catch (err) {
+      console.error('Presence heartbeat sweep failed', err);
     }
   }, HEARTBEAT_SWEEP_INTERVAL_MS);
 
@@ -253,6 +287,7 @@ module.exports = {
   userJoinedRoom,
   userLeftRoom,
   getRoomOnlineUsers,
+  cleanupSocketFromRooms,
   cleanupUserFromRooms,
   // Typing
   setTyping,

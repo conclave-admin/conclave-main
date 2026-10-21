@@ -1,10 +1,13 @@
 const https = require('https');
+const { pipeline } = require('stream');
+const { parseByteRange } = require('../utils/byteRange');
 const crypto = require('crypto');
 const cloudinary = require('../config/cloudinary');
+const r2 = require('../config/r2');
 const { query } = require('../config/db');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
-const { fail } = require('../utils/apiResponse');
+const { fail, ok } = require('../utils/apiResponse');
 const env = require('../config/env');
 
 const DELIVERY_HOST = 'res.cloudinary.com';
@@ -122,7 +125,7 @@ const getAttachment = asyncHandler(async (req, res) => {
        FROM attachments a
        INNER JOIN messages m ON m.id = a.message_id
        INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-      WHERE a.id = $1`,
+      WHERE a.id = $1 AND m.deleted_at IS NULL`,
     [attachmentId, req.user.id],
   );
 
@@ -133,6 +136,8 @@ const getAttachment = asyncHandler(async (req, res) => {
   }
 
   const row = result.rows[0];
+  if (row.resource_type === 'r2') return streamFromR2(row, req, res);
+
   const coords = row.public_id
     ? { publicId: row.public_id, resourceType: row.resource_type || 'image' }
     : deriveFromUrl(row.file_url);
@@ -176,21 +181,7 @@ const getAttachment = asyncHandler(async (req, res) => {
    * browser never interprets the bytes as a document, and nosniff stops it
    * re-interpreting a .png that is really HTML.
    */
-  const safe = sanitiseFilename(row.filename);
-  // sanitiseFilename is deliberately ASCII, so Résumé.pdf would download as
-  // R_sum_.pdf. RFC 5987 lets a second, percent-encoded name carry the real one
-  // for browsers that understand it, while the ASCII one stays as the fallback
-  // for the rest. '()* are escaped because RFC 2616 excludes them from the
-  // token, and escape() leaves them alone.
-  const encoded = encodeURIComponent(String(row.filename || safe)).replace(/['()*]/g, escape);
-  res.setHeader(
-    'Content-Disposition',
-    `attachment; filename="${safe}"; filename*=UTF-8''${encoded}`,
-  );
-  res.setHeader('Content-Type', row.file_type || 'application/octet-stream');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'private, no-store');
-  if (row.size_bytes) res.setHeader('Content-Length', String(row.size_bytes));
+  setDownloadHeaders(res, row);
 
   upstream.pipe(res);
 
@@ -207,18 +198,36 @@ const getAttachment = asyncHandler(async (req, res) => {
 });
 
 const getAttachmentUrl = asyncHandler(async (req, res) => {
-  if (!cloudinary.isConfigured()) throw new ApiError(503, 'File storage is not configured');
   const { attachmentId } = req.params;
   const result = await query(
-    `SELECT a.id, a.file_url, a.public_id, a.resource_type
+    `SELECT a.id, a.file_type, a.file_url, a.public_id, a.resource_type
        FROM attachments a
        INNER JOIN messages m ON m.id = a.message_id
        INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-      WHERE a.id = $1`,
+      WHERE a.id = $1 AND m.deleted_at IS NULL`,
     [attachmentId, req.user.id],
   );
   if (!result.rows.length) throw new ApiError(404, 'Attachment not found');
   const row = result.rows[0];
+  if (row.resource_type === 'r2') {
+    if (!r2.isConfigured()) throw new ApiError(503, 'File storage is not configured');
+    const type = row.file_type || '';
+    const streamable = type.startsWith('video/') || type.startsWith('audio/');
+    let url;
+    try {
+      url = await r2.signedGetUrl(row.public_id, {
+        expiresIn: 60,
+        contentType: type,
+        inline: streamable,
+      });
+    } catch (err) {
+      console.error('R2 URL signing failed', { attachmentId, code: err.name });
+      throw new ApiError(502, 'Attachment storage is temporarily unavailable');
+    }
+    return ok(res, { url, expiresAt: Math.floor(Date.now() / 1000) + 60 });
+  }
+
+  if (!cloudinary.isConfigured()) throw new ApiError(503, 'File storage is not configured');
   const coords = row.public_id ? { publicId: row.public_id, resourceType: row.resource_type || 'image' } : deriveFromUrl(row.file_url);
   if (!coords) throw new ApiError(502, 'Attachment storage is temporarily unavailable');
   const url = cloudinary.url(coords.publicId, { resource_type: coords.resourceType, secure: true });
@@ -230,6 +239,93 @@ const getAttachmentUrl = asyncHandler(async (req, res) => {
   return ok(res, { url: `${url}?${token}`, expiresAt: Math.floor(Date.now() / 1000) + 3600 });
 });
 
+const getAttachmentPreviewUrl = asyncHandler(async (req, res) => {
+  const { attachmentId } = req.params;
+  const result = await query(
+    `SELECT a.file_type, a.public_id, a.resource_type
+       FROM attachments a
+       INNER JOIN messages m ON m.id = a.message_id
+       INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
+      WHERE a.id = $1 AND m.deleted_at IS NULL`,
+    [attachmentId, req.user.id],
+  );
+  if (!result.rows.length) throw new ApiError(404, 'Attachment not found');
+
+  const row = result.rows[0];
+  if (row.resource_type !== 'r2') return ok(res, { url: null, expiresAt: null });
+  if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(row.file_type)) {
+    return ok(res, { url: null, expiresAt: null });
+  }
+
+  const workerBase = env.r2.previewWorkerUrl;
+  const secret = env.r2.previewSigningSecret;
+  if (!workerBase || !secret || secret.length < 32) {
+    throw new ApiError(503, 'Image previews are not configured');
+  }
+
+  let workerOrigin;
+  try {
+    workerOrigin = new URL(workerBase);
+  } catch {
+    throw new ApiError(503, 'Image previews are not configured');
+  }
+  if (workerOrigin.protocol !== 'https:') throw new ApiError(503, 'Image previews are not configured');
+
+  const expiresAt = Math.floor(Date.now() / 1000) + 300;
+  const canonical = `${row.public_id}\n${expiresAt}`;
+  const signature = crypto.createHmac('sha256', secret).update(canonical).digest('base64url');
+  const url = new URL(`/preview/${row.public_id}`, workerOrigin.origin);
+  url.searchParams.set('exp', String(expiresAt));
+  url.searchParams.set('sig', signature);
+  return ok(res, { url: url.toString(), expiresAt });
+});
+
+function setDownloadHeaders(res, row) {
+  const safe = sanitiseFilename(row.filename);
+  // Keep a safe ASCII fallback and preserve the original UTF-8 filename for
+  // clients that understand RFC 5987.
+  const encoded = encodeURIComponent(String(row.filename || safe)).replace(/['()*]/g, escape);
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${safe}"; filename*=UTF-8''${encoded}`,
+  );
+  res.setHeader('Content-Type', row.file_type || 'application/octet-stream');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, no-store');
+  if (row.size_bytes) res.setHeader('Content-Length', String(row.size_bytes));
+}
+
+async function streamFromR2(row, req, res) {
+  if (!r2.isConfigured()) throw new ApiError(503, 'File storage is not configured');
+  let object;
+  try {
+    const head = await r2.headObject(row.public_id);
+    const size = head.ContentLength;
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (head.ETag) res.setHeader('ETag', head.ETag);
+    let range;
+    try { range = parseByteRange(req.headers['if-range'] && req.headers['if-range'] !== head.ETag ? null : req.headers.range, size); }
+    catch (error) { res.setHeader('Content-Range', `bytes */${size}`); throw error; }
+    object = await r2.getObject(row.public_id, { range: range ? `bytes=${range.start}-${range.end}` : undefined, ifMatch: head.ETag });
+    setDownloadHeaders(res, { ...row, size_bytes: range ? range.length : size });
+    if (range) { res.status(206); res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`); }
+    if (req.method === 'HEAD') { object.Body.destroy(); return res.end(); }
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if (err.name === 'NoSuchKey' || err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) throw new ApiError(404, 'Attachment not found');
+    console.error('R2 fetch failed', { attachmentId: row.id, code: err.name });
+    throw new ApiError(502, 'Attachment storage is temporarily unavailable');
+  }
+  // The browser may cancel while R2's HEAD/GET requests are still pending.
+  if (res.destroyed) { object.Body.destroy(); return; }
+  const disconnected = () => object.Body.destroy();
+  res.on('close', disconnected);
+  pipeline(object.Body, res, (error) => {
+    res.off('close', disconnected);
+    if (error && !res.destroyed) res.destroy(error);
+  });
+}
+
 // A filename is echoed into a Content-Disposition header, which is a response
 // header and cannot carry a newline. Quotes and separators go too: the value is
 // quoted in the header, so an embedded quote would end the token early.
@@ -240,4 +336,4 @@ function sanitiseFilename(filename) {
     .slice(0, 120) || 'download';
 }
 
-module.exports = { getAttachment, getAttachmentUrl, deriveFromUrl, sanitiseFilename, signedDeliveryUrl };
+module.exports = { getAttachment, getAttachmentUrl, getAttachmentPreviewUrl, deriveFromUrl, sanitiseFilename, signedDeliveryUrl };

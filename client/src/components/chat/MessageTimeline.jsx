@@ -3,6 +3,8 @@ import IconArrowDown from '@/assets/icons/arrow-down.svg?react';
 import EmptyState from '../ui/EmptyState';
 import Spinner from '../ui/Spinner';
 import { annotateMessages, daySeparatorLabel } from '@/lib/messageMeta';
+import { groupMediaAlbums, viewerItems } from '../../lib/mediaAlbums';
+import { MediaViewerProvider } from './MediaViewer';
 import Message from './Message';
 import TypingIndicator from './TypingIndicator';
 
@@ -58,6 +60,9 @@ export default function MessageTimeline({
   lastSeenSequence = 0,
   onMessageVisible,
   onOpenThread,
+  onForward,
+  onJumpToMessage,
+  highlightedId,
 }) {
   const contentRef = useRef(null);
   const topSentinelRef = useRef(null);
@@ -82,6 +87,9 @@ export default function MessageTimeline({
   const unreadCount = useMemo(() => annotated.filter((message) =>
     Number(message.room_sequence || 0) > Number(lastSeenSequence) && message.sender_id !== viewerId,
   ).length, [annotated, lastSeenSequence, viewerId]);
+
+  const groups = useMemo(() => groupMediaAlbums(annotated, firstUnreadId), [annotated, firstUnreadId]);
+  const mediaItems = useMemo(() => viewerItems(annotated), [annotated]);
 
   // A Map lookup instead of a scan per row.
   const replyTargetFor = (message) =>
@@ -121,6 +129,9 @@ export default function MessageTimeline({
 
     const first = annotated[0];
     const last = annotated[annotated.length - 1];
+    // An acknowledgement replaces the temporary id without adding a new item.
+    // Preserve scroll position and open actions for that same logical message.
+    const lastId = last.client_id || last.id;
     const seen = lastSeenRef.current;
 
     if (placedRoomRef.current !== roomId) {
@@ -134,13 +145,13 @@ export default function MessageTimeline({
         container.scrollTop = container.scrollHeight;
         stickRef.current = true;
       }
-    } else if (seen.firstId && first.id !== seen.firstId && last.id === seen.lastId) {
+    } else if (seen.firstId && first.id !== seen.firstId && lastId === seen.lastId) {
       // 2. Older page prepended: keep the reader on the message they were on.
       if (heightBeforeOlderRef.current > 0) {
         container.scrollTop += container.scrollHeight - heightBeforeOlderRef.current;
         heightBeforeOlderRef.current = 0;
       }
-    } else if (last.id !== seen.lastId) {
+    } else if (lastId !== seen.lastId) {
       // 3. Something new at the bottom. Your own sends always follow.
       const mine = last.sender_id === viewerId;
       if (mine || stickRef.current) {
@@ -153,7 +164,7 @@ export default function MessageTimeline({
       }
     }
 
-    lastSeenRef.current = { firstId: first.id, lastId: last.id };
+    lastSeenRef.current = { firstId: first.id, lastId };
   }, [annotated, firstUnreadId, roomId, viewerId, scrollContainerRef]);
 
   useEffect(() => {
@@ -226,7 +237,7 @@ export default function MessageTimeline({
   }
 
   return (
-    <div
+    <MediaViewerProvider items={mediaItems} onJump={onJumpToMessage}><div
       ref={contentRef}
       className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-5 pt-4 md:px-7"
     >
@@ -236,24 +247,29 @@ export default function MessageTimeline({
         </div>
       )}
 
-      {annotated.map((message, index) => (
-        <Fragment key={message.id}>
-          {message.id === firstUnreadId && (
+      {groups.map((group, groupIndex) => <div key={group.messages[0].client_id || group.messages[0].id}
+        className={groupIndex === 0 ? 'mt-auto' : ''}>
+          {group.messages[0].id === firstUnreadId && (
             <div className="my-4 flex items-center gap-3 text-metadata font-medium text-brand" role="separator" aria-label="Unread messages">
               <span className="h-px flex-1 bg-brand/40" aria-hidden="true" />
               <span>{unreadCount} unread messages</span>
               <span className="h-px flex-1 bg-brand/40" aria-hidden="true" />
             </div>
           )}
-          {message._startsDay && (
-            <DaySeparator label={daySeparatorLabel(message.created_at)} />
+          {group.messages[0]._startsDay && (
+            <DaySeparator label={daySeparatorLabel(group.messages[0].created_at)} />
           )}
+        {group.albumId && group.messages.length > 1 && <p className="mt-3 text-metadata text-muted">{group.messages.length} media items</p>}
+        <div data-album-id={group.albumId || undefined} className={group.albumId && group.messages.length > 1 ? 'grid w-full grid-cols-2 items-start gap-2 rounded-2xl border border-line p-2' : ''}>
+        {group.messages.map((message) => (
+        <Fragment key={message.client_id || message.id}>
           {/* mt-auto on the first row keeps a short conversation pinned to the
               bottom of the pane, next to the composer, rather than stranded at
               the top with a void beneath it. */}
-          <div data-message-id={message.id} className={index === 0 ? 'mt-auto' : message._consecutive ? 'mt-0.5' : 'mt-3'}>
+          <div data-message-id={message.id} className={`${group.albumId && group.messages.length > 1 ? 'min-w-0' : message._consecutive ? 'mt-0.5' : 'mt-3'} ${highlightedId === message.id ? 'message-jump-highlight rounded-2xl' : ''}`}>
             <Message
               message={message}
+              albumTile={Boolean(group.albumId && group.messages.length > 1)}
               viewerId={viewerId}
               members={members}
               isAdmin={isAdmin}
@@ -269,10 +285,12 @@ export default function MessageTimeline({
               onUnpin={onUnpin}
               onToggleReaction={onToggleReaction}
               onOpenThread={onOpenThread}
+              onForward={onForward}
+              onJumpToMessage={onJumpToMessage}
             />
           </div>
         </Fragment>
-      ))}
+      ))}</div></div>)}
 
       <TypingIndicator typingUserIds={typingUserIds} members={members} />
       <span className="sr-only" aria-live="polite" aria-atomic="true">
@@ -302,6 +320,6 @@ export default function MessageTimeline({
           </button>
         </div>
       )}
-    </div>
+    </div></MediaViewerProvider>
   );
 }

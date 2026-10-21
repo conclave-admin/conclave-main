@@ -37,6 +37,7 @@ const app = require('../src/app');
 const EXPECTED_ROUTES = [
   // health (declared in app.js, outside /api)
   ['GET', '/health', false],
+  ['GET', '/ready', false],
   // auth — deliberately public
   ['POST', '/api/auth/register', false],
   ['POST', '/api/auth/login', false],
@@ -53,7 +54,9 @@ const EXPECTED_ROUTES = [
   // rooms
   ['POST', '/api/rooms', true],
   ['GET', '/api/rooms', true],
+  ['GET', '/api/rooms/discover', true],
   ['GET', '/api/rooms/:roomId', true],
+  ['POST', '/api/rooms/:roomId/join', true],
   ['PATCH', '/api/rooms/:roomId', true],
   ['POST', '/api/rooms/:roomId/members', true],
   ['DELETE', '/api/rooms/:roomId/members/:userId', true],

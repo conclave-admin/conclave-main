@@ -1,6 +1,6 @@
 import Avatar from '@/components/ui/Avatar';
 import { usePresence } from '@/contexts/PresenceContext';
-import { formatClockTime, readStatus } from '@/lib/messageMeta';
+import { formatClockTime, messageSummary, readStatus } from '@/lib/messageMeta';
 import IconFailed from '@/assets/icons/failed.svg?react';
 import IconPending from '@/assets/icons/pending.svg?react';
 import IconRead from '@/assets/icons/read.svg?react';
@@ -9,11 +9,13 @@ import { AttachmentGroup } from './AttachmentCard';
 import MessageActions from './MessageActions';
 import MessageReactions from './MessageReactions';
 import PollCard from './PollCard';
+import MessageSendState from './MessageSendState';
 import { useRef, useState } from "react";
 import useLongPress from "@/hooks/useLongPress";
 
 const TICKS = {
   pending: { Icon: IconPending, label: 'Sending' },
+  queued: { Icon: IconPending, label: 'Waiting for connection' },
   sent: { Icon: IconSent, label: 'Sent' },
   delivered: { Icon: IconRead, label: 'Delivered' },
   read: { Icon: IconRead, label: 'Read' },
@@ -23,12 +25,17 @@ const TICKS = {
 function Tick({ status }) {
   if (!status) return null;
   const { Icon, label } = TICKS[status];
+  const queued = status === 'queued';
   return (
     <span
-      className={status === 'failed' ? 'text-error' : status === 'read' ? 'text-brand' : 'text-muted'}
+      data-message-status={status}
+      title={queued ? 'Not sent. Waiting for an internet connection.' : label}
+      aria-label={label}
+      className={`inline-flex items-center gap-1 ${status === 'failed' ? 'text-error' : status === 'read' ? 'text-brand' : queued ? 'text-warning' : 'text-muted'}`}
     >
       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       <span className="sr-only">{label}</span>
+      {queued && <span className="text-[10px] font-medium leading-none">Not sent</span>}
     </span>
   );
 }
@@ -78,6 +85,7 @@ export default function Message({
   isAdmin,
   roomId,
   replyTarget,
+  albumTile = false,
   deliveryIds,
   onReply,
   onEdit,
@@ -88,22 +96,25 @@ export default function Message({
   onUnpin,
   onToggleReaction,
   onOpenThread,
+  onForward,
+  onJumpToMessage,
 }) {
   const { isOnlineIn } = usePresence();
   const mine = message.sender_id === viewerId;
   const [menuOpen, setMenuOpen] = useState(false);
   const bodyRef = useRef(null);
-  const longPress = useLongPress(() => setMenuOpen(true), { disabled: message.is_deleted });
+  const longPress = useLongPress(() => setMenuOpen(true), { disabled: message.is_deleted || message._optimistic });
 
   const status = mine
-    ? readStatus(message, members, viewerId, deliveryIds?.pendingIds, deliveryIds?.failedIds)
+    ? readStatus(message, members, viewerId, deliveryIds?.pendingIds, deliveryIds?.failedIds, deliveryIds?.queuedIds)
     : null;
 
   const senderName = message.sender_name || 'Unknown member';
-  const showAvatar = !mine && !message._consecutive;
+  const showAvatar = !albumTile && !mine && !message._consecutive;
 
 const bubbleClass = [
   "px-3 py-2 text-body [overflow-wrap:anywhere]",
+  albumTile ? "pr-9" : "",
   "rounded-2xl",
   mine ? "bg-brand text-surface" : "bg-canvas text-ink",
   message._endsGroup ? (mine ? "rounded-br-md" : "rounded-bl-md") : "",
@@ -129,11 +140,11 @@ const bubbleClass = [
       ) : (
         // Keeps a run of messages aligned under the first one's text rather
         // than sliding left into the avatar column.
-        !mine && <span className="h-10 w-10 shrink-0" aria-hidden="true" />
+        !albumTile && !mine && <span className="h-10 w-10 shrink-0" aria-hidden="true" />
       )}
 
       <div
-        className={`flex min-w-0 max-w-[min(36rem,85%)] flex-col gap-1 ${
+        className={`flex min-w-0 ${albumTile ? "w-full max-w-full" : "max-w-[min(36rem,85%)]"} flex-col gap-1 ${
           mine ? "items-end" : "items-start"
         }`}
       >
@@ -141,17 +152,17 @@ const bubbleClass = [
           <span className="truncate text-label text-ink">{senderName}</span>
         )}
 
+        {message.forwarded && !message.is_deleted && <p className="text-metadata italic text-muted">Forwarded</p>}
         {replyTarget && !message.is_deleted && (
-          <div className="max-w-xs truncate rounded-md border-l-2 border-brand bg-canvas px-2 py-1 text-metadata text-muted">
+          <button type="button" onClick={() => onJumpToMessage?.(replyTarget)} className="max-w-xs truncate rounded-md border-l-2 border-brand bg-canvas px-2 py-1 text-left text-metadata text-muted hover:bg-brand/10">
             Replying to {replyTarget.sender_name || "a message"}:{" "}
-            {replyTarget.content ||
-              (replyTarget.is_deleted ? "deleted message" : "attachment")}
-          </div>
+            {messageSummary(replyTarget)}
+          </button>
         )}
         {message.reply_to_id && !replyTarget && !message.is_deleted && (
-          <div className="rounded-md border-l-2 border-line bg-canvas px-2 py-1 text-metadata text-muted">
+          <button type="button" onClick={() => onJumpToMessage?.({ id: message.reply_to_id })} className="rounded-md border-l-2 border-line bg-canvas px-2 py-1 text-metadata text-muted hover:bg-brand/10">
             Replied to an earlier message
-          </div>
+          </button>
         )}
 
         {message.is_deleted ? (
@@ -163,7 +174,7 @@ const bubbleClass = [
           <div
             ref={bodyRef}
             {...longPress}
-            className={`relative flex min-w-0 max-w-full flex-col gap-1.5 ${
+            className={`relative flex min-w-0 max-w-full ${albumTile ? "w-full flex-col-reverse" : "flex-col"} gap-1.5 ${
               mine ? "items-end" : "items-start"
             }`}
           >
@@ -179,15 +190,15 @@ const bubbleClass = [
               ))}
 
             {message.attachments?.length > 0 && (
-              <AttachmentGroup attachments={message.attachments} />
+              <AttachmentGroup attachments={message.attachments} albumTile={albumTile} />
             )}
 
             {/* Beside the body and out of the layout flow, so a row reserves no
                 indent. Hover devices reveal it on hover; touch devices hide it
                 and open the menu by long-press. */}
-            <div
+            {!message._optimistic && <div
               className={`absolute top-1 transition-opacity ${
-                mine ? "right-full pr-1" : "left-full pl-1"
+                albumTile ? "right-1 z-10 rounded-md bg-surface/90" : mine ? "right-full pr-1" : "left-full pl-1"
               } ${
                 menuOpen ? "opacity-100" : "opacity-0"
               } [@media(hover:none)]:hidden [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-within:opacity-100`}
@@ -203,6 +214,7 @@ const bubbleClass = [
                 onToggleReaction={(emoji) => onToggleReaction(message, emoji)}
                 onReply={() => onReply(message)}
                 onOpenThread={() => onOpenThread(message)}
+                onForward={onForward ? () => onForward(message) : undefined}
                 onEdit={() => onEdit(message)}
                 onDelete={() => onDelete(message)}
                 onPromote={() => onPromote(message)}
@@ -210,7 +222,7 @@ const bubbleClass = [
                 onPin={onPin}
                 onUnpin={onUnpin}
               />
-            </div>
+            </div>}
           </div>
         )}
 
@@ -218,17 +230,19 @@ const bubbleClass = [
           <span className="text-metadata text-muted">edited</span>
         )}
 
+        {message._outbox && <MessageSendState message={message} onRetry={deliveryIds.onRetry} onCancel={deliveryIds.onCancel} />}
+
         {/* Renders nothing until a reaction exists. The first one comes from the
             actions menu, so this row only appears once there is something to
             show or add to. */}
-        {!message.is_deleted && (
+        {!message.is_deleted && !message._optimistic && (
           <MessageReactions
             message={message}
             onToggle={(emoji) => onToggleReaction(message, emoji)}
           />
         )}
 
-        {message._endsGroup && (
+        {(message._endsGroup || message._outbox) && (
           <div className="flex items-center gap-1.5">
             {status === "failed" && (
               <span className="text-metadata text-error">Failed to send</span>

@@ -39,12 +39,17 @@ export function formatRoomTime(value, now = new Date()) {
  * message has no content to display, and an attachment-only message's content
  * is an empty string, which would render as a blank row and read as a bug.
  *
- * @param {{ content?: string|null, is_deleted?: boolean, has_attachment?: boolean }} message
+ * @param {{ content?: string|null, is_deleted?: boolean, has_attachment?: boolean, attachment_type?: string }} message
  */
 export function formatRoomPreview(message) {
   if (!message) return 'No messages yet';
   if (message.is_deleted) return 'Message deleted';
   if (message.content) return message.content;
-  if (message.has_attachment) return 'Attachment';
+  if (message.has_attachment) {
+    if (message.attachment_type?.startsWith('image/')) return 'Photo';
+    if (message.attachment_type?.startsWith('video/')) return 'Video';
+    if (message.attachment_type?.startsWith('audio/')) return 'Voice message';
+    return 'Document';
+  }
   return 'No messages yet';
 }

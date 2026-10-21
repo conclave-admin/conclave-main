@@ -7,7 +7,7 @@ import IconMore from '@/assets/icons/more.svg?react';
 import IconPin from '@/assets/icons/pin.svg?react';
 import { useToast } from '@/contexts/ToastContext';
 import { useRealtime } from '@/contexts/RealtimeContext';
-import { formatClockTime } from '@/lib/messageMeta';
+import { formatClockTime, messageSummary } from '@/lib/messageMeta';
 import { listPinnedMessages, unpinMessage } from '@/services/messages.service';
 
 /**
@@ -33,7 +33,7 @@ import { listPinnedMessages, unpinMessage } from '@/services/messages.service';
  * `message:pinned` / `message:unpinned` events, which carry a full message
  * rather than a delta — so an unpin is a replace, not a filter.
  */
-export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId }) {
+export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId, onJumpToMessage }) {
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
@@ -149,7 +149,7 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId 
           </span>
           <span className="block truncate text-body text-ink">
             <span className="text-muted">{latest.sender_name}: </span>
-            {latest.content || 'Attachment'}
+            {messageSummary(latest)}
           </span>
         </span>
 
@@ -180,11 +180,11 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId 
                   // and anything longer belongs in the timeline. Deliberately
                   // not line-clamp, which the Tailwind build here has no plugin
                   // for — max-h with overflow-hidden is the same result in core.
-                  <p className="mt-1 max-h-[4.5rem] overflow-hidden whitespace-pre-wrap break-words text-body text-muted">
+                  <button type="button" onClick={() => { setIsOpen(false); onJumpToMessage?.(message); }} className="mt-1 max-h-[4.5rem] overflow-hidden whitespace-pre-wrap break-words text-left text-body text-muted hover:text-brand">
                     {message.content}
-                  </p>
+                  </button>
                 ) : (
-                  <p className="mt-1 text-body text-muted">Attachment</p>
+                  <button type="button" onClick={() => { setIsOpen(false); onJumpToMessage?.(message); }} className="mt-1 text-body text-muted">{messageSummary(message)}</button>
                 )}
                 <p className="mt-1 text-metadata text-muted">
                   Pinned by {message.pins.room.display_name}

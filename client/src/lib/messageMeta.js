@@ -18,6 +18,18 @@
  */
 export const REACTION_EMOJI = ['👍', '👎', '🎉', '✅'];
 
+/** Human-readable fallback for attachment-only messages in reply and pin quotes. */
+export function messageSummary(message) {
+  if (!message) return 'Message';
+  if (message.is_deleted || message.deleted_at) return 'Deleted message';
+  if (message.content) return message.content;
+  const type = message.attachments?.[0]?.mime_type || message.attachment_type || '';
+  if (type.startsWith('image/')) return 'Photo';
+  if (type.startsWith('video/')) return 'Video';
+  if (type.startsWith('audio/')) return 'Voice message';
+  return message.attachments?.length ? 'Document' : 'Message';
+}
+
 function startOfDay(value) {
   const date = new Date(value);
   date.setHours(0, 0, 0, 0);
@@ -95,7 +107,8 @@ export function annotateMessages(messages = []) {
 /**
  * Delivery status for one of the caller's own messages.
  *
- * `pending` the send has not been acknowledged yet
+ * `queued`  kept on this device until a connection returns
+ * `pending` the send is in flight and has not been acknowledged yet
  * `failed`  it errored and the composer surfaced it
  * `sent`    the server stored it
  * `read`    at least one other member's read pointer has reached it
@@ -106,11 +119,12 @@ export function annotateMessages(messages = []) {
  * somebody has caught up, not everybody: in a room of forty people waiting for
  * unanimous catch-up would mean a tick that almost never appears.
  *
- * @returns {'pending'|'failed'|'sent'|'read'|null} null when not the viewer's message
+ * @returns {'queued'|'pending'|'failed'|'sent'|'read'|null} null when not the viewer's message
  */
-export function readStatus(message, members = [], viewerId, pendingIds = new Set(), failedIds = new Set()) {
+export function readStatus(message, members = [], viewerId, pendingIds = new Set(), failedIds = new Set(), queuedIds = new Set()) {
   if (!message || message.sender_id !== viewerId) return null;
   if (failedIds.has(message.id)) return 'failed';
+  if (queuedIds.has(message.id)) return 'queued';
   if (pendingIds.has(message.id)) return 'pending';
 
   const others = members.filter((member) => member.id !== viewerId);

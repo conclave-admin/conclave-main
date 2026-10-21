@@ -212,7 +212,7 @@ async function unpinMessage({ messageId, userId, scope, io }) {
  */
 async function listRoomPins(roomId, viewerId) {
   const result = await query(
-    `SELECT m.id, m.room_id, m.sender_id, m.content, m.reply_to_id,
+    `SELECT m.id, m.room_id, m.sender_id, m.client_id, m.album_id, m.forwarded, m.room_sequence, m.content, m.reply_to_id,
             m.edited_at, m.deleted_at, m.created_at,
             u.display_name AS sender_name, u.avatar_url AS sender_avatar
        FROM message_pins mp

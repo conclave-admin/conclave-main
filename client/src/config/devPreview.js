@@ -7,6 +7,7 @@ export const previewUser = {
   display_name: "Amina Yusuf",
   avatar_url: null,
   bio: "Frontend preview account",
+  created_at: "2025-04-12T09:00:00.000Z",
 };
 
 // Mirrors one row of the enriched `GET /rooms` response (docs/API_CONTRACTS.md,
@@ -20,6 +21,8 @@ export const previewRoom = {
   name: "Product & Engineering",
   slug: "product-eng",
   type: "group",
+  created_at: "2026-10-08T08:00:00.000Z",
+  created_by: "dev-preview-user",
   // Phase 8: rooms carry a description, editable by an admin. Without one here
   // the room-info edit form has nothing to prefill and cannot be seen working
   // offline.
@@ -50,7 +53,7 @@ export const previewRoom = {
 // messages read as unread and the tick can be seen changing.
   members: [
     { ...previewUser, role: 'admin', last_seen_at: '2026-10-08T09:50:00.000Z' },
-    { id: 'dev-victor', display_name: 'Victor', avatar_url: null, role: 'member', last_seen_at: '2026-08-27T09:00:00.000Z' },
+    { id: 'dev-victor', display_name: 'Victor', avatar_url: null, bio: 'Product designer focused on clear, collaborative tools.', account_created_at: '2024-11-03T09:00:00.000Z', role: 'member', joined_at: '2026-03-08T09:00:00.000Z', last_seen_at: '2026-08-27T09:00:00.000Z' },
     { id: 'dev-priya', display_name: 'Priya', avatar_url: null, role: 'member', last_seen_at: '2026-10-08T09:45:00.000Z' },
     { id: 'dev-daniel', display_name: 'Daniel', avatar_url: null, role: 'member', last_seen_at: '2026-10-08T09:49:00.000Z' },
   ],
@@ -86,7 +89,7 @@ export const previewDmRoom = {
   },
   members: [
     { ...previewUser, role: 'admin', last_seen_at: '2026-10-08T10:00:00.000Z' },
-    { id: 'dev-victor', display_name: 'Victor', avatar_url: null, role: 'member', last_seen_at: '2026-10-08T09:52:00.000Z' },
+    { id: 'dev-victor', display_name: 'Victor', avatar_url: null, bio: 'Product designer focused on clear, collaborative tools.', account_created_at: '2024-11-03T09:00:00.000Z', role: 'member', joined_at: '2026-03-08T09:00:00.000Z', last_seen_at: '2026-10-08T09:52:00.000Z' },
   ],
 };
 
@@ -288,7 +291,9 @@ export const previewMessages = [
  */
 export const previewPinnedMessages = [
   {
-    id: "dev-message-pinned-1",
+    // The pin points to a message that is also present in the preview timeline,
+    // so clicking it exercises the same jump behavior as a server-backed pin.
+    id: "dev-message-1",
     room_id: previewRoom.id,
     sender_id: "dev-user-2",
     sender_name: "Tomas Nowak",
@@ -529,8 +534,10 @@ export const previewSocket = {
     if (event !== 'send-message') return;
 
     const message = {
-      id: `dev-message-${Date.now()}`,
+      id: `dev-message-${payload.clientId || Date.now()}`,
       client_id: payload.clientId || null,
+      album_id: payload.albumId || null,
+      forwarded: Boolean(payload.forwardSource),
       room_sequence: ++previewSequence,
       room_id: payload.roomId,
       sender_id: previewUser.id,

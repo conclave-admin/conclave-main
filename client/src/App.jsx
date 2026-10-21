@@ -6,6 +6,7 @@ import PublicOnlyRoute from './components/routing/PublicOnlyRoute';
 import Spinner from './components/ui/Spinner';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { RealtimeProvider } from './contexts/RealtimeContext';
+import { OutboxProvider } from './contexts/OutboxContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider } from './contexts/ToastContext';
 import StaticPage from './pages/StaticPage';
@@ -13,6 +14,7 @@ import StaticPage from './pages/StaticPage';
 const CatchUpDigestPage = lazy(() => import('./pages/CatchUpDigestPage'));
 const Chats = lazy(() => import('./pages/Chats'));
 const Decisions = lazy(() => import('./pages/Decisions'));
+const DiscoverRooms = lazy(() => import('./pages/DiscoverRooms'));
 const DecisionDetail = lazy(() => import('./pages/DecisionDetail'));
 const Login = lazy(() => import('./pages/Login'));
 const NewChat = lazy(() => import('./pages/NewChat'));
@@ -24,9 +26,7 @@ const RoomInfo = lazy(() => import('./pages/RoomInfo'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 
-// Lazy because Landing statically imports GSAP, and GSAP is landing-only. A
-// signed-in user going to the chat list must never download it, so it rides
-// in this chunk rather than in the entry bundle.
+// Keep public-page illustrations and content outside the signed-in app bundle.
 const Landing = lazy(() => import('./pages/Landing'));
 
 /**
@@ -62,6 +62,7 @@ export default function App() {
       <ToastProvider>
         <AuthProvider>
           <RealtimeProvider>
+            <OutboxProvider>
             <Suspense fallback={<Spinner fullPage label="Loading" />}>
             <Routes>
               <Route path="/" element={<LandingRoute />} />
@@ -96,6 +97,7 @@ export default function App() {
                   {/* Stub behind the sidebar's "Invite members" and the mobile
                       compose button. */}
                   <Route path="/new" element={<NewChat />} />
+                  <Route path="/discover" element={<DiscoverRooms />} />
 
                   <Route path="/profile" element={<Profile />} />
                   <Route path="/settings" element={<Settings />} />
@@ -113,6 +115,7 @@ export default function App() {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
             </Suspense>
+            </OutboxProvider>
           </RealtimeProvider>
         </AuthProvider>
       </ToastProvider>

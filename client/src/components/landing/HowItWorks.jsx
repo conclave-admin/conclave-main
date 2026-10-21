@@ -1,45 +1,16 @@
 const STEPS = [
-  {
-    title: 'Start a room',
-    body: 'Bring the people who need to be there. A direct message is two clicks; a group takes a name.',
-  },
-  {
-    title: 'Decide in the thread',
-    body: 'When the conversation lands somewhere, record it as a decision where it was said — not in a document nobody opens.',
-  },
-  {
-    title: 'Catch up on the rest',
-    body: 'The digest carries the decisions, the new tasks and the unread, so returning costs a minute rather than an afternoon.',
-  },
+  { title: 'Make yourself at home.', body: 'Create your account and bring your people along. Start with a direct message or a room for the whole group.' },
+  { title: 'Let the conversation flow.', body: 'Share the thought, the photo, the first draft. Keep replies connected and useful things pinned.' },
+  { title: 'Keep the good parts moving.', body: 'Capture a decision, pick up a task, or catch up after some time away. Your context comes with you.' },
 ];
 
-/**
- * The "how it works" strip.
- *
- * Numbers rather than icons: the steps are a sequence, and a numeral says that
- * in a way three unrelated pictograms cannot. The connecting rule between them
- * is decorative and hidden from assistive tech; the ordered list carries the
- * structure instead.
- */
 export default function HowItWorks() {
   return (
-    <section id="how" className="scroll-mt-20 border-y border-line bg-surface">
-      <div className="mx-auto max-w-7xl px-6 py-24 md:px-10 md:py-28 lg:px-16">
-        <div className="max-w-2xl">
-          <p className="text-label uppercase tracking-widest text-brand">How it works</p>
-          <h2 className="mt-4 font-display text-display-2 text-ink">Three steps, and none of them are a migration</h2>
-        </div>
-
-        <ol className="mt-14 grid gap-10 md:grid-cols-3 md:gap-8">
-          {STEPS.map((step, index) => (
-            <li key={step.title} className="relative">
-              <span className="font-display text-display-3 text-brand" aria-hidden="true">
-                {String(index + 1).padStart(2, '0')}
-              </span>
-              <h3 className="mt-3 text-h2 text-ink">{step.title}</h3>
-              <p className="mt-2 max-w-sm text-body leading-relaxed text-muted">{step.body}</p>
-            </li>
-          ))}
+    <section id="how" className="scroll-mt-24 border-y border-line bg-surface/50">
+      <div className="landing-section">
+        <div className="mx-auto max-w-xl text-center"><p className="landing-eyebrow">Settle in. Start something.</p><h2 className="landing-heading mt-4 font-display">It starts with a hello.</h2><p className="mt-5 text-base leading-relaxed text-muted">No complicated setup. Just a place for your people and whatever comes next.</p></div>
+        <ol className="mt-12 grid gap-8 md:grid-cols-3 md:gap-10">
+          {STEPS.map((step,index) => <li key={step.title} className="border-t border-line pt-5"><span className="font-display text-3xl italic text-brand" aria-hidden="true">0{index+1}</span><h3 className="mt-5 text-base font-semibold">{step.title}</h3><p className="mt-3 text-sm leading-relaxed text-muted">{step.body}</p></li>)}
         </ol>
       </div>
     </section>

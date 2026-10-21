@@ -39,3 +39,15 @@ test('heartbeat and disconnect can omit an object payload', async () => {
   assert.equal(calls, 2);
   assert.deepEqual(events, []);
 });
+
+test('send acknowledgements distinguish retryable server errors from rejected requests', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const { socket } = fixture();
+  for (const [error, status] of [[new ApiError(429, 'Slow down'), 429], [new ApiError(403, 'Not a member'), 403], [new Error('private'), 500]]) {
+    let reply;
+    await socketHandler(socket, async () => { throw error; })({}, (value) => { reply = value; });
+    assert.equal(reply.ok, false);
+    assert.equal(reply.status, status);
+    assert.doesNotMatch(reply.error, /private/);
+  }
+});

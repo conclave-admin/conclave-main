@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react';
+import { resolveAvatarUrl } from '@/services/users.service';
+
 const SIZES = {
   // Sized against the existing primitives: sm is a chat-list row, md is a
   // message or a member row, lg is a profile header.
@@ -28,9 +31,30 @@ export function initialsOf(name = '') {
  */
 export default function Avatar({ name = '', src, size = 'md', presence, className = '' }) {
   const box = `${SIZES[size] ?? SIZES.md} shrink-0 rounded-full ${className}`;
+  const [imageSrc, setImageSrc] = useState(null);
+  const [imageFailed, setImageFailed] = useState(false);
 
-  const face = src ? (
-    <img src={src} alt="" className={`${box} object-cover`} />
+  useEffect(() => {
+    let active = true;
+    setImageFailed(false);
+    if (!src) {
+      setImageSrc(null);
+      return () => { active = false; };
+    }
+    if (!src.startsWith('r2://')) {
+      setImageSrc(src);
+      return () => { active = false; };
+    }
+
+    setImageSrc(null);
+    resolveAvatarUrl(src)
+      .then((url) => { if (active) setImageSrc(url); })
+      .catch(() => { if (active) setImageSrc(null); });
+    return () => { active = false; };
+  }, [src]);
+
+  const face = imageSrc && !imageFailed ? (
+    <img src={imageSrc} alt="" onError={() => setImageFailed(true)} className={`${box} object-cover`} />
   ) : (
     // initials rather than a grey circle: the message list currently draws an
     // unlabelled placeholder, which says nothing about who is talking.

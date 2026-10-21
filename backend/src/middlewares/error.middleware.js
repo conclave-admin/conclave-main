@@ -29,7 +29,7 @@ function errorMiddleware(err, req, res, next) {
   // Without this branch a 25MB-limit rejection became a 500.
   if (err && err.name === 'MulterError') {
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return fail(res, 'File is larger than the 25MB limit', 413);
+      return fail(res, 'File exceeds the 50MB upload limit. Non-video files have a 25MB limit.', 413);
     }
     return fail(res, err.message, 400);
   }

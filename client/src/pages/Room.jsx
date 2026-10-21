@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
+import ForwardMessageDialog from '../components/chat/ForwardMessageDialog';
 import FlagAsTaskDialog from '../components/chat/FlagAsTaskDialog';
 import CreatePollDialog from '../components/chat/CreatePollDialog';
 import MessageComposer from '../components/chat/MessageComposer';
@@ -16,6 +17,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useRealtime } from '../contexts/RealtimeContext';
 import { useToast } from '../contexts/ToastContext';
 import useMessages from '../hooks/useMessages';
+import { messageSummary } from '../lib/messageMeta';
 import useRoom from '../hooks/useRoom';
 
 /**
@@ -36,11 +38,14 @@ import useRoom from '../hooks/useRoom';
 export default function Room() {
   const { roomId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const anchorId = searchParams.get('message') || null;
   const { isConnected, socket } = useRealtime();
   const { setRoomHeader } = useOutletContext();
   const { user } = useAuth();
   const viewerId = user?.id;
   const { toast } = useToast();
+  const [browserOnline, setBrowserOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine !== false);
   const { room, isLoading: roomLoading, error: roomError } = useRoom(roomId);
   const [replyTo, setReplyTo] = useState(null);
   const [editing, setEditing] = useState(null);
@@ -49,9 +54,23 @@ export default function Room() {
   const [promoting, setPromoting] = useState(null);
   const [flagging, setFlagging] = useState(null);
   const [creatingPoll, setCreatingPoll] = useState(false);
+  const [forwarding, setForwarding] = useState(null);
   const [threadRoot, setThreadRoot] = useState(null);
+  const [jumpTarget, setJumpTarget] = useState(null);
+  const [highlightedId, setHighlightedId] = useState(null);
 
   const scrollContainerRef = useRef(null);
+
+  useEffect(() => {
+    const online = () => setBrowserOnline(true);
+    const offline = () => setBrowserOnline(false);
+    window.addEventListener('online', online);
+    window.addEventListener('offline', offline);
+    return () => {
+      window.removeEventListener('online', online);
+      window.removeEventListener('offline', offline);
+    };
+  }, []);
 
   const members = room?.members || [];
   const myRole = room?.my_role;
@@ -64,6 +83,7 @@ export default function Room() {
     isLoadingOlder,
     loadOlder,
     sendMessage,
+    sendMedia,
     stopTyping,
     editMessage,
     removeMessage,
@@ -76,7 +96,35 @@ export default function Room() {
     deliveredSequences,
     deliveryIds,
     lastSeenSequence,
-  } = useMessages(roomId, members);
+  } = useMessages(roomId, members, anchorId);
+
+  useEffect(() => {
+    setHighlightedId(null);
+    setJumpTarget(anchorId ? { id: anchorId } : null);
+  }, [roomId, anchorId]);
+
+  useEffect(() => {
+    if (!jumpTarget?.id || messagesLoading || roomLoading) return;
+    const node = scrollContainerRef.current?.querySelector(`[data-message-id="${CSS.escape(String(jumpTarget.id))}"]`);
+    if (!node) {
+      if (messagesError || !hasMore) {
+        setJumpTarget(null);
+        if (!messagesError) toast({ title: 'Message unavailable', description: 'It may have been deleted or cleared on this device.', tone: 'error' });
+      } else if (!isLoadingOlder) loadOlder();
+      return;
+    }
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightedId(jumpTarget.id);
+    const timer = setTimeout(() => { setHighlightedId(null); setJumpTarget(null); }, 2200);
+    return () => clearTimeout(timer);
+  }, [jumpTarget, messages, hasMore, isLoadingOlder, loadOlder, messagesLoading, roomLoading, messagesError, toast]);
+
+  const jumpToMessage = (message) => {
+    if (!message?.id) return;
+    if (anchorId && !messages.some((item) => item.id === message.id)) {
+      navigate(`/chats/${roomId}?message=${encodeURIComponent(message.id)}`);
+    } else setJumpTarget(message);
+  };
 
   // Read ticks are derived from `last_seen_at`, so the members array has to be
   // the one the socket updates. The array from GET /rooms is a snapshot from
@@ -196,7 +244,7 @@ export default function Room() {
 
   if (roomLoading) return <Spinner label="Opening room" />;
 
-  if (roomError) {
+  if (roomError && !room) {
     return (
       <p role="alert" className="m-6 rounded-lg bg-error/10 p-4 text-body text-error">
         {roomError}
@@ -224,10 +272,15 @@ export default function Room() {
           not a grid item, so auto-placement would renumber the rows when either
           strip is empty. */}
       <div className="row-start-1 min-w-0">
+        {anchorId && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2 text-metadata text-muted" role="status">
+          <span>Viewing a shared message</span>
+          <Button variant="ghost" onClick={() => navigate(`/chats/${roomId}`, { replace: true })}>Return to latest</Button>
+        </div>}
         <PinnedMessagesPanel
           roomId={roomId}
           isAdmin={myRole === 'admin'}
           viewerId={viewerId}
+          onJumpToMessage={jumpToMessage}
         />
         <PinnedDecisionStrip roomId={roomId} />
       </div>
@@ -240,7 +293,7 @@ export default function Room() {
             as individual messages enter the viewport. */}
         {messagesLoading ? (
           <Spinner label="Loading messages" />
-        ) : messagesError ? (
+        ) : messagesError && !messages.length ? (
           <p
             role="alert"
             className="mx-4 mt-5 rounded-lg bg-error/10 p-4 text-body text-error md:mx-2"
@@ -274,6 +327,9 @@ export default function Room() {
             lastSeenSequence={lastSeenSequence}
             onMessageVisible={handleMessageVisible}
             onOpenThread={setThreadRoot}
+            onForward={setForwarding}
+            onJumpToMessage={jumpToMessage}
+            highlightedId={highlightedId}
           />
         )}
       </div>
@@ -284,7 +340,9 @@ export default function Room() {
           const last = [...messages].reverse().find((message) => message.sender_id === viewerId && !message.is_deleted && !message._optimistic);
           if (last) { setEditing(last); setEditDraft(last.content || ''); }
         }}
-        onSend={sendMessage}
+        onSend={async (payload) => { await sendMessage(payload); if (anchorId) navigate(`/chats/${roomId}`, { replace: true }); }}
+        onSendMedia={async (items) => { await sendMedia(items); if (anchorId) navigate(`/chats/${roomId}`, { replace: true }); }}
+        isOnline={browserOnline && isConnected}
         onCreatePoll={() => setCreatingPoll(true)}
         onCreateDecision={() => setPromoting({ manual: true })}
         onCreateTask={() => setFlagging({ manual: true })}
@@ -293,6 +351,8 @@ export default function Room() {
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(null)}
       />
+
+      <ForwardMessageDialog message={forwarding} onClose={() => setForwarding(null)} />
 
       {threadRoot && (
         <aside role="complementary" aria-label="Message thread" className="fixed inset-x-0 bottom-16 top-16 z-40 flex flex-col border-l border-line bg-surface shadow-modal md:bottom-0 md:left-auto md:w-[min(400px,40vw)]">
@@ -306,14 +366,14 @@ export default function Room() {
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             <article className="rounded-xl bg-canvas p-3">
               <p className="text-metadata font-medium text-muted">{threadRoot.sender_name || 'Member'}</p>
-              <p className="mt-1 whitespace-pre-wrap break-words text-body text-ink">{threadRoot.content || 'Attachment'}</p>
+              <p className="mt-1 whitespace-pre-wrap break-words text-body text-ink">{messageSummary(threadRoot)}</p>
             </article>
             <div className="my-4 border-t border-line" />
             <div className="space-y-3">
               {messages.filter((message) => message.reply_to_id === threadRoot.id).map((message) => (
                 <article key={message.id} className="rounded-xl border border-line p-3">
                   <p className="text-metadata font-medium text-muted">{message.sender_name || 'Member'}</p>
-                  <p className="mt-1 whitespace-pre-wrap break-words text-body text-ink">{message.content || 'Attachment'}</p>
+                  <p className="mt-1 whitespace-pre-wrap break-words text-body text-ink">{messageSummary(message)}</p>
                 </article>
               ))}
             </div>

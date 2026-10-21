@@ -31,8 +31,8 @@ const ApiError = require('../utils/ApiError');
 //                                   badge — updates without being opened.
 //                                   Emitted by emitChatUpdated in
 //                                   services/notification.service.js.
-//   user-online        { userId }
-//   user-offline       { userId }
+// Global user presence is intentionally not broadcast. Presence is visible
+// only to members currently subscribed to the same room.
 //   room-presence      { roomId, onlineUserIds }
 //   room-typing        { roomId, typingUserIds }
 //   typing             { roomId, userId }
@@ -164,15 +164,14 @@ function registerSocketHandlers(io) {
     }));
 
     // --- Presence: mark user online + start heartbeat ---
-    // Only announce user-online for the user's first socket; a second tab
-    // joining should not re-announce someone already online.
+    // A second tab joins independently. Presence is published only after it
+    // joins a room, and room rosters account for every socket.
     // Register listeners synchronously. Clients can emit join-room immediately
     // after connecting, before these Redis calls finish.
     const ready = (async () => {
       try {
-        const openSockets = await presence.socketConnected(userId, socket.id);
+        await presence.socketConnected(userId, socket.id);
         await presence.userConnected(userId);
-        if (socket.connected && openSockets === 1) socket.broadcast.emit('user-online', { userId });
         return true;
       } catch (error) {
         console.error('Could not initialize socket presence', error);
@@ -204,7 +203,7 @@ function registerSocketHandlers(io) {
       socket.join(roomId);
 
       // Track per-room presence and broadcast updated list
-      await presence.userJoinedRoom(userId, roomId);
+      await presence.userJoinedRoom(userId, roomId, socket.id);
       const roomOnlineUsers = await presence.getRoomOnlineUsers(roomId);
       io.to(roomId).emit('room-presence', {
         roomId,
@@ -220,7 +219,8 @@ function registerSocketHandlers(io) {
       if (!roomId) return;
 
       socket.leave(roomId);
-      await presence.userLeftRoom(userId, roomId);
+      const userLeft = await presence.userLeftRoom(userId, roomId, socket.id);
+      if (!userLeft) return;
       const roomOnlineUsers = await presence.getRoomOnlineUsers(roomId);
       io.to(roomId).emit('room-presence', {
         roomId,
@@ -232,7 +232,7 @@ function registerSocketHandlers(io) {
     // mentionedUserIds is how a client says who was mentioned. Optional for now:
     // omitting it falls back to matching display names in the text, which is
     // temporary — see resolveMentionIds in services/message.service.js.
-    onEvent('send-message', async ({ roomId, clientId, content, replyToId, attachments, mentionedUserIds }) => {
+    onEvent('send-message', async ({ roomId, clientId, content, replyToId, attachments, albumId, mentionedUserIds, forwardSource }) => {
       if (!rateLimit.consume(`socket:${userId}:messages`, { max: 30 })) throw new ApiError(429, 'Too many messages. Please try again shortly.');
       const message = await createMessage({
         roomId,
@@ -241,7 +241,9 @@ function registerSocketHandlers(io) {
         content,
         replyToId,
         attachments,
+        albumId,
         mentionedUserIds,
+        forwardSource,
         io,
       });
 
@@ -331,29 +333,22 @@ function registerSocketHandlers(io) {
     onEvent('disconnect', async () => {
       // If the user still has another tab open, they are not offline — do not
       // tear down their presence or announce them as gone.
+      const leftRooms = await presence.cleanupSocketFromRooms(userId, socket.id);
       const remainingSockets = await presence.socketDisconnected(userId, socket.id);
+
+      // Notify each room only when the user's last tab there closed.
+      for (const roomId of leftRooms) {
+        const roomOnlineUsers = await presence.getRoomOnlineUsers(roomId);
+        io.to(roomId).emit('room-presence', { roomId, onlineUserIds: roomOnlineUsers });
+      }
       if (remainingSockets > 0) return;
 
       // Remove from global online set + heartbeat key
       await presence.userDisconnected(userId);
 
-      // Remove from all per-room presence sets
-      const leftRooms = await presence.cleanupUserFromRooms(userId);
-
-      // Notify each room the user was in
-      for (const roomId of leftRooms) {
-        const roomOnlineUsers = await presence.getRoomOnlineUsers(roomId);
-        io.to(roomId).emit('room-presence', {
-          roomId,
-          onlineUserIds: roomOnlineUsers,
-        });
-      }
-
       // Clean up any active typing indicators
       await presence.cleanupUserTyping(userId);
 
-      // Broadcast global offline
-      socket.broadcast.emit('user-offline', { userId });
     });
   });
 

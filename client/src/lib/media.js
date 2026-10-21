@@ -12,7 +12,7 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 /** Video gets a higher ceiling. Mirrors MAX_VIDEO_BYTES in the controller. */
 export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 
-/** MAX_ATTACHMENTS in services/message.service.js, per message, not per pick. */
+/** Selection limit. Each picked item becomes its own message. */
 export const MAX_ATTACHMENTS = 10;
 
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];

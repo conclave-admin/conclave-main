@@ -1,95 +1,50 @@
-import Avatar from '@/components/ui/Avatar';
 import IconSend from '@/assets/icons/send.svg?react';
+import IconChannel from '@/assets/icons/channel.svg?react';
+import IconTasks from '@/assets/icons/tasks.svg?react';
+import IconDecisions from '@/assets/icons/decisions.svg?react';
+import IconPin from '@/assets/icons/pin.svg?react';
+import IconImage from '@/assets/icons/image.svg?react';
 
-/**
- * The hero's chat mock.
- *
- * Not a screenshot and not an iframe: real markup, so it inherits dark mode,
- * respects the type scale, and costs no image bytes. It cannot be interacted
- * with and is labelled as such, because a mock that looks tappable and is not
- * is a small daily insult.
- *
- * Bubbles arrive in sequence on first paint rather than rendering finished.
- * That is the one piece of motion here that earns its place — a static
- * screenshot of a chat says nothing about a chat, and the arrival is the whole
- * point. Driven by CSS with a staggered delay rather than GSAP, because it
- * needs to run once on mount and never again; pulling in a scroll library for
- * that would be the wrong tool.
- *
- * `motion-safe:` gates every one of them, so with reduced motion the mock is
- * simply already there.
- */
-const MESSAGES = [
-  { id: 1, from: 'them', name: 'Amara Okafor', initials: 'AO', text: 'Can we ship the digest on Friday?' },
-  { id: 2, from: 'me', text: 'Yes — catch-up is done, just needs your review.' },
-  { id: 3, from: 'them', name: 'Amara Okafor', initials: 'AO', text: 'Reviewed. Marking it decided.', decided: true },
-];
+function Person({ children, className = '' }) {
+  return <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-soft text-[11px] font-semibold text-brand ${className}`}>{children}</span>;
+}
 
+// Decorative product illustration. No fake buttons, inputs or live presence.
 export default function ChatMock() {
   return (
-    <div
-      className="overflow-hidden rounded-xl border border-line bg-surface shadow-modal"
-      aria-hidden="true"
-    >
-      <div className="flex items-center gap-3 border-b border-line px-4 py-3">
-        <Avatar name="Amara Okafor" size="sm" presence="online" />
+    <div className="landing-preview overflow-hidden rounded-2xl border border-line bg-surface md:rounded-[22px]" aria-hidden="true">
+      <div className="flex h-11 items-center justify-between border-b border-line bg-canvas/60 px-4">
+        <div className="flex gap-1.5">{[0,1,2].map(dot => <span key={dot} className="h-2 w-2 rounded-full border border-muted/30 bg-line/50" />)}</div>
+        <span className="text-[11px] font-medium tracking-wide text-muted">Your space to connect</span>
+        <span className="w-8" />
+      </div>
+      <div className="landing-preview-layout">
+        <aside className="landing-preview-sidebar border-r border-line bg-canvas/45 p-5">
+          <div className="flex items-center gap-2.5"><span className="grid h-8 w-8 place-items-center rounded-lg bg-brand text-sm font-semibold text-surface">S</span><span className="text-sm font-semibold">Studio collective</span></div>
+          <p className="mb-2 mt-9 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">Your rooms</p>
+          {['Studio lounge','Website refresh','Ideas & inspiration'].map((room,index) => <div key={room} className={`-mx-2 flex items-center gap-2 rounded-lg px-2 py-3 text-xs ${index===1?'bg-brand-soft font-semibold text-brand':'text-muted'}`}><IconChannel className="h-4 w-4" />{room}{index===0&&<span className="ml-auto rounded bg-line/70 px-1.5 py-0.5 text-[10px]">3</span>}</div>)}
+          <p className="mb-3 mt-8 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">Direct messages</p>
+          <div className="space-y-4">{[['AO','Amara Okafor'],['JL','Jamie Lee']].map(([initials,name]) => <div key={name} className="flex items-center gap-2.5 text-xs text-muted"><Person>{initials}</Person>{name}</div>)}</div>
+          <div className="mt-10 flex items-center gap-2 border-t border-line pt-4 text-xs text-muted"><IconTasks className="h-4 w-4" /> Your tasks <span className="ml-auto">2</span></div>
+        </aside>
         <div className="min-w-0">
-          <p className="truncate text-label text-ink">Design decisions</p>
-          <p className="text-metadata text-muted">4 members</p>
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-3 px-4 py-5">
-        {MESSAGES.map((message, index) => (
-          <div
-            key={message.id}
-            className={`flex ${message.from === 'me' ? 'justify-end' : 'justify-start'} motion-safe:animate-message-in`}
-            style={{ animationDelay: `${180 + index * 220}ms` }}
-          >
-            <div className="flex max-w-[80%] items-end gap-2">
-              {message.from === 'them' && <Avatar name={message.name} size="sm" />}
-              <div
-                className={`rounded-2xl px-3.5 py-2.5 text-body ${
-                  message.from === 'me' ? 'bg-brand text-surface' : 'bg-canvas text-ink'
-                }`}
-              >
-                <p>{message.text}</p>
-                {message.decided && (
-                  <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-md bg-brand-soft px-2 py-1 text-metadata text-brand">
-                    Decision recorded
-                  </p>
-                )}
-              </div>
-            </div>
+          <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-4 md:px-6"><div><p className="text-sm font-semibold"><span className="mr-1 text-brand">#</span> Website refresh</p><p className="mt-1 text-[11px] text-muted">A fresh start for our corner of the internet.</p></div><div className="flex -space-x-2"><Person className="border-2 border-surface">AO</Person><Person className="border-2 border-surface">JL</Person><Person className="border-2 border-surface">+2</Person></div></div>
+          <div className="flex items-center gap-2 border-b border-line bg-canvas/50 px-4 py-2.5 text-[11px] text-muted md:px-6"><IconPin className="h-3 w-3 shrink-0 text-brand" /><span className="truncate">Pinned decision: A simpler, more welcoming homepage</span></div>
+          <div className="space-y-5 px-4 py-5 md:px-6">
+            <p className="text-center text-[10px] text-muted">Today, 10:24 AM</p>
+            <div className="flex items-start gap-2.5"><Person>AO</Person><div className="min-w-0"><p className="text-[11px] font-semibold">Amara <span className="ml-2 font-normal text-muted">10:24</span></p><div className="mt-2 rounded-xl rounded-tl-none bg-canvas px-3 py-2.5 text-xs leading-relaxed">A little breathing room, a little more personality. What do we think?</div><div className="mt-2 flex max-w-64 items-center gap-3 rounded-xl border border-line bg-canvas p-2.5"><div className="landing-mini-art grid h-16 w-20 shrink-0 place-items-center rounded-lg bg-brand-soft"><span className="font-display text-3xl italic text-brand">hello.</span></div><div className="min-w-0"><p className="truncate text-[11px] font-medium">A fresh perspective.jpg</p><p className="mt-1 flex items-center gap-1 text-[10px] text-muted"><IconImage className="h-3 w-3" /> Photo · 1.2 MB</p></div></div></div></div>
+            <div className="ml-10 flex justify-end"><div className="max-w-72 rounded-xl rounded-br-none bg-brand px-3.5 py-3 text-xs leading-relaxed text-surface">This feels like us. Let’s go with this direction.<span className="mt-1 block text-right text-[10px] opacity-80">10:26 · ✓✓</span></div></div>
+            <div className="flex items-start gap-2.5"><Person>JL</Person><div className="min-w-0"><p className="text-[11px] font-semibold">Jamie <span className="ml-2 font-normal text-muted">10:28</span></p><p className="mt-2 text-xs leading-relaxed text-muted">I’ll put the first draft together for Friday.</p><div className="mt-2 inline-flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-[11px]"><IconTasks className="h-3.5 w-3.5 text-brand" /> Homepage draft <span className="text-muted">· Fri</span></div></div></div>
           </div>
-        ))}
-
-        <div
-          className="flex justify-start motion-safe:animate-message-in"
-          style={{ animationDelay: '900ms' }}
-        >
-          <div className="flex items-end gap-2">
-            <Avatar name="Amara Okafor" size="sm" />
-            <div className="flex items-center gap-1 rounded-2xl bg-canvas px-3.5 py-3">
-              {[0, 1, 2].map((dot) => (
-                <span
-                  key={dot}
-                  className="h-1.5 w-1.5 rounded-full bg-muted motion-safe:animate-typing-dot"
-                  style={{ animationDelay: `${dot * 160}ms` }}
-                />
-              ))}
-            </div>
-          </div>
+          <div className="mx-4 mb-4 flex min-h-11 items-center gap-3 rounded-xl border border-line px-3 text-xs text-muted md:mx-6"><span className="text-lg">+</span><span className="flex-1">Message Website refresh…</span><span className="grid h-7 w-7 place-items-center rounded-lg bg-brand text-surface"><IconSend className="h-3.5 w-3.5" /></span></div>
         </div>
-      </div>
-
-      <div className="flex items-center gap-3 border-t border-line px-4 py-3">
-        <div className="min-h-10 flex-1 rounded-full bg-canvas px-4 py-2.5 text-body text-muted">
-          Write a message…
-        </div>
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand text-surface">
-          <IconSend className="h-4 w-4" />
-        </span>
+        <aside className="landing-preview-details border-l border-line bg-canvas/35 p-5">
+          <p className="text-xs font-semibold">The bigger picture</p><p className="mt-2 text-[11px] leading-relaxed text-muted">Less searching. More moving forward.</p>
+          <div className="mt-7 rounded-xl border border-line bg-surface p-3.5"><IconDecisions className="h-4 w-4 text-brand" /><p className="mt-3 text-[10px] font-semibold uppercase tracking-wider text-muted">Decided together</p><p className="mt-2 text-xs leading-relaxed">A simpler, more welcoming homepage.</p><p className="mt-3 text-[10px] text-muted">Today · Saved in this room</p></div>
+          <p className="mb-3 mt-7 text-[10px] font-semibold uppercase tracking-wider text-muted">Next up</p>
+          {['Homepage draft','Gather team feedback'].map((task,index) => <div key={task} className="flex items-start gap-2 border-b border-line py-3 text-[11px]"><span className="mt-0.5 h-3 w-3 shrink-0 rounded border border-muted/50" /><div>{task}<p className="mt-1 text-[10px] text-muted">{index?'Amara · Monday':'Jamie · Friday'}</p></div></div>)}
+          <p className="mt-7 text-[11px] leading-relaxed text-muted">Back after a break?<br /><span className="font-medium text-brand">Your catch-up is waiting.</span></p>
+        </aside>
       </div>
     </div>
   );

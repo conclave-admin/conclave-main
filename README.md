@@ -2,8 +2,8 @@
 
 A team messaging and collaboration platform with **Decisions**, **Action Items**,
 and **Catch-up Digests** that survive the scroll. Registration is open to everyone.
-Group invitations and public/private group preferences govern collaboration;
-public group discovery and joining still need implementation.
+Room membership controls collaboration. Signed-in users can discover and join
+public rooms; private rooms remain invitation-only.
 
 Full product/architecture context: [`docs/PKB_Project_Architecture_Brief.docx`](docs/PKB_Project_Architecture_Brief.docx).
 
@@ -47,7 +47,10 @@ Full product/architecture context: [`docs/PKB_Project_Architecture_Brief.docx`](
    ```bash
    npm run dev
    ```
-   Runs on `http://localhost:5000` by default.
+   Runs on `http://localhost:7000` by default. Keep `PORT` in `backend/.env`
+   aligned with `VITE_API_URL` and `VITE_SOCKET_URL` in `client/.env`, then restart
+   both dev servers after changing them. Docker Compose uses `BACKEND_PORT`
+   (default `7000`) for the backend listener, published port and health check.
 
 5. **Start the client (new terminal):**
    ```bash

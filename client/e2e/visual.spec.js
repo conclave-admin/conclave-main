@@ -16,7 +16,7 @@ import path from 'node:path';
  * containing blocks.
  */
 
-const SHOTS = path.join(import.meta.dirname, 'screenshots');
+const SHOTS = path.join(import.meta.dirname, 'test-results', 'screenshots');
 mkdirSync(SHOTS, { recursive: true });
 
 /** Routes served by the bypass-on server (every one is reachable signed in). */
@@ -133,6 +133,15 @@ for (const theme of THEMES) {
 async function runRouteCheck(page, testInfo, theme, route, name) {
   await useTheme(page, theme);
   const problems = watchPage(page);
+  // The bypass-on visual server uses seeded local attachment IDs, while the
+  // configured API may point at a separate developer database. Keep route
+  // screenshots deterministic and avoid treating that external mismatch as a
+  // frontend console error.
+  await page.route('**/api/attachments/dev-att-2', (request) => request.fulfill({
+    status: 200,
+    contentType: 'image/png',
+    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
+  }));
 
   await page.goto(route);
   await settle(page);
@@ -152,9 +161,7 @@ async function runRouteCheck(page, testInfo, theme, route, name) {
   }
   if (bodyText.length === 0) issues.push('EMPTY BODY (blank or fully redirected)');
 
-  if (issues.length) {
-    console.log(`\n──── ${testInfo.project.name} / ${theme} / ${route} ────\n  ${issues.join('\n  ')}\n`);
-  }
+  expect(issues, `${testInfo.project.name} / ${theme} / ${route}`).toEqual([]);
 }
 
 /* ------------------------------------------------------------------ */

@@ -3,16 +3,16 @@ import IconClose from '@/assets/icons/close.svg?react';
 import IconMention from '@/assets/icons/mention.svg?react';
 import IconSend from '@/assets/icons/send.svg?react';
 import IconMic from '@/assets/icons/mic.svg?react';
-import { uploadFile } from "@/services/messages.service";
-import { rememberUploadedFile } from "@/services/attachments.service";
+import { createClientId } from '@/lib/outbox';
 import {
-  compressImage,
   isAccepted,
   isImage,
+  isVideo,
   limitFor,
   MAX_ATTACHMENTS,
   normaliseFile,
 } from '@/lib/media';
+import { MAX_VIDEO_INPUT_BYTES } from '@/lib/videoCompression';
 import AttachmentPicker from './AttachmentPicker';
 import AttachmentPreviewDialog from './AttachmentPreviewDialog';
 import MentionPicker from './MentionPicker';
@@ -37,11 +37,8 @@ const MAX_LINES = 5;
  * the two are independent from that point — renaming the person later does not
  * rewrite history.
  *
- * Files are picked into a full-screen preview and only uploaded when Send is
- * pressed there, so the bytes are never on their way to storage before the user
- * has decided to send. A failed upload keeps the preview open with the files,
- * the caption and the reason intact — the text must survive the failure, which
- * is the one thing the earlier upload-on-pick design was right to insist on.
+ * Selected files and captions are saved to the account outbox before the
+ * editor closes. Upload progress and retry controls then live in the timeline.
  *
  * @param {boolean} disabled - no realtime connection
  * @param {(payload: object) => void} onSend
@@ -55,7 +52,9 @@ const MAX_LINES = 5;
  */
 export default function MessageComposer({
   disabled,
+  isOnline = true,
   onSend,
+  onSendMedia,
   members = [],
   onTyping,
   replyTo,
@@ -72,7 +71,6 @@ export default function MessageComposer({
   const [error, setError] = useState('');
   const [pendingFiles, setPendingFiles] = useState([]);
   const [sending, setSending] = useState(false);
-  const [progress, setProgress] = useState(0);
   const [mentionQuery, setMentionQuery] = useState(null);
   const [mentionedIds, setMentionedIds] = useState([]);
   const [recording, setRecording] = useState(false);
@@ -82,7 +80,7 @@ export default function MessageComposer({
   // Bumped when the preview is abandoned so an upload still in flight knows its
   // result is no longer wanted and must not touch state that has moved on.
   const sendToken = useRef(0);
-  const abortRef = useRef(null);
+  const textSendingRef = useRef(false);
   const recorderRef = useRef(null);
   const recordingStreamRef = useRef(null);
   const recordingChunksRef = useRef([]);
@@ -192,9 +190,10 @@ export default function MessageComposer({
     for (const raw of files) {
       const file = normaliseFile(raw);
       const limit = limitFor(file);
+      const inputLimit = isVideo(file) ? MAX_VIDEO_INPUT_BYTES : limit;
 
-      if (file.size > limit) {
-        rejected.push(`"${file.name}" is larger than the ${limit / (1024 * 1024)}MB limit.`);
+      if (file.size > inputLimit) {
+        rejected.push(`"${file.name}" is larger than the ${inputLimit / (1024 * 1024)}MB selection limit. Trim or resize it before selecting.`);
       } else if (!isAccepted(file.type, file.name)) {
         rejected.push(`"${file.name}" is not a file type this app can store.`);
       } else {
@@ -205,7 +204,7 @@ export default function MessageComposer({
 
     if (accepted.length > MAX_ATTACHMENTS) {
       rejected.push(
-        `A message can hold at most ${MAX_ATTACHMENTS} files; the extra ${
+        `You can select at most ${MAX_ATTACHMENTS} files at once; the extra ${
           accepted.length - MAX_ATTACHMENTS
         } were not added.`,
       );
@@ -222,124 +221,43 @@ export default function MessageComposer({
 
   const removeFile = (index) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
-    // The remaining files stay, so a leftover rejection note about the file
-    // that is no longer there would be actively misleading.
     setError('');
   };
 
-  // Backing out of the preview discards the picked files and any caption typed
-  // into it, and leaves the composer untouched — the draft was only ever read
-  // from it, never moved out of it, so cancelling cannot lose text.
   const cancelPreview = () => {
+    if (sending) return;
     sendToken.current += 1;
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setSending(false);
-    setProgress(0);
     setPendingFiles([]);
     setError('');
   };
 
-  /**
-   * Upload every pending file, then send the message they belong to.
-   *
-   * Sequential rather than parallel: an error has to name a file, and with
-   * requests in flight at once the one that failed is not knowable. Ten files
-   * is the ceiling, and each file is uploaded as its own request.
-   *
-   * On failure nothing is cleared. The preview stays open with the files, the
-   * caption and the reason, so the retry costs one press and no typing — losing
-   * the message along with the file is the outcome this whole flow exists to
-   * avoid.
-   *
-   * @param {string} caption - what the user typed in the preview
-   */
-  const submitPreview = async (caption) => {
-    if (sending || pendingFiles.length === 0) return;
-
+  // Persist the whole selection before closing the editor. Upload work belongs
+  // to the account outbox, so offline sends and navigation cannot lose files.
+  const submitPreview = async (captions) => {
+    if (sending || !pendingFiles.length) return;
     const token = ++sendToken.current;
-    const controller = new AbortController();
-    abortRef.current = controller;
     setSending(true);
-    setProgress(0);
     setError('');
-
-    // Progress is measured in bytes across the whole set, so one large video
-    // moves the bar in proportion to its size, not by one file in ten.
-    const totalBytes = pendingFiles.reduce((sum, file) => sum + file.size, 0) || 1;
-    let doneBytes = 0;
-
-    let attachments;
     try {
-      attachments = [];
-      for (const file of pendingFiles) {
-        const prepared = compressRef.current.has(file) ? await compressImage(file) : file;
-        if (sendToken.current !== token) return;
-
-        const stored = await uploadFile(prepared, {
-          signal: controller.signal,
-          onProgress: (fraction) => {
-            if (sendToken.current === token) {
-              setProgress((doneBytes + fraction * file.size) / totalBytes);
-            }
-          },
-        });
-        if (sendToken.current !== token) return;
-
-        // Keep what was actually uploaded on this device before the message
-        // goes out, so the bubble that comes back never downloads it again.
-        await rememberUploadedFile(stored.url, prepared);
-        doneBytes += file.size;
-        attachments.push({ url: stored.url });
-      }
-    } catch (err) {
-      if (sendToken.current !== token) return;
-      // The reason first — a server says something useful, a dropped connection
-      // does not, and axios's own "Network Error" explains nothing to the
-      // person reading it. The second half is the part that matters: it says
-      // out loud what the open preview already proves, so a failure does not
-      // look like a lost message.
-      const reason =
-        err?.response?.data?.message ||
-        (err?.code === 'ERR_NETWORK' || err?.message === 'Network Error'
-          ? 'Could not reach the server.'
-          : err?.message) ||
-        'Could not upload one of the files.';
-      const sentence = reason.endsWith('.') ? reason : `${reason}.`;
-      setSending(false);
-      setProgress(0);
-      abortRef.current = null;
-      setError(`${sentence} Nothing was sent — the files and caption are still here.`);
-      return;
-    }
-
-    try {
-      onSend({
-        content: caption.trim(),
-        replyToId: replyTo?.id,
-        attachments,
-        // Rebuilt from the caption rather than reused from the composer: the
-        // caption is editable here, so the ids have to follow the text that is
-        // actually going out — the same rule handleTextChange applies.
-        mentionedUserIds: members
-          .filter((person) => caption.includes(`@${person.display_name}`))
-          .map((person) => person.id),
+      const albumId = pendingFiles.length > 1 ? createClientId() : undefined;
+      const items = pendingFiles.map((file, index) => {
+        const caption = (captions[index] || '').trim();
+        return {
+          content: caption, albumId, replyToId: index === 0 ? replyTo?.id : undefined,
+          attachments: [],
+          mentionedUserIds: members.filter((person) => caption.includes(`@${person.display_name}`)).map((person) => person.id),
+          media: { blob: file, filename: file.name, compress: compressRef.current.has(file) },
+        };
       });
-    } catch (err) {
+      await onSendMedia(items);
       if (sendToken.current !== token) return;
-      setSending(false);
-      setProgress(0);
-      abortRef.current = null;
-      setError(err?.message || 'Could not send this message.');
-      return;
+      setPendingFiles([]);
+      reset();
+    } catch (err) {
+      if (sendToken.current === token) setError(err.message || 'Could not save these files. They are still here.');
+    } finally {
+      if (sendToken.current === token) setSending(false);
     }
-
-    if (sendToken.current !== token) return;
-    setSending(false);
-    setPendingFiles([]);
-    setProgress(0);
-    abortRef.current = null;
-    reset();
   };
 
   const reset = () => {
@@ -349,13 +267,14 @@ export default function MessageComposer({
     onCancelReply?.();
   };
 
-  const submit = (event) => {
+  const submit = async (event) => {
     event?.preventDefault();
     const text = content.trim();
-    if (!text || disabled) return;
+    if (!text || disabled || textSendingRef.current) return;
+    textSendingRef.current = true;
 
     try {
-      onSend({
+      await onSend({
         content: text,
         replyToId: replyTo?.id,
         attachments: [],
@@ -364,6 +283,8 @@ export default function MessageComposer({
       reset();
     } catch (err) {
       setError(err.message);
+    } finally {
+      textSendingRef.current = false;
     }
   };
 
@@ -442,6 +363,12 @@ export default function MessageComposer({
             <IconClose className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
+      )}
+
+      {!isOnline && (
+        <p role="status" className="mb-2 rounded-md bg-canvas px-2.5 py-1.5 text-metadata text-muted">
+          Connection unavailable. Messages will wait here until you reconnect.
+        </p>
       )}
 
       <div className="relative flex items-end gap-2 rounded-lg border border-line bg-surface px-3 py-2 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10">
@@ -538,11 +465,11 @@ export default function MessageComposer({
         files={pendingFiles}
         initialCaption={content}
         sending={sending}
-        progress={progress}
         error={error}
         onSend={submitPreview}
         onCancel={cancelPreview}
         onRemoveFile={removeFile}
+        onReplaceFile={(index, file) => setPendingFiles((current) => current.map((item, position) => position === index ? file : item))}
       />
     </form>
   );

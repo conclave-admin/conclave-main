@@ -19,7 +19,7 @@ RUN npm ci --omit=dev \
 # and the image would build cleanly and then crash on startup.
 COPY . .
 
-EXPOSE 5000
+EXPOSE 7000
 
 # Drop root. The app only reads from /app today; revisit if it needs to write
 # (e.g. uploads/tmp).

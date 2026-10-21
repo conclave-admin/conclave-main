@@ -9,6 +9,7 @@ import Input from '@/components/ui/Input';
 import Modal from '@/components/ui/Modal';
 import Textarea from '@/components/ui/Textarea';
 import { useAuth } from '@/contexts/AuthContext';
+import { useChats } from '@/contexts/ChatsContext';
 import { useToast } from '@/contexts/ToastContext';
 import { uploadAvatar } from '@/services/users.service';
 import Page from '@/components/layout/Page';
@@ -32,6 +33,7 @@ import Page from '@/components/layout/Page';
 export default function Profile() {
   const { setRoomHeader } = useOutletContext();
   const { user, logout, updateProfile, deleteAccount } = useAuth();
+  const { rooms = [], unreadTotal = 0 } = useChats();
   const { toast } = useToast();
   const fileRef = useRef(null);
 
@@ -59,6 +61,12 @@ export default function Profile() {
   const nameChanged = displayName.trim() !== (user?.display_name || '');
   const bioChanged = bio !== (user?.bio || '');
   const isDirty = nameChanged || bioChanged;
+  const dmCount = rooms.filter((room) => room.type === 'dm').length;
+  const roomCount = rooms.filter((room) => room.type !== 'dm').length;
+
+  const memberSince = user?.created_at
+    ? new Date(user.created_at).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+    : '—';
 
   async function onPickAvatar(event) {
     const file = event.target.files?.[0];
@@ -115,13 +123,43 @@ export default function Profile() {
   }
 
   return (
-      <Page width="form">
-      <h1 className="text-h1 text-ink">Profile</h1>
-      <p className="mt-2 text-body leading-relaxed text-muted">
-        How you appear to everyone else in the workspace.
-      </p>
+      <Page width="content">
+      <div>
+        <h1 className="text-h1 text-ink">Your profile</h1>
+        <p className="mt-2 text-body leading-relaxed text-muted">
+          Your identity and account details across your conversations.
+        </p>
+      </div>
 
-      <section className="mt-8 flex items-center gap-4">
+      <section className="mt-6 rounded-2xl border border-line bg-surface p-5 shadow-card md:p-7" aria-label="Profile preview">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+          <Avatar name={displayName || user?.display_name} src={avatarUrl} size="lg" />
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-h2 text-ink">{displayName || user?.display_name || 'Your name'}</h2>
+            <p className="mt-1 truncate text-body text-muted">{user?.email || 'Email unavailable'}</p>
+            <p className="mt-3 whitespace-pre-wrap text-body leading-relaxed text-ink">{bio.trim() || 'Add a short introduction so people know who they are talking to.'}</p>
+          </div>
+          <div className="shrink-0 rounded-xl bg-canvas px-4 py-3 text-left sm:text-right">
+            <p className="text-metadata text-muted">Member since</p>
+            <p className="mt-1 text-label text-ink">{memberSince}</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="Account overview">
+        <ProfileStat label="Conversations" value={rooms.length} />
+        <ProfileStat label="Direct messages" value={dmCount} />
+        <ProfileStat label="Rooms" value={roomCount} />
+        <ProfileStat label="Unread messages" value={unreadTotal} />
+      </section>
+
+      <section className="mt-8 rounded-2xl border border-line bg-surface p-5 md:p-7">
+        <div>
+          <h2 className="text-h2 text-ink">Edit your profile</h2>
+          <p className="mt-1 text-body text-muted">This is the name, photo, and introduction other members see.</p>
+        </div>
+
+      <section className="mt-6 flex flex-wrap items-center gap-4">
         <Avatar name={displayName} src={avatarUrl} size="lg" />
         <div className="min-w-0">
           <Button
@@ -145,7 +183,7 @@ export default function Profile() {
         </div>
       </section>
 
-      <form onSubmit={onSave} className="mt-8 space-y-5">
+      <form onSubmit={onSave} className="mt-6 grid gap-5 md:grid-cols-2">
         <Input
           label="Display name"
           value={displayName}
@@ -153,8 +191,12 @@ export default function Profile() {
           maxLength={100}
           required
         />
-        <Input label="Email" value={user?.email || '—'} readOnly disabled />
+        <div>
+          <Input label="Email address" value={user?.email || '—'} readOnly disabled />
+          <p className="mt-1 text-metadata text-muted">Email is used to sign in and is only shown here to you.</p>
+        </div>
         <Textarea
+          className="md:col-span-2"
           label="About"
           value={bio}
           onChange={(event) => setBio(event.target.value)}
@@ -162,7 +204,7 @@ export default function Profile() {
           placeholder="A line about what you work on"
         />
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3 md:col-span-2">
           <Button type="submit" disabled={!isDirty || isSaving || !displayName.trim()}>
             {isSaving ? 'Saving…' : 'Save changes'}
           </Button>
@@ -171,6 +213,7 @@ export default function Profile() {
           )}
         </div>
       </form>
+      </section>
 
       <section className="mt-8">
         <Button variant="secondary" onClick={logout} className="gap-2">
@@ -221,5 +264,14 @@ export default function Profile() {
         </p>
       </Modal>
       </Page>
+  );
+}
+
+function ProfileStat({ label, value }) {
+  return (
+    <div className="rounded-xl border border-line bg-surface px-4 py-3">
+      <p className="text-metadata text-muted">{label}</p>
+      <p className="mt-1 text-h2 tabular-nums text-ink">{value}</p>
+    </div>
   );
 }

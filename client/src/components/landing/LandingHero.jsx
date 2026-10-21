@@ -1,59 +1,26 @@
 import { Link } from 'react-router-dom';
+import IconArrow from '@/assets/icons/arrow-right.svg?react';
 import ChatMock from './ChatMock';
 
-/**
- * The hero.
- *
- * The tagline is italicised on "survives" — Instrument Serif's italic is the
- * reason that face was chosen over a second grotesque, and a display face with
- * an unused italic is half a typeface.
- *
- * Deliberately not `data-reveal` animated: everything above the fold should be
- * there on first paint. Scroll-triggered reveals that also fire for content
- * already on screen read as a page that failed to load, then recovered.
- */
 export default function LandingHero() {
   return (
-    <section className="relative overflow-hidden">
-      <div className="mx-auto max-w-7xl px-6 pb-24 pt-16 md:px-10 md:pb-32 md:pt-24 lg:px-16">
-        <div className="grid items-center gap-14 lg:grid-cols-12 lg:gap-16">
-          <div className="lg:col-span-7">
-            <p className="text-label uppercase tracking-widest text-brand">Private team messaging</p>
-
-            <h1 className="mt-5 font-display text-display-1 text-ink">
-              Messaging that <em className="italic text-brand">survives</em> the scroll
-            </h1>
-
-            <p className="mt-7 max-w-xl text-body leading-relaxed text-muted md:text-base">
-              Conclave keeps decisions, action items and the catch-up digest inside the
-              conversation, so the important part does not get pushed a thousand messages up
-              the list by lunchtime.
-            </p>
-
-            <div className="mt-9 flex flex-col gap-3 md:flex-row">
-              <Link
-                to="/register"
-                className="inline-flex min-h-12 w-full items-center justify-center rounded-lg bg-brand px-6 text-sm font-semibold text-surface transition-colors hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 md:w-auto"
-              >
-                Get started
-              </Link>
-              <a
-                href="#features"
-                className="inline-flex min-h-12 w-full items-center justify-center rounded-lg border border-line bg-surface px-6 text-sm font-semibold text-ink transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 md:w-auto"
-              >
-                See what it does
-              </a>
-            </div>
-
-            <p className="mt-6 text-metadata text-muted">
-              Free while in beta · No card, no trial timer
-            </p>
-          </div>
-
-          <div className="lg:col-span-5">
-            <ChatMock />
-          </div>
+    <section className="landing-hero px-5 pb-14 pt-14 md:px-10 md:pb-20 md:pt-20">
+      <div className="mx-auto max-w-4xl text-center">
+        <p className="inline-flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-2 text-metadata text-muted"><span className="h-1.5 w-1.5 rounded-full bg-brand" aria-hidden="true" /> A little more connected. A lot more in sync.</p>
+        <h1 className="landing-headline mt-7 font-display">Where conversations<br className="hidden md:block" /> become <em className="text-brand">what’s next.</em></h1>
+        <p className="mx-auto mt-6 max-w-xl text-base leading-relaxed text-muted md:text-lg">A quick hello. A shared idea. A plan coming together. Bring your people, messages and next steps into one place with Conclave.</p>
+        <div className="mt-8 flex flex-col items-center justify-center gap-3 md:flex-row">
+          <Link to="/register" className="landing-button bg-brand text-surface hover:bg-brand/90">Get started <IconArrow className="h-4 w-4" aria-hidden="true" /></Link>
+          <a href="#product-preview" className="landing-button border border-line bg-surface text-ink hover:border-brand/50">Take a look inside <span aria-hidden="true">↘</span></a>
         </div>
+        <p className="mt-4 text-metadata text-muted">Personal conversations. Room for teamwork.</p>
+      </div>
+      <figure id="product-preview" className="mx-auto mt-12 max-w-6xl scroll-mt-28 md:mt-16">
+        <ChatMock />
+        <figcaption className="mt-5 text-center text-metadata leading-relaxed text-muted">An illustrative look at Conclave. Messages, decisions and the next step, together.</figcaption>
+      </figure>
+      <div className="mx-auto mt-10 flex max-w-4xl flex-wrap items-center justify-center gap-x-8 gap-y-4 border-y border-line py-5 text-label text-muted md:gap-x-12">
+        {['Direct messages', 'Group conversations', 'Shared media', 'Decisions & tasks'].map(label => <span key={label} className="inline-flex items-center gap-2"><span className="h-1 w-1 rounded-full bg-brand" aria-hidden="true" />{label}</span>)}
       </div>
     </section>
   );
