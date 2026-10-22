@@ -91,12 +91,13 @@ export default function Room() {
     pinMessage,
     unpinMessage,
     typingUserIds,
+    recordingUserIds,
     readPointers,
     readSequences,
     deliveredSequences,
     deliveryIds,
     lastSeenSequence,
-  } = useMessages(roomId, members, anchorId);
+  } = useMessages(roomError && !room ? null : roomId, members, anchorId);
 
   useEffect(() => {
     setHighlightedId(null);
@@ -310,6 +311,7 @@ export default function Room() {
             roomId={roomId}
             deliveryIds={deliveryIds}
             typingUserIds={typingUserIds}
+            recordingUserIds={recordingUserIds}
             hasMore={hasMore}
             isLoadingOlder={isLoadingOlder}
             onLoadOlder={loadOlder}
@@ -347,7 +349,11 @@ export default function Room() {
         onCreateDecision={() => setPromoting({ manual: true })}
         onCreateTask={() => setFlagging({ manual: true })}
         members={members}
+        activityScope={roomId}
         onTyping={handleTyping}
+        onStopTyping={stopTyping}
+        onRecording={() => { if (socket?.connected) socket.emit('start-recording', { roomId }); }}
+        onStopRecording={() => { if (socket?.connected) socket.emit('stop-recording', { roomId }); }}
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(null)}
       />

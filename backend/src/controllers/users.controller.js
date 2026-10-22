@@ -3,6 +3,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const { ok } = require('../utils/apiResponse');
 const ApiError = require('../utils/ApiError');
 const r2 = require('../config/r2');
+const presence = require('../services/presence.service');
 
 const UPDATABLE_FIELDS = ['display_name', 'avatar_url', 'bio'];
 const PAGE_SIZE = 25;
@@ -243,12 +244,14 @@ const blockUser = asyncHandler(async (req, res) => {
      ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
     [req.user.id, userId],
   );
+  await presence.notifyPrivacyChanged(req.app.get('io'), req.user.id, userId);
   return ok(res, { userId, blocked: true });
 });
 
 const unblockUser = asyncHandler(async (req, res) => {
   const { userId } = req.params;
   await query('DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [req.user.id, userId]);
+  await presence.notifyPrivacyChanged(req.app.get('io'), req.user.id, userId);
   return ok(res, { userId, blocked: false });
 });
 
@@ -303,6 +306,8 @@ const deleteMe = asyncHandler(async (req, res) => {
       [req.user.id],
     );
 
+    await client.query('UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE user_id = $1', [req.user.id]);
+
     // 2. Kill all sessions (refresh tokens)
     await client.query('DELETE FROM refresh_tokens WHERE user_id = $1', [req.user.id]);
 
@@ -321,7 +326,10 @@ const deleteMe = asyncHandler(async (req, res) => {
   // transaction commits. REST requests also reject deleted accounts, but an
   // already-connected socket would otherwise keep working until disconnect.
   const io = req.app.get('io');
-  if (io) io.in(`user:${req.user.id}`).disconnectSockets(true);
+  if (io) {
+    io.to(`user:${req.user.id}`).emit('session:revoked');
+    io.in(`user:${req.user.id}`).disconnectSockets(true);
+  }
 
   return ok(res, { message: 'Account deleted' });
 });

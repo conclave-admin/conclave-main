@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { createActivitySender } from '@/lib/conversationActivity';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import IconClose from '@/assets/icons/close.svg?react';
 import IconMention from '@/assets/icons/mention.svg?react';
 import IconSend from '@/assets/icons/send.svg?react';
@@ -43,7 +44,7 @@ const MAX_LINES = 5;
  * @param {boolean} disabled - no realtime connection
  * @param {(payload: object) => void} onSend
  * @param {Array} members - room members, for the mention picker
- * @param {() => void} onTyping - emits a typing event, throttled by the caller
+ * @param {() => void} onTyping - emits a typing event, throttled by this composer
  * @param {object|null} replyTo - message being replied to
  * @param {() => void} onCancelReply
  * @param {() => void} [onCreatePoll] - opens the poll dialog when supplied
@@ -57,6 +58,10 @@ export default function MessageComposer({
   onSendMedia,
   members = [],
   onTyping,
+  onStopTyping,
+  onRecording,
+  onStopRecording,
+  activityScope,
   replyTo,
   onCancelReply,
   onCreatePoll,
@@ -76,7 +81,14 @@ export default function MessageComposer({
   const [recording, setRecording] = useState(false);
 
   const textareaRef = useRef(null);
-  const typingTimer = useRef(null);
+  const callbacks = useMemo(() => ({ current: null }), [activityScope]);
+  callbacks.current = { onTyping, onStopTyping, onRecording, onStopRecording };
+  const activityRef = useRef(null);
+  const signalFlags = useRef({ disabled, isOnline });
+  signalFlags.current = { disabled, isOnline };
+  const captureVersion = useRef(0);
+  const acquiringMic = useRef(false);
+  const stopVoiceRef = useRef(null);
   // Bumped when the preview is abandoned so an upload still in flight knows its
   // result is no longer wanted and must not touch state that has moved on.
   const sendToken = useRef(0);
@@ -98,30 +110,43 @@ export default function MessageComposer({
     el.style.height = `${Math.min(el.scrollHeight, lineHeight * MAX_LINES)}px`;
   }, [content]);
 
-  useEffect(
-    () => () => {
-      if (typingTimer.current) clearTimeout(typingTimer.current);
-      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
-    },
-    [],
-  );
-
-  const signalTyping = () => {
-    onTyping?.();
-    // Throttled: the server expires a typing state after a few seconds of
-    // silence, so re-announcing on a timer while the keys keep moving is what
-    // keeps the indicator honest without a packet per keystroke.
-    if (typingTimer.current) return;
-    typingTimer.current = setTimeout(() => {
-      typingTimer.current = null;
-    }, 2500);
-  };
+  useEffect(() => {
+    setRecording(false);
+    const sender = createActivitySender({ typing: () => callbacks.current.onTyping?.(), stopTyping: () => callbacks.current.onStopTyping?.(), recording: () => callbacks.current.onRecording?.(), stopRecording: () => callbacks.current.onStopRecording?.(),
+      canSignal: () => !signalFlags.current.disabled && signalFlags.current.isOnline && document.visibilityState === 'visible' && document.hasFocus() });
+    activityRef.current = sender;
+    const suspend = (event) => {
+      sender.stop();
+      if (recorderRef.current?.state === 'recording') stopVoiceRef.current?.();
+      else if (document.visibilityState !== 'visible' || event?.type === 'pagehide') { captureVersion.current++; acquiringMic.current = false; }
+    };
+    const visibility = () => { if (document.visibilityState !== 'visible') suspend(); };
+    window.addEventListener('blur', suspend); window.addEventListener('pagehide', suspend);
+    document.addEventListener('visibilitychange', visibility);
+    return () => {
+      sender.dispose(); captureVersion.current++; acquiringMic.current = false;
+      if (recorderRef.current) {
+        recorderRef.current.onstop = null; recorderRef.current.ondataavailable = null;
+        if (recorderRef.current.state === 'recording') recorderRef.current.stop();
+      }
+      recorderRef.current = null;
+      recordingStreamRef.current?.getTracks().forEach(track => track.stop());
+      recordingStreamRef.current = null;
+      window.removeEventListener('blur', suspend); window.removeEventListener('pagehide', suspend);
+      document.removeEventListener('visibilitychange', visibility);
+    };
+    // Capture callbacks for this conversation so cleanup targets the old room.
+  }, [activityScope, callbacks]);
+  useEffect(() => {
+    if (disabled || !isOnline) activityRef.current?.stop();
+    else if (recording) activityRef.current?.startRecording();
+  }, [disabled, isOnline, recording]);
 
   const handleTextChange = (event) => {
     const { value, selectionStart } = event.target;
     setContent(value);
     setError('');
-    signalTyping();
+    activityRef.current?.textChanged(value);
 
     // Reconcile the recorded ids against the text that is actually there.
     // mentionedIds only ever grew, so deleting "@Priya" after selecting her left
@@ -249,6 +274,7 @@ export default function MessageComposer({
           media: { blob: file, filename: file.name, compress: compressRef.current.has(file) },
         };
       });
+      activityRef.current?.endTyping();
       await onSendMedia(items);
       if (sendToken.current !== token) return;
       setPendingFiles([]);
@@ -261,6 +287,7 @@ export default function MessageComposer({
   };
 
   const reset = () => {
+    activityRef.current?.endTyping();
     setContent('');
     setMentionedIds([]);
     setMentionQuery(null);
@@ -271,6 +298,7 @@ export default function MessageComposer({
     event?.preventDefault();
     const text = content.trim();
     if (!text || disabled || textSendingRef.current) return;
+    activityRef.current?.endTyping();
     textSendingRef.current = true;
 
     try {
@@ -289,35 +317,68 @@ export default function MessageComposer({
   };
 
   const toggleVoiceRecording = async () => {
-    if (recording && recorderRef.current) {
+    if (recorderRef.current?.state === 'recording') {
+      activityRef.current?.endRecording();
       const recorder = recorderRef.current;
-      recorder.onstop = () => {
-        const type = recorder.mimeType || 'audio/webm';
-        const file = new File(recordingChunksRef.current, `voice-note-${Date.now()}.webm`, { type });
-        recordingChunksRef.current = [];
-        setRecording(false);
-        if (file.size) setPendingFiles([file]);
-      };
       recorder.stop();
+      setRecording(false);
       recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
       recordingStreamRef.current = null;
       return;
     }
+    if (acquiringMic.current || disabled) return;
+    acquiringMic.current = true;
+    const version = ++captureVersion.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (version === captureVersion.current) acquiringMic.current = false;
+      if (version !== captureVersion.current || signalFlags.current.disabled || document.visibilityState !== 'visible') { stream.getTracks().forEach(track => track.stop()); return; }
       recordingStreamRef.current = stream;
-      recordingChunksRef.current = [];
+      const chunks = [];
+      recordingChunksRef.current = chunks;
       const recorder = new MediaRecorder(stream);
       recorderRef.current = recorder;
-      recorder.ondataavailable = (event) => { if (event.data.size) recordingChunksRef.current.push(event.data); };
+      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+      let failed = false;
+      recorder.onstop = () => {
+        if (version !== captureVersion.current) return;
+        activityRef.current?.endRecording();
+        setRecording(false);
+        if (recorderRef.current === recorder) recorderRef.current = null;
+        if (recordingStreamRef.current === stream) {
+          stream.getTracks().forEach(track => track.stop()); recordingStreamRef.current = null;
+        }
+        recordingChunksRef.current = [];
+        if (!failed) {
+          const type = recorder.mimeType || 'audio/webm';
+          const file = new File(chunks, `voice-note-${Date.now()}.webm`, { type });
+          if (file.size) setPendingFiles([file]);
+        }
+      };
+      recorder.onerror = () => {
+        if (version !== captureVersion.current) return;
+        failed = true;
+        if (recorder.state === 'recording') recorder.stop(); else recorder.onstop();
+        activityRef.current?.endRecording();
+        setError('Voice recording stopped because the microphone or recorder became unavailable.');
+      };
+      for (const track of stream.getTracks()) track.addEventListener?.('ended', () => {
+        if (version === captureVersion.current && recorder.state === 'recording') stopVoiceRef.current?.();
+      });
       recorder.start();
+      activityRef.current?.startRecording();
       setRecording(true);
     } catch {
+      if (version !== captureVersion.current) return;
+      acquiringMic.current = false;
+      activityRef.current?.endRecording();
       recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
       recordingStreamRef.current = null;
       setError('Microphone access is unavailable. Check your browser permission and try again.');
     }
   };
+
+  stopVoiceRef.current = toggleVoiceRecording;
 
   const handleKeyDown = (event) => {
     // A composition is in flight (IME). Enter is committing a character, not
@@ -428,6 +489,7 @@ export default function MessageComposer({
           ref={textareaRef}
           value={content}
           onChange={handleTextChange}
+          onBlur={() => activityRef.current?.endTyping()}
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder="Message…"

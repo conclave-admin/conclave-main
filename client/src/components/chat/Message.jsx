@@ -99,7 +99,7 @@ export default function Message({
   onForward,
   onJumpToMessage,
 }) {
-  const { isOnlineIn } = usePresence();
+  const { isOnlineIn, getPresence } = usePresence();
   const mine = message.sender_id === viewerId;
   const [menuOpen, setMenuOpen] = useState(false);
   const bodyRef = useRef(null);
@@ -134,7 +134,7 @@ const bubbleClass = [
           src={message.sender_avatar}
           size="md"
           presence={
-            isOnlineIn(roomId, message.sender_id) ? "online" : "offline"
+            getPresence(roomId, message.sender_id) === 'unknown' ? null : isOnlineIn(roomId, message.sender_id) ? "online" : "offline"
           }
         />
       ) : (

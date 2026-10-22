@@ -53,7 +53,7 @@ export default function RoomInfo() {
   const { room, isLoading, error, reload } = useRoom(roomId);
   const { user } = useAuth();
   const { socket } = useRealtime();
-  const { isOnlineIn } = usePresence();
+  const { isOnlineIn, labelFor } = usePresence();
   const { toast } = useToast();
 
   const [term, setTerm] = useState('');
@@ -156,11 +156,6 @@ export default function RoomInfo() {
     return Number.isNaN(date.getTime()) ? 'Not available' : date.toLocaleDateString(undefined, options);
   };
 
-  const formatLastSeen = (value) => {
-    if (!value) return 'No recent activity recorded';
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? 'No recent activity recorded' : `Last seen here ${date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
-  };
 
   function startEditing() {
     setDraftName(room?.display_name || room?.name || '');
@@ -329,7 +324,7 @@ export default function RoomInfo() {
             <div className="min-w-0 flex-1">
               <h2 id="person-details-heading" className="text-h2 text-ink">About {peer.display_name}</h2>
               <p className="mt-1 text-metadata text-muted">
-                {isOnlineIn(roomId, peer.id) ? 'Active in this conversation' : formatLastSeen(peer.last_seen_at)}
+                {labelFor(roomId, peer.id)}
               </p>
               <p className="mt-4 whitespace-pre-wrap text-body leading-relaxed text-ink">{peer.bio || 'No profile introduction yet.'}</p>
               <p className="mt-4 text-metadata text-muted">On Conclave since {formatDate(peer.account_created_at || peer.created_at, { month: 'long', year: 'numeric' })}</p>
@@ -450,7 +445,7 @@ export default function RoomInfo() {
                     {isSelf && <span className="shrink-0 text-metadata text-muted">You</span>}
                   </div>
                   <p className="mt-0.5 truncate text-metadata text-muted">
-                    {isOnlineIn(roomId, member.id) ? 'Active in this room' : formatLastSeen(member.last_seen_at)}
+                    {labelFor(roomId, member.id)}
                     {member.joined_at && ` · Joined ${formatDate(member.joined_at, { month: 'short', day: 'numeric', year: 'numeric' })}`}
                   </p>
                 </div>

@@ -1,3 +1,5 @@
+import { usePresence } from '../contexts/PresenceContext';
+import { subscribeToRoom } from '../lib/roomSubscriptions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { getConversationClearTime } from '../lib/clearedConversations';
@@ -14,12 +16,6 @@ import {
   removeReaction as removeReactionApi,
   unpinMessage as unpinMessageApi,
 } from '../services/messages.service';
-
-// How long a typing indicator survives without a fresh `typing` event. The
-// server expires them in Redis but emits nothing when it does, so a client that
-// trusted the last event alone would show someone typing forever after their
-// network dropped. This is the belt to that suspenders.
-const TYPING_TIMEOUT_MS = 6000;
 
 function byTime(a, b) {
   if (a.room_sequence != null && b.room_sequence != null) return Number(a.room_sequence) - Number(b.room_sequence);
@@ -60,7 +56,8 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   const [error, setError] = useState('');
   const [nextCursor, setNextCursor] = useState(null);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
-  const [typingUserIds, setTypingUserIds] = useState([]);
+  const { getActivity } = usePresence();
+  const { typingUserIds, recordingUserIds } = getActivity(roomId);
   const [readPointers, setReadPointers] = useState(() => new Map());
   const [readSequences, setReadSequences] = useState(() => new Map());
   const [deliveredSequences, setDeliveredSequences] = useState(() => new Map());
@@ -79,7 +76,6 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     return () => window.removeEventListener('conclave:conversation-cleared', onCleared);
   }, [viewerId, roomId]);
 
-  const typingTimers = useRef(new Map());
 
   // --- history ---------------------------------------------------------------
   useEffect(() => {
@@ -169,10 +165,8 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
         } while (missing.length === 200);
       } catch { /* reconnect will retry on the next connect */ }
     };
-    const join = () => {
-      socket.emit('join-room', { roomId });
-      fillGap();
-    };
+    const unsubscribe = subscribeToRoom(socket, roomId);
+    const join = () => { fillGap(); };
 
     const receive = ({ message }) => {
       if (message.room_id !== roomId) return;
@@ -215,29 +209,6 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
       );
     };
 
-    const onTyping = ({ roomId: eventRoom, userId }) => {
-      if (eventRoom !== roomId || userId === viewerId) return;
-      clearTimeout(typingTimers.current.get(userId));
-      typingTimers.current.set(
-        userId,
-        setTimeout(() => {
-          setTypingUserIds((prev) => prev.filter((id) => id !== userId));
-        }, TYPING_TIMEOUT_MS),
-      );
-      setTypingUserIds((prev) => (prev.includes(userId) ? prev : [...prev, userId]));
-    };
-
-    const onStopTyping = ({ roomId: eventRoom, userId }) => {
-      if (eventRoom !== roomId) return;
-      clearTimeout(typingTimers.current.get(userId));
-      setTypingUserIds((prev) => prev.filter((id) => id !== userId));
-    };
-
-    const onRoomTyping = ({ roomId: eventRoom, typingUserIds: ids }) => {
-      if (eventRoom !== roomId) return;
-      setTypingUserIds((ids || []).filter((id) => id !== viewerId));
-    };
-
     // A read pointer is a room-level fact about a member, not about one message,
     // so both events write the same map. The message id on `message-read` is
     // only there so a client can highlight the row that triggered it.
@@ -273,17 +244,12 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     socket.on('message:pinned', onPinChanged);
     socket.on('message:unpinned', onPinChanged);
     socket.on('poll:updated', onPollUpdated);
-    socket.on('typing', onTyping);
-    socket.on('stop-typing', onStopTyping);
-    socket.on('room-typing', onRoomTyping);
     socket.on('message-read', onReadPointer);
     socket.on('room-seen', onReadPointer);
 
     if (socket.connected) join();
 
     return () => {
-      typingTimers.current.forEach((timer) => clearTimeout(timer));
-      typingTimers.current.clear();
       socket.off('connect', join);
       socket.off('receive-message', receive);
       socket.off('message-delivered', onDelivered);
@@ -293,12 +259,9 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
       socket.off('message:pinned', onPinChanged);
       socket.off('message:unpinned', onPinChanged);
       socket.off('poll:updated', onPollUpdated);
-      socket.off('typing', onTyping);
-      socket.off('stop-typing', onStopTyping);
-      socket.off('room-typing', onRoomTyping);
       socket.off('message-read', onReadPointer);
       socket.off('room-seen', onReadPointer);
-      if (socket.connected) socket.emit('leave-room', { roomId });
+      unsubscribe();
     };
   }, [roomId, socket, viewerId, anchorId]);
 
@@ -414,6 +377,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     pinMessage,
     unpinMessage,
     typingUserIds,
+    recordingUserIds,
     readPointers,
     readSequences,
     deliveredSequences,

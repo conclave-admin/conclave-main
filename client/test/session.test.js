@@ -101,3 +101,16 @@ test('offline profile restoration matches the active account and clears on logou
   assert.equal(getCachedSessionUser(), null);
   assert.equal(stored.size, 0);
 });
+
+test('stable session identity survives token rotation and disappears on logout', async () => {
+  const { getSessionId } = await import('../src/lib/session.js');
+  const token = (sid, exp) => `e30.${Buffer.from(JSON.stringify({ sub: 'account-a', sid, exp })).toString('base64url')}.signature`;
+  saveSession({ accessToken: token('session-a', 100), refreshToken: 'first' });
+  assert.equal(getSessionId(), 'session-a');
+  saveSession({ accessToken: token('session-a', 200), refreshToken: 'rotated' });
+  assert.equal(getSessionId(), 'session-a');
+  saveSession({ accessToken: token('session-b', 200), refreshToken: 'other-device' });
+  assert.equal(getSessionId(), 'session-b');
+  clearSession();
+  assert.equal(getSessionId(), null);
+});

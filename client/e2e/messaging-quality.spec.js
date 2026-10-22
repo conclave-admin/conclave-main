@@ -71,7 +71,7 @@ test('a direct message reads as a one-to-one conversation, not a room', async ({
   await expect(page.getByText('A private conversation between the two of you.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'About Victor' })).toBeVisible();
   await expect(page.getByText('Product designer focused on clear, collaborative tools.')).toBeVisible();
-  await expect(page.getByText(/Last seen here/).first()).toBeVisible();
+  await expect(page.getByText('Presence unavailable', { exact: true }).first()).toBeVisible();
   const commonGroups = page.locator('section[aria-labelledby="common-groups-heading"]');
   await expect(commonGroups.getByRole('heading', { name: 'Groups in common' })).toBeVisible();
   await expect(commonGroups.getByText('Product & Engineering')).toBeVisible();
@@ -87,7 +87,7 @@ test('room information describes the room and its members', async ({ page }, tes
   await expect(page.getByText('Created October 8, 2026')).toBeVisible();
   await expect(page.getByText('Started by Amina Yusuf')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Room members' })).toBeVisible();
-  await expect(page.getByText(/Last seen here/).first()).toBeVisible();
+  await expect(page.getByText('Presence unavailable', { exact: true }).first()).toBeVisible();
 });
 
 test('profile shows a public-facing preview and account overview', async ({ page }, testInfo) => {

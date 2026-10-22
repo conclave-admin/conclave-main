@@ -28,7 +28,7 @@ import { useAuth } from '@/contexts/AuthContext';
  * @param {object} room - one enriched `GET /rooms` row
  */
 export default function ChatRow({ room }) {
-  const { pinned, muted, archived, typingByRoom, togglePin, toggleMute, toggleArchive } = useChats();
+  const { pinned, muted, archived, typingByRoom, recordingByRoom, togglePin, toggleMute, toggleArchive } = useChats();
   const { user } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef(null);
@@ -68,7 +68,7 @@ export default function ChatRow({ room }) {
                 room.has_message ? 'text-muted' : 'text-muted/70'
               }`}
             >
-              {typingByRoom.get(room.id)?.size ? 'typing…' : room.type !== 'dm' && room.last_message?.sender_id !== user?.id && room.last_message?.sender_name ? `${room.last_message.sender_name}: ${formatRoomPreview(room.last_message)}` : formatRoomPreview(room.last_message)}
+              {recordingByRoom.get(room.id)?.size ? 'recording a voice message…' : typingByRoom.get(room.id)?.size ? 'typing…' : room.type !== 'dm' && room.last_message?.sender_id !== user?.id && room.last_message?.sender_name ? `${room.last_message.sender_name}: ${formatRoomPreview(room.last_message)}` : formatRoomPreview(room.last_message)}
             </span>
 
             <span className="flex shrink-0 items-center gap-1.5">

@@ -37,10 +37,33 @@ by signed-in users; room reads still require membership.
 | POST   | /auth/register | `{ email, password, displayName }` | `{ user, accessToken, refreshToken }` | Validates email format, password 8–72 bytes. Email is stored lowercased.                                                                                         |
 | POST   | /auth/login    | `{ email, password }`              | `{ user, accessToken, refreshToken }` | Case-insensitive on email. Same 401 for unknown, soft-deleted, and wrong password.                                                                               |
 | POST   | /auth/refresh  | `{ refreshToken }`                 | `{ accessToken, refreshToken }`       | ⚠️ **Rotates.** The old token is revoked and a new one issued. **You must persist the returned `refreshToken`** or the user is signed out on the _next_ refresh. |
-| POST   | /auth/logout   | `{ refreshToken }`                 | `{ message }`                         | Revokes. Always returns success, so it cannot be used to probe a token.                                                                                          |
+| POST   | /auth/logout   | `{ refreshToken }`                 | `{ message }`                         | Revokes the stable session and all rotated refresh tokens, disconnecting its sockets on every API instance. Unknown tokens also return success; cluster failures return 503.                                                                                          |
 
 ⚠️ `user` is the same shape from register and login:
 `{ id, email, display_name, avatar_url, bio, created_at }`.
+
+### Durable sessions and realtime access
+
+Access and refresh JWTs contain `sid`, the stable `auth_sessions.id`. Every
+protected REST request, socket handshake and inbound socket action checks the
+session and account in PostgreSQL. Refresh rotates the token while preserving
+`sid`; logout revokes that session across devices sharing its tokens. Other
+independent logins remain active. Account deletion revokes all sessions.
+
+- `session:revoked { sessionId? }`: sign out and stop reconnecting.
+- `session:expired { sessionId }`: the server disconnects even idle sockets at
+  access-token expiry. Refresh the active session and reconnect.
+- Handshake error `data.code`: `AUTH_INVALID`, `ACCESS_EXPIRED`,
+  `SESSION_REVOKED`, or `AUTH_UNAVAILABLE`. Only temporary failures retry.
+- `room:members { roomId, userId, action, actorId, role? }`: `removed` / `left`
+  invalidate local room access; `joined` / `role` refresh membership controls.
+  Affected users receive changes through their personal channel after eviction.
+- `room:resync { roomId }`: rejoin/refetch after a failed removal rolled back.
+
+Room removal holds a database lock until every Redis-adapter peer acknowledges
+local socket eviction and presence/typing cleanup completes. Joining and typing
+use the same room lock so in-flight actions cannot restore revoked access.
+A failed acknowledgement rolls membership back and returns 503.
 
 ## Users
 
@@ -394,12 +417,11 @@ an existing DM by user id, home summary, or a global cross-room search. See
 ## Socket events
 
 Server → client, as documented at the top of `backend/src/sockets/index.js`:
-`receive-message`, `chat:updated`, `room-presence`, `room:members`, `room-typing`, `typing`, `stop-typing`, `message-read`,
+`receive-message`, `chat:updated`, `room-presence`, `room:members`, `room-typing`, `typing`, `stop-typing`, `start-recording`, `stop-recording`, `privacy:changed`, `message-read`,
 `task:updated`, `message:updated`, `message:deleted`, `message:reaction`,
 `notification`, `notification:seen`, and `error:message`.
 
-`chat:updated { roomId, lastMessage, unreadCount }` is the **only** event that
-is not broadcast to the chat room: it goes to each member's personal channel
+`chat:updated { roomId, lastMessage, unreadCount }` goes to each member's personal channel
 (`user:<id>`), because `unreadCount` is one person's number. It fires after every
 message create, edit and delete, so a sidebar row updates without being opened.
 `lastMessage` is `null` for a room with nothing in it, and carries
@@ -415,8 +437,96 @@ Errors are emitted on **`error:message`**, not `error` — Socket.IO reserves
 
 Client → server payloads: `join-room { roomId }`, `leave-room { roomId }`,
 `send-message { roomId, clientId?, content?, replyToId?, attachments?, albumId?, mentionedUserIds? }`,
-`typing { roomId }`, `stop-typing { roomId }`, `message-read { roomId, messageId }`,
-`heartbeat {}`.
+`typing { roomId }`, `stop-typing { roomId }`, `start-recording { roomId }`,
+`stop-recording { roomId }`, `message-read { roomId, messageId }`,
+`heartbeat { foreground?, roomId?, revision? }`.
+
+### Presence and foreground attention
+
+`room-presence` carries a complete, membership-scoped snapshot:
+
+```json
+{
+  "roomId": "uuid",
+  "available": true,
+  "onlineUserIds": [],
+  "viewingUserIds": [],
+  "typingUserIds": [],
+  "recordingUserIds": [],
+  "hiddenUserIds": [],
+  "activity": [],
+  "activityVersion": 12,
+  "checkedAt": 1792670400000
+}
+```
+
+- **Online** means at least one authenticated device has a fresh socket lease,
+  including a connected device elsewhere in Conclave or in a background tab.
+- **Viewing this conversation** additionally requires a visible, focused chat
+  timeline. Subscribing to a room or opening its info page does not imply viewing.
+- **Typing** is temporary; the presence label expires it after five seconds.
+- **Offline** comes from an available, fresh snapshot with no live device.
+- **Unknown** is shown as “Presence unavailable” while disconnected, after resume
+  pending a new snapshot, during a storage outage, or after 45 seconds without a
+  fresh snapshot. Read pointers are never presented as last-seen presence.
+
+Clients send a heartbeat every 15 seconds and immediately on route, focus,
+visibility, online, and page-resume changes. `foreground` is a boolean, `roomId`
+is the active timeline UUID or null, and `revision` increases per device update.
+Delayed older revisions cannot restore an outdated foreground state. The server
+checks room membership before accepting a viewing claim. Legacy empty heartbeats
+renew connectivity without claiming foreground attention.
+
+Heartbeat acknowledgements return `{ ok: true, data: { available, checkedAt } }`.
+`presence:unavailable` invalidates cached snapshots; `presence:resync` asks clients
+to send a fresh heartbeat. Room subscriptions receive full snapshots on join and
+heartbeat. Online/viewing changes are broadcast only to rooms the user belongs to.
+
+Each device lease lasts 45 seconds. A sweep runs every 10 seconds, atomically
+removing expired device, room, typing, and reverse-index records without removing
+another device's renewed lease. Index reconciliation runs approximately once per
+minute. Heartbeats rebuild indexes after Redis data loss using current socket
+subscriptions and locked database membership checks. Redis outages report
+unknown presence; they do not manufacture offline snapshots.
+
+### Typing, recording, and activity privacy
+
+The composer emits typing at most once every 2.5 seconds while text changes,
+with a stop after three idle seconds. Recording pulses every 2.5 seconds only
+while capture is active. Blur, blank input, sending, navigation, disconnect,
+and background transitions stop typing. Blur, navigation, disconnect, and
+background transitions also stop recording indicators. Backgrounding finishes active
+microphone capture; late permission grants after navigation release their tracks.
+Recorder errors and ended microphone tracks stop recording indicators and release
+the microphone.
+
+The server requires membership, a room subscription, a fresh device lease, and
+foreground viewing before accepting a positive activity event. It limits each
+socket to 24 indicator events per 10 seconds before session verification and
+limits positive events to 120 per minute per account across Redis-backed instances.
+Negative events skip the account start limit. Activity acknowledgements return
+`{ ok: true, data: { roomId, accepted } }`; invalid membership or subscription
+returns 403, throttling returns 429, and unavailable activity storage rejects
+positive events with 503.
+
+Activity is stored per device for five seconds. A stop, send, leave, or disconnect
+clears that device; other devices remain active. Event ordering prevents delayed
+starts from undoing newer stops or foreground changes. Full `room-presence` and
+`room-typing` snapshots include `activity` entries shaped as
+`{ userId, kind: "typing" | "recording", ttlMs }`. Clients expire both snapshots
+and incremental events using their remaining TTL. `activityVersion` is a shared,
+increasing room revision; clients reject older activity snapshots and deltas.
+Legacy deltas carry `{ roomId, userId, ttlMs, activityVersion }` and reflect the
+user's aggregate state rather than the originating device alone.
+
+Snapshots are filtered per subscribed member. A block in either direction hides
+online, viewing, typing, and recording between the two users, including in shared
+rooms. Other room members still receive their allowed activity. Block/unblock
+emits `privacy:changed { userId, hidden }` to both users' personal channels,
+invalidates client activity, and refreshes shared-room snapshots. Reverse blocks
+remain effective after one user unblocks. Hidden peers display unknown presence.
+Device IDs, audio content, and microphone permissions are not broadcast.
+These changes require no new migration or environment variables.
 
 `send-message` takes the same body as `POST /messages` and returns the same
 message row on `receive-message`. Pass `mentionedUserIds` — see the warning above

@@ -1,78 +1,93 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { subscribeToRoom } from '../lib/roomSubscriptions';
 import { getRoom } from '../services/rooms.service';
 import { useAuth } from '../contexts/AuthContext';
+import { useRealtime } from '../contexts/RealtimeContext';
 import { readRoomMetadata, saveRoomMetadata } from '../lib/fileCache';
 
-/** Last-known room details let cached history and unsent media open offline. */
+/** Cached details support offline use; membership events invalidate access. */
 export default function useRoom(roomId) {
   const { user } = useAuth();
+  const { socket } = useRealtime();
   const userId = user?.id;
   const [room, setRoom] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-  const scope = `${userId}:${roomId}`;
-  const current = useRef({ scope, active: true });
-  current.current.scope = scope;
-  useEffect(() => {
-    current.current.active = true;
-    return () => { current.current.active = false; };
-  }, []);
+  const generation = useRef(0);
+  const revoked = useRef(false);
 
   const reload = useCallback(async () => {
-    if (navigator.onLine === false) return readRoomMetadata(userId, roomId);
+    const version = ++generation.current;
+    const valid = () => generation.current === version && !revoked.current;
     try {
-      const value = await getRoom(roomId);
-      if (!current.current.active || current.current.scope !== scope) return null;
+      const value = navigator.onLine === false
+        ? await readRoomMetadata(userId, roomId) : await getRoom(roomId);
+      if (!valid()) return null;
       setRoom(value);
-      setError('');
-      await saveRoomMetadata(userId, roomId, value);
+      setError(value ? '' : 'This conversation has not been saved on this device yet.');
+      if (value) await saveRoomMetadata(userId, roomId, value);
       return value;
     } catch (err) {
-      if (!current.current.active || current.current.scope !== scope) return null;
+      if (!valid()) return null;
       if ([403, 404].includes(err.response?.status)) {
         setRoom(null);
         await saveRoomMetadata(userId, roomId, null);
       }
       setError(err.response?.data?.message || 'Could not refresh this conversation.');
       return null;
-    }
-  }, [roomId, userId, scope]);
+    } finally { if (valid()) setIsLoading(false); }
+  }, [roomId, userId]);
 
   useEffect(() => {
-    let active = true;
-    setIsLoading(true);
+    revoked.current = false;
     setRoom(null);
     setError('');
-    const load = async () => {
+    setIsLoading(true);
+    let active = true;
+    const version = generation.current;
+    (async () => {
       const cached = await readRoomMetadata(userId, roomId);
-      if (!active) return;
+      if (!active || version !== generation.current || revoked.current) return;
       if (cached) { setRoom(cached); setIsLoading(false); }
-      if (navigator.onLine === false) {
-        if (!cached) setError('This conversation has not been saved on this device yet.');
+      reload();
+    })();
+    window.addEventListener('online', reload);
+    return () => { active = false; generation.current++; window.removeEventListener('online', reload); };
+  }, [reload, roomId, userId]);
+
+  useEffect(() => {
+    if (!socket) return undefined;
+    const unsubscribe = subscribeToRoom(socket, roomId);
+    const onMembers = (event) => {
+      if (event.roomId !== roomId) return;
+      if (event.userId === userId && ['removed', 'left'].includes(event.action)) {
+        revoked.current = true;
+        generation.current++;
+        setRoom(null);
         setIsLoading(false);
-        return;
-      }
-      try {
-        const value = await getRoom(roomId);
-        if (!active) return;
-        setRoom(value);
-        setIsLoading(false);
-        await saveRoomMetadata(userId, roomId, value);
-      } catch (err) {
-        if (!active) return;
-        if ([403, 404].includes(err.response?.status)) {
-          setRoom(null);
-          await saveRoomMetadata(userId, roomId, null);
-        }
-        setError(err.response?.data?.message || 'Could not refresh this conversation.');
-      } finally {
-        if (active) setIsLoading(false);
+        setError('You no longer have access to this conversation.');
+        saveRoomMetadata(userId, roomId, null);
+      } else {
+        if (event.userId === userId && event.action === 'joined') revoked.current = false;
+        if (!revoked.current) reload();
       }
     };
-    load();
-    window.addEventListener('online', reload);
-    return () => { active = false; window.removeEventListener('online', reload); };
-  }, [roomId, userId, reload]);
+    const onResync = (event) => {
+      if (event.roomId !== roomId || revoked.current) return;
+      socket.emit('join-room', { roomId });
+      reload();
+    };
+    const onConnect = () => { revoked.current = false; reload(); };
+    socket.on('connect', onConnect);
+    socket.on('room:members', onMembers);
+    socket.on('room:resync', onResync);
+    return () => {
+      unsubscribe();
+      socket.off('connect', onConnect);
+      socket.off('room:members', onMembers);
+      socket.off('room:resync', onResync);
+    };
+  }, [socket, roomId, userId, reload]);
 
   return { room, isLoading, error, reload };
 }

@@ -83,6 +83,19 @@ An HTTP REST Redis endpoint is not compatible with the existing client and
 Socket.IO adapter. Confirm the selected service supports Pub/Sub and its command
 budget fits presence heartbeats plus three Redis connections per API instance.
 
+Presence uses one 45-second lease per socket, 15-second client heartbeats, a
+10-second expiry sweep, and periodic index reconciliation. Redis state is
+reconstructed from authenticated sockets after data loss; a full presence keyspace
+flush is not required for deployment or recovery. Do not remove another running
+instance's presence records on startup. Dead API-instance leases expire while
+healthy devices continue renewing independently. Shutdown drains presence cleanup
+before closing Redis and PostgreSQL.
+
+Deploy the presence API and client together. The client expects complete snapshots
+with separate connected and foreground-viewing rosters. Missing/outdated snapshots
+show “Presence unavailable”. No additional database migration or environment
+variables are needed for issues 2.1–2.4 beyond the existing Phase 1 session setup.
+
 ## Render API
 
 Import the root `render.yaml` as a Render Blueprint. It explicitly selects the
@@ -159,3 +172,23 @@ prints a merged CORS/lifecycle plan; its `--apply` option writes reviewed bucket
 settings. Leave the direct-upload flag false until the real client origins and
 exposed ETag header are configured. The API process runs durable cleanup; hosts
 that sleep can schedule `npm run media:cleanup` separately.
+
+## Phase 1 session rollout
+
+Apply migration `032_revocable_sessions.sql` with `cd backend && npm run migrate`
+before starting the updated API. Deploy all API instances and the client
+in a coordinated restart: older servers do not enforce the new session or
+cluster revocation protocol. Existing users must sign in again; legacy tokens
+have no stable session and are intentionally rejected. New refreshes preserve
+session identity, and logout invalidates both REST and realtime access.
+
+The Redis adapter must be connected on every instance. Removal fails with 503
+and rolls back if a peer cannot acknowledge eviction. Do not report a successful
+removal to users when that check fails. Already downloaded history remains on
+devices; revocation prevents future authorized access, not copies already held.
+
+Security checks use disposable databases and require PostgreSQL `CREATEDB` plus
+Redis. Run `cd backend && npm test && npm run test:db`. The database suite includes
+two Socket.IO servers with a real Redis adapter, multiple devices, join/removal
+races, refresh rotation, logout, and idle expiry. For client removal checks run
+`cd client && npx playwright test --config=playwright.realtime-access.config.js`.

@@ -2,6 +2,8 @@ const { pool, query } = require("../config/db");
 const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
+const presence = require("../services/presence.service");
+const { revokeRoomAccess } = require("../services/realtimeAccess.service");
 const {
   createNotification,
   presentNotification,
@@ -630,6 +632,11 @@ const addMember = asyncHandler(async (req, res) => {
   // tell the invitee about a membership that could still roll back — and this row
   // sat unreachable for the whole of item A, so actually sending it is the point.
   const io = req.app.get("io");
+  if (io) {
+    const event = { roomId, action: 'joined', userId, actorId: req.user.id };
+    io.to(roomId).emit('room:members', event);
+    io.to(`user:${userId}`).emit('room:members', event);
+  }
   const presented = await presentNotification(inviteRow);
   emitNotification(io, userId, presented);
   for (const row of joinedRows) {
@@ -777,6 +784,8 @@ const updateRoom = asyncHandler(async (req, res) => {
 const removeMember = asyncHandler(async (req, res) => {
   const { roomId, userId } = req.params;
   const isSelf = userId === req.user.id;
+  const io = req.app.get('io');
+  let revocationStarted = false;
   const client = await pool.connect();
   try {
   await client.query('BEGIN');
@@ -817,9 +826,12 @@ const removeMember = asyncHandler(async (req, res) => {
     roomId,
     userId,
   ]);
+  revocationStarted = true;
+  await revokeRoomAccess(io, roomId, userId);
   await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
+    if (revocationStarted && io) io.to(`user:${userId}`).emit('room:resync', { roomId });
     throw err;
   } finally {
     client.release();
@@ -828,8 +840,8 @@ const removeMember = asyncHandler(async (req, res) => {
   // After the delete, not inside it: a member removed here is told over the same
   // channel every other membership change goes out on, so an open room in their
   // client does not keep showing them as a member until they refresh.
-  const io = req.app.get("io");
   if (io) {
+    await presence.publishRoomPresence(io, roomId);
     io.to(roomId).emit("room:members", {
       roomId,
       action: isSelf ? "left" : "removed",

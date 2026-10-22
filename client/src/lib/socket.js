@@ -1,6 +1,6 @@
 import { io } from 'socket.io-client';
 import { getValidAccessToken } from './api';
-import { getRefreshToken } from './session';
+import { clearSession, getRefreshToken, getSessionId } from './session';
 
 // Singleton socket instance. Call connectSocket() after login,
 // disconnectSocket() on logout. getSocket() returns the current
@@ -17,6 +17,7 @@ let retryTimer = null;
  */
 export function connectSocket() {
   clearTimeout(retryTimer);
+  let authUnavailable = false;
   // Tear down any existing connection
   if (socket) {
     socket.removeAllListeners();
@@ -26,7 +27,11 @@ export function connectSocket() {
   socket = io(import.meta.env.VITE_SOCKET_URL, {
     // Re-read (and if needed refresh) the token on every connection attempt.
     auth: (callback) => {
-      getValidAccessToken().then((token) => callback({ token })).catch(() => callback({ token: null }));
+      authUnavailable = false;
+      getValidAccessToken().then((token) => callback({ token })).catch(() => {
+        authUnavailable = true;
+        callback({ token: null });
+      });
     },
     // socket.io-client reconnection defaults:
     //   reconnection: true, reconnectionAttempts: Infinity,
@@ -34,6 +39,23 @@ export function connectSocket() {
     // These are fine for now — the heartbeat hook keeps presence
     // alive, and the server sweeps stale users every 30s.
   });
+  const instance = socket;
+  const sessionId = getSessionId();
+  const isCurrent = () => socket === instance && getSessionId() === sessionId;
+  const retry = () => {
+    clearTimeout(retryTimer);
+    if (isCurrent() && getRefreshToken()) {
+      retryTimer = setTimeout(() => { if (isCurrent()) instance.connect(); }, 1000);
+    }
+  };
+  instance.on('session:revoked', () => {
+    if (!isCurrent()) return;
+    instance.disconnect();
+    clearSession();
+  });
+  // A server disconnect does not trigger Socket.IO's built-in reconnection.
+  // Reconnect with getValidAccessToken, which refreshes an expired access JWT.
+  instance.on('session:expired', retry);
 
   // Log connection lifecycle for debugging (remove in production)
   socket.on('connect', () => {
@@ -47,11 +69,17 @@ export function connectSocket() {
 
   socket.on('connect_error', (err) => {
     console.error('[socket] connection error:', err.message);
+    if (!isCurrent()) return;
+    if (!authUnavailable && ['SESSION_REVOKED', 'AUTH_INVALID'].includes(err.data?.code)) {
+      instance.disconnect();
+      clearSession();
+      return;
+    }
     // Middleware rejection disables Socket.IO's automatic retries. Retry a
     // retained session after a temporary API outage; logout cancels this timer.
     if (getRefreshToken()) {
       clearTimeout(retryTimer);
-      retryTimer = setTimeout(() => socket?.connect(), 5000);
+      retryTimer = setTimeout(() => { if (isCurrent()) instance.connect(); }, 5000);
     }
   });
 

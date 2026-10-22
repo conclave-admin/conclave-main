@@ -12,16 +12,15 @@
  * @param {string[]} typingUserIds
  * @param {Array} members - room members, for display names
  */
-export default function TypingIndicator({ typingUserIds = [], members = [] }) {
-  if (typingUserIds.length === 0) return null;
-
-  const names = typingUserIds.map(
-    (id) => members.find((member) => member.id === id)?.display_name || 'Someone',
-  );
-  const label =
-    names.length === 1
-      ? `${names[0]} is typing`
-      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} are typing`;
+export default function TypingIndicator({ typingUserIds = [], recordingUserIds = [], members = [] }) {
+  const typers = typingUserIds.filter(id => !recordingUserIds.includes(id));
+  if (!typers.length && !recordingUserIds.length) return null;
+  const describe = (ids, singular, plural) => {
+    const names = ids.map(id => members.find(member => member.id === id)?.display_name || 'Someone');
+    if (!names.length) return '';
+    return names.length === 1 ? `${names[0]} ${singular}` : `${names.slice(0, -1).join(', ')} and ${names.at(-1)} ${plural}`;
+  };
+  const label = [describe(recordingUserIds, 'is recording a voice message', 'are recording voice messages'), describe(typers, 'is typing', 'are typing')].filter(Boolean).join(' · ');
 
   return (
     <div

@@ -46,6 +46,7 @@ export default function MessageTimeline({
   roomId,
   deliveryIds,
   typingUserIds = [],
+  recordingUserIds = [],
   hasMore,
   isLoadingOlder,
   onLoadOlder,
@@ -292,7 +293,7 @@ export default function MessageTimeline({
         </Fragment>
       ))}</div></div>)}
 
-      <TypingIndicator typingUserIds={typingUserIds} members={members} />
+      <TypingIndicator recordingUserIds={recordingUserIds} typingUserIds={typingUserIds} members={members} />
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {annotated.length ? `${annotated.length} messages loaded. Latest message from ${annotated.at(-1)?.sender_name || 'a member'}.` : ''}
       </span>

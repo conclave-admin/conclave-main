@@ -2,7 +2,7 @@ const { pool, query } = require('../config/db');
 const ApiError = require('../utils/ApiError');
 const { notifyAndEmit, emitChatUpdated } = require('./notification.service');
 const { isMentioned } = require('./mention.service');
-const { getRoomOnlineUsers } = require('./presence.service');
+const { getRoomViewingUsers } = require('./presence.service');
 const { attachReactions } = require('./reaction.service');
 const { attachPins } = require('./messagePin.service');
 const { attachPolls } = require('./poll.service');
@@ -478,9 +478,9 @@ async function notifyMentions({ message, mentionedIds, senderId, io }) {
  * The suppression is the important part. A bell entry for a message somebody is
  * looking at is noise at best — they watch it arrive — and writing one per
  * message per member turns a busy room into hundreds of unread rows a person has
- * to click through to clear. So anyone who currently has this room open is
- * skipped: `getRoomOnlineUsers` is the same Redis set `room-presence` broadcasts
- * from, so this is one lookup per message rather than one per member.
+ * to click through to clear. Only a live, focused device viewing and subscribed
+ * to this conversation suppresses the alert. Background subscriptions do not.
+ * `getRoomViewingUsers` batches device and subscription lookups in Redis.
  *
  * When Redis is unavailable the helper returns an empty set, which means nobody
  * counts as present and everyone is notified. That is the safe direction to fail:
@@ -502,7 +502,7 @@ async function notifyRoomActivity({ message, senderId, mentionedIds = [], io }) 
     return [];
   }
 
-  const present = new Set(await getRoomOnlineUsers(message.room_id));
+  const present = new Set(await getRoomViewingUsers(message.room_id));
   const notified = [];
 
   // A message carrying a file is one event, not two. Sending both would give the

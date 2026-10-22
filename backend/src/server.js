@@ -47,6 +47,7 @@ async function shutdown(signal) {
     // io.close() disconnects every socket and, because the server was attached,
     // closes the underlying HTTP server too.
     if (io) await new Promise((resolve) => io.close(resolve));
+    await presence.drainCleanup();
 
     // Belt and braces in case the HTTP server outlived io.close().
     if (httpServer && httpServer.listening) {

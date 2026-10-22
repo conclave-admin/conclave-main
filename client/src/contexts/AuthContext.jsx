@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { isDevAuthBypass, previewUser } from "../config/devPreview";
 import * as authService from "../services/auth.service";
 import { clearLocalData } from "../lib/fileCache";
-import { getCachedSessionUser, getSessionUserId, saveSessionUser } from '../lib/session';
+import { getCachedSessionUser, getRefreshToken, getSessionId, getSessionUserId, saveSessionUser } from '../lib/session';
 import { deleteAccount as deleteAccountRequest, updateProfile as updateProfileRequest } from "../services/users.service";
 
 const AuthContext = createContext(null);
@@ -10,11 +10,20 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => isDevAuthBypass ? previewUser : getCachedSessionUser());
   const [isLoading, setIsLoading] = useState(!isDevAuthBypass);
+  const sessionId = getSessionId();
   useEffect(() => {
     if (isDevAuthBypass) return;
     const endSession = () => { clearLocalData(); setUser(null); };
+    const onStorage = (event) => {
+      if ((event.key === 'refreshToken' || event.key === null) && !getRefreshToken()) endSession();
+      else if (['refreshToken', 'conclave.session-user'].includes(event.key)) setUser(getCachedSessionUser());
+    };
     window.addEventListener('conclave:session-ended', endSession);
-    return () => window.removeEventListener('conclave:session-ended', endSession);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('conclave:session-ended', endSession);
+      window.removeEventListener('storage', onStorage);
+    };
   }, []);
   useEffect(() => {
     if (isDevAuthBypass) return;
@@ -96,6 +105,7 @@ export function AuthProvider({ children }) {
   const value = useMemo(
     () => ({
       user,
+      sessionId,
       isAuthenticated: isDevAuthBypass || Boolean(user),
       isLoading,
       login,
@@ -104,7 +114,7 @@ export function AuthProvider({ children }) {
       updateProfile,
       deleteAccount,
     }),
-    [user, isLoading],
+    [user, sessionId, isLoading],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
