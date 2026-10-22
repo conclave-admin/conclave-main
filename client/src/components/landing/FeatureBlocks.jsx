@@ -1,28 +1,86 @@
+import { Link } from 'react-router-dom';
+import IconArrow from '@/assets/icons/arrow-right.svg?react';
 import IconMessage from '@/assets/icons/message.svg?react';
-import IconDecisions from '@/assets/icons/decisions.svg?react';
 import IconTasks from '@/assets/icons/tasks.svg?react';
+import IconDecisions from '@/assets/icons/decisions.svg?react';
 import IconRecent from '@/assets/icons/recent.svg?react';
+import coast from '@/assets/landing/conclave-coast-v2-1536.webp';
+import coastSmall from '@/assets/landing/conclave-coast-v2-768.webp';
+import studio from '@/assets/landing/conclave-studio-v2-1536.webp';
+import studioSmall from '@/assets/landing/conclave-studio-v2-768.webp';
 
-const FEATURES = [
-  { icon: IconDecisions, number: '01', title: 'Give good ideas somewhere to land.', body: 'Record the decision where the conversation happened. Keep the outcome and its context together, ready when someone needs it.', tag: 'Decisions with context' },
-  { icon: IconTasks, number: '02', title: 'From “we should” to “on it.”', body: 'Turn a message into an action item. Give the next step an owner, without losing the conversation that started it.', tag: 'Tasks from messages' },
-  { icon: IconRecent, number: '03', title: 'Come back without catching up all day.', body: 'Find decisions, tasks and unread conversations in your catch-up digest. Get your bearings, then get on with your day.', tag: 'A clearer catch-up' },
+const CAPABILITIES = [
+  { Icon: IconMessage, label: 'Conversations that connect' },
+  { Icon: IconDecisions, label: 'Decisions that stay' },
+  { Icon: IconTasks, label: 'Plans that move forward' },
+  { Icon: IconRecent, label: 'Catch-ups without the scroll' },
 ];
 
 export default function FeatureBlocks() {
   return (
-    <section id="features" className="landing-section scroll-mt-24">
-      <div className="grid items-end gap-6 md:grid-cols-2">
-        <div><p className="landing-eyebrow">Close to your people. Clear on the plan.</p><h2 className="landing-heading mt-4 font-display">More room for the<br /> good stuff.</h2></div>
-        <p className="max-w-md text-base leading-relaxed text-muted md:justify-self-end">Conversations should bring you closer to people and ideas. Conclave gives the important parts a place to stay.</p>
+    <>
+      <div className="cl-capabilities" aria-label="What you can do with Conclave">
+        <div className="cl-container">
+          {CAPABILITIES.map(({Icon, label}) => <p key={label}><Icon aria-hidden="true" />{label}</p>)}
+        </div>
       </div>
-      <article className="mt-10 grid gap-8 overflow-hidden rounded-2xl border border-line bg-surface p-6 md:grid-cols-2 md:gap-12 md:p-10">
-        <div className="self-center"><IconMessage className="h-6 w-6 text-brand" aria-hidden="true" /><h3 className="mt-5 font-display text-display-3">For the everyday hello.<br />And everything after.</h3><p className="mt-4 max-w-md text-sm leading-relaxed text-muted">Talk one to one, bring everyone into a room, or share a photo that says it better. Replies, reactions and shared media keep it all connected.</p><div className="mt-6 flex flex-wrap gap-2">{['Direct messages','Rooms','Photos & files'].map(label => <span key={label} className="rounded-full border border-line px-3 py-1.5 text-metadata text-muted">{label}</span>)}</div></div>
-        <div className="rounded-xl bg-canvas p-5 md:p-8" aria-hidden="true"><p className="text-[11px] font-semibold uppercase tracking-wider text-muted">The weekend crew</p><div className="mt-5 max-w-64 rounded-xl rounded-tl-none bg-surface p-3 text-sm leading-relaxed">Same place on Saturday? ☀️<span className="mt-2 block text-[10px] text-muted">Amara · 4:12 PM</span></div><div className="ml-auto mt-4 max-w-64 rounded-xl rounded-br-none bg-brand p-3 text-sm leading-relaxed text-surface">Wouldn’t miss it. Bringing the playlist.<span className="mt-2 block text-right text-[10px] opacity-80">4:14 PM · ✓✓</span></div><span className="ml-auto mr-3 mt-1 block w-fit rounded-full border border-line bg-surface px-2.5 py-1 text-xs">💜 3</span></div>
-      </article>
-      <div className="mt-5 grid gap-5 md:grid-cols-3">
-        {FEATURES.map(({icon: Icon, ...feature}) => <article key={feature.number} className="flex flex-col rounded-2xl border border-line bg-surface p-6 md:p-7"><div className="flex items-center justify-between"><Icon className="h-5 w-5 text-brand" aria-hidden="true" /><span className="text-metadata text-muted">{feature.number}</span></div><h3 className="mt-8 font-display text-display-3">{feature.title}</h3><p className="mb-8 mt-4 text-sm leading-relaxed text-muted">{feature.body}</p><p className="mt-auto border-t border-line pt-4 text-metadata font-medium text-brand">{feature.tag}</p></article>)}
-      </div>
-    </section>
+      <section id="features" className="cl-container cl-features">
+        <div className="cl-section-intro">
+          <p className="cl-eyebrow">Life doesn’t fit in one kind of chat.</p>
+          <h2>Neither should<br /><em>your conversations.</em></h2>
+          <p>For the people you make memories with.<br />And the people you make things with.</p>
+        </div>
+        <div className="cl-feature-row">
+          <div className="cl-life-photo">
+            <img src={coast} srcSet={`${coastSmall} 768w, ${coast} 1536w`}
+              sizes="(min-width: 900px) 48vw, 100vw" width="1536" height="1024"
+              loading="lazy" decoding="async" alt="Three friends enjoying a sunset picnic by the coast" />
+            <div className="cl-photo-chat" aria-hidden="true">
+              <div className="cl-chat-group"><span className="cl-person">W</span><div><strong>The weekend crew</strong><small>One very good group chat.</small></div><span>☀️</span></div>
+              <p>Same time, same people, new adventure?</p>
+              <div className="cl-chat-answer">Already packing. 💜 <small>✓✓</small></div>
+            </div>
+          </div>
+          <div className="cl-feature-copy">
+            <span className="cl-feature-icon"><IconMessage aria-hidden="true" /></span>
+            <p className="cl-eyebrow">A little closer, wherever you are</p>
+            <h3>The group chat.<br /><em>With room for more.</em></h3>
+            <p>The big news, the tiny updates, the photos you’ll talk about for years. Give your favourite people a place to share it all.</p>
+            <ul className="cl-feature-list">
+              <li>Direct messages for the personal stuff</li>
+              <li>Rooms that bring the whole group together</li>
+              <li>Photos, files and replies that keep the story going</li>
+            </ul>
+            <Link to="/register" className="cl-text-link">Start a conversation <IconArrow aria-hidden="true" /></Link>
+          </div>
+        </div>
+        <div className="cl-feature-row cl-feature-reverse">
+          <div className="cl-work-scene">
+            <img src={studio} srcSet={`${studioSmall} 768w, ${studio} 1536w`}
+              sizes="(min-width: 900px) 48vw, 100vw" width="1536" height="1024"
+              loading="lazy" decoding="async" alt="Creative collaborators developing an idea together" />
+            <div className="cl-work-card" aria-hidden="true">
+              <p><span className="cl-status-dot" /> A good idea, going somewhere</p>
+              <h4>Let’s make Friday happen.</h4>
+              <div><IconDecisions /><span>Launch direction agreed</span><strong>Decided</strong></div>
+              <div><IconTasks /><span>Put the first draft together</span><strong>Friday</strong></div>
+              <div className="cl-work-person"><span className="cl-person cl-person-peach">J</span> Jamie’s on it. <span>✓</span></div>
+            </div>
+          </div>
+          <div className="cl-feature-copy">
+            <span className="cl-feature-icon"><IconDecisions aria-hidden="true" /></span>
+            <p className="cl-eyebrow">Less “where was that?”</p>
+            <h3>Give your ideas<br /><em>somewhere to go.</em></h3>
+            <p>Great conversations deserve a next chapter. Capture the decision, give the next step an owner, and keep the context right where it belongs.</p>
+            <ul className="cl-feature-list">
+              <li>Save decisions alongside the conversation</li>
+              <li>Turn a message into someone’s next step</li>
+              <li>Return to a digest of what changed</li>
+            </ul>
+            <a href="#product-preview" className="cl-text-link">See how it comes together <IconArrow aria-hidden="true" /></a>
+          </div>
+        </div>
+      </section>
+    </>
   );
 }

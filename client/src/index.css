@@ -158,26 +158,3 @@ html.dark {
   20%, 70% { box-shadow: 0 0 0 5px rgb(99 102 241 / 30%); }
 }
 .message-jump-highlight { animation: message-jump-glow 1.8s ease-in-out; }
-
-/* Public page: fluid editorial typography and a product illustration that
-   removes supporting columns as space narrows, rather than scaling down text. */
-@layer components {
-  .landing-section { @apply mx-auto max-w-6xl px-5 py-16 md:px-10 md:py-24; }
-  .landing-button { @apply inline-flex min-h-12 w-full items-center justify-center gap-3 rounded-full px-6 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-canvas md:w-auto; }
-  .landing-eyebrow { @apply text-xs font-semibold uppercase tracking-[0.16em] text-brand; }
-  .landing-headline { font-size: clamp(3rem, 7.5vw, 6.5rem); line-height: 1.02; letter-spacing: -0.035em; }
-  .landing-heading { font-size: clamp(2.25rem, 4.8vw, 3.75rem); line-height: 1.08; letter-spacing: -0.025em; }
-  .landing-preview { box-shadow: 0 24px 70px -30px rgb(var(--color-ink) / 0.22); }
-  .landing-preview-layout { display: grid; grid-template-columns: minmax(0, 1fr); }
-  .landing-preview-sidebar, .landing-preview-details { display: none; }
-  .landing-mini-art { background-image: radial-gradient(ellipse at top right, rgb(var(--color-brand) / 0.17), transparent 75%); }
-  .landing a, .landing button { -webkit-tap-highlight-color: transparent; }
-  @media (min-width: 768px) {
-    .landing-preview-layout { grid-template-columns: 200px minmax(0, 1fr); }
-    .landing-preview-sidebar { display: block; }
-  }
-  @media (min-width: 1100px) {
-    .landing-preview-layout { grid-template-columns: 210px minmax(0, 1fr) 230px; }
-    .landing-preview-details { display: block; }
-  }
-}
