@@ -1,18 +1,26 @@
+import { useRef } from 'react';
+import useLandingMotion from '@/hooks/useLandingMotion';
 import FeatureBlocks from '@/components/landing/FeatureBlocks';
+import ChatMock from '@/components/landing/ChatMock';
 import HowItWorks from '@/components/landing/HowItWorks';
 import LandingCta from '@/components/landing/LandingCta';
 import LandingFooter from '@/components/landing/LandingFooter';
 import LandingHero from '@/components/landing/LandingHero';
 import LandingNav from '@/components/landing/LandingNav';
+import '@/styles/landing.css';
 
 export default function Landing() {
+  const rootRef = useRef(null);
+  useLandingMotion(rootRef);
+
   return (
-    <div className="landing min-h-screen bg-canvas text-ink">
-      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-surface focus:p-4 focus:ring-2 focus:ring-brand">Skip to content</a>
+    <div ref={rootRef} className="landing cl-landing">
+      <a href="#main-content" className="cl-skip-link">Skip to content</a>
       <LandingNav />
       <main id="main-content">
         <LandingHero />
         <FeatureBlocks />
+        <ChatMock />
         <HowItWorks />
         <LandingCta />
       </main>

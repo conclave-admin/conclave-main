@@ -1,3 +1,6 @@
+import { useLayoutEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
+
 /**
  * The frame every page sits in.
  *
@@ -26,8 +29,16 @@ const WIDTHS = {
 };
 
 export default function Page({ width = 'content', className = '', children }) {
+  const scrollRef = useRef(null);
+  const { pathname } = useLocation();
+
+  useLayoutEffect(() => {
+    // App pages scroll inside the shell rather than the browser window.
+    scrollRef.current?.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [pathname]);
+
   return (
-    <div className="h-full min-h-0 overflow-y-auto overscroll-contain">
+    <div ref={scrollRef} className="h-full min-h-0 overflow-y-auto overscroll-contain">
       <div className={`mx-auto w-full min-w-0 px-4 py-6 md:px-7 md:py-8 ${WIDTHS[width]} ${className}`}>
         {children}
       </div>
