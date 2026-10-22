@@ -37,8 +37,8 @@ tracked in the phases below.
 | ----- | -------- | ----------------------------------------------------------------- | ----------- |
 | 1     | P0       | Realtime access revocation and session enforcement                | Complete    |
 | 2     | P1       | Presence, typing, visibility-based reads, and group receipts      | Complete    |
-| 3     | P1       | Recoverable delivery and reconnect synchronization                | Not started |
-| 4     | P1       | Background notifications and preference enforcement               | Not started |
+| 3     | P1       | Recoverable delivery and reconnect synchronization                | Complete    |
+| 4     | P1       | Background notifications and preference enforcement               | In progress |
 | 5     | P1       | Privacy controls, account recovery, devices, and encryption       | Not started |
 | 6     | P2       | Voice messages, info pages, rooms, and personal history           | Not started |
 | 7     | P2       | Deployed media, browser CI, real devices, accessibility, and load | Not started |
@@ -179,52 +179,68 @@ Explicit mark-all-read commands update the same durable receipt store.
 ## Phase 3 — Recoverable delivery and reconnect synchronization
 
 **Priority:** P1  
-**Status:** Not started
+**Status:** Complete
 
 ### Findings
 
-Reconnect recovery fetches messages after the latest known sequence. Older
-messages edited, deleted, or reacted to while disconnected retain their original
-sequence and can therefore remain stale on the client.
+Previously, reconnect only fetched messages after the latest known sequence.
+Older edits, deletions, and reactions could remain stale. Replay now invalidates
+those messages independently of their original sequence.
 
-Reference: [useMessages.js](client/src/hooks/useMessages.js), `fillGap`.
+Implemented with a committed change journal, authorized replay, versioned message
+and profile snapshots, cache reconciliation, and durable broadcast recovery.
+See [synchronization and push](docs/SYNC_AND_PUSH.md) for delivery guarantees.
 
 ### Work
 
-- [ ] **3.1** Introduce a synchronization cursor/change replay mechanism, or equivalent history reconciliation.
-- [ ] **3.2** Recover new messages, edits, deletions, reactions, and related message state after disconnection.
-- [ ] **3.3** Recover room details, membership, roles, and profile changes.
-- [ ] **3.4** Make saved-message event delivery recoverable across server failures between persistence and broadcast.
-- [ ] **3.5** Keep acknowledgements and duplicate protection consistent across retries and devices.
-- [ ] **3.6** Converge cached and server state without losing pending messages or resurrecting deleted content.
+- [x] **3.1** Introduce a synchronization cursor/change replay mechanism, or equivalent history reconciliation.
+- [x] **3.2** Recover new messages, edits, deletions, reactions, and related message state after disconnection.
+- [x] **3.3** Recover room details, membership, roles, and profile changes.
+- [x] **3.4** Make saved-message event delivery recoverable across server failures between persistence and broadcast.
+- [x] **3.5** Keep acknowledgements and duplicate protection consistent across retries and devices.
+- [x] **3.6** Converge cached and server state without losing pending messages or resurrecting deleted content.
 
 ### Acceptance checks
 
-- [ ] Changes made while a device is offline appear correctly after reconnect without a manual refresh.
-- [ ] Server restart and lost-acknowledgement scenarios do not lose or duplicate messages.
-- [ ] Two devices converge on the same authorized conversation state.
+- [x] Changes made while a device is offline appear correctly after reconnect without a manual refresh.
+- [x] Server restart and lost-acknowledgement scenarios do not lose or duplicate messages.
+- [x] Two devices converge on the same authorized conversation state.
+
+Evidence: PostgreSQL/Redis checks exercise committed replay, late commits,
+removed-member authorization, private pins, profile/role changes, notification
+deduplication, and recovery after a simulated persistence/broadcast failure.
+Browser and unit checks cover reconnect, missed hints, tombstone preservation,
+pending drafts, and cursor persistence only after successful reconciliation.
 
 ## Phase 4 — Background notifications and preference enforcement
 
 **Priority:** P1  
-**Status:** Not started
+**Status:** In progress — implementation complete; live push acceptance pending
 
 ### Findings
 
-Current notifications primarily use database records and socket delivery.
-Saved notification preferences also need to govern interruption delivery.
+Added durable browser Web Push with session-bound subscriptions, permission
+controls, renewal, and current interruption policy checks. Bell records/counts
+refresh authoritatively across reconnects and devices. Real provider delivery
+requires a configured VAPID contact/key pair and supported browser/device checks.
 
-- [ ] **4.1** Implement actual background push delivery for supported clients.
-- [ ] **4.2** Manage push permission, subscription registration, refresh, and removal.
-- [ ] **4.3** Apply global, per-type, and per-conversation notification preferences to interruptions.
-- [ ] **4.4** Keep blocking and active-conversation suppression consistent with notification delivery.
-- [ ] **4.5** Keep unread counts and notification state consistent after reconnect and across devices.
+- [x] **4.1** Implement actual background push delivery for supported clients.
+- [x] **4.2** Manage push permission, subscription registration, refresh, and removal.
+- [x] **4.3** Apply global, per-type, and per-conversation notification preferences to interruptions.
+- [x] **4.4** Keep blocking and active-conversation suppression consistent with notification delivery.
+- [x] **4.5** Keep unread counts and notification state consistent after reconnect and across devices.
 
 ### Acceptance checks
 
 - [ ] Supported background/closed-app scenarios receive the intended notifications.
-- [ ] Muted or blocked conversations do not cause unintended interruptions.
-- [ ] Permission denial, logout, and expired subscriptions are handled cleanly.
+- [x] Muted or blocked conversations do not cause unintended interruptions.
+- [x] Permission denial, logout, and expired subscriptions are handled cleanly.
+
+Evidence: real database/subscription checks with a mocked push provider and
+service-worker/browser tests. The background/closed-app handler is verified with
+mocks; real OS delivery remains unchecked. Configure the VAPID variables and
+complete the [live rollout checklist](docs/SYNC_AND_PUSH.md#verification-and-rollout)
+before marking this phase Complete.
 
 ## Phase 5 — Privacy, account security, devices, and encryption
 
@@ -389,3 +405,5 @@ implemented or verified equivalent behaviour.
 | 2026-10-22 | 2.1–2.4 | Separated connectivity, foreground viewing, typing, offline and unknown states; added visibility/resume heartbeats, per-device leases, atomic expiry and index repair, reconnect recovery, and drained shutdown cleanup. Info pages no longer call read pointers last-seen presence. Message alerts are suppressed only for a live foreground subscriber. | Backend unit checks: 36 passed; client checks: 47 passed; PostgreSQL/Redis suite: 218 passed, including 14 realtime access/presence checks; desktop/mobile fixture-based Playwright: 8 passed; client build passed. Remaining Phase 2 items stay open. No commits made. |
 | 2026-10-22 | 2.5–2.9 | Added client typing throttling and shared server rate limits, expiry for initial/live activity, lifecycle cleanup, device aggregation, recording indicators, symmetric block filtering, and room activity versions to reject delayed snapshots. Microphone cleanup covers backgrounding, late permission results, device loss and recorder errors. | Backend unit checks: 37 passed; client checks: 52 passed; sequential PostgreSQL/Redis suite: 216 passed, 0 failed, 6 R2-dependent checks skipped; separate two-server realtime suite: 18 passed; desktop/mobile fixture-based Playwright: 20 passed; production client build and whitespace checks passed. Initial live-R2 checks hit external DNS failure; the first concurrent run also hit a socket timeout, then targeted and sequential reruns passed. Fixed the forwarding test to mock its storage signer consistently without live credentials. No new migration/environment variables or commits. Items 2.10–2.14 remain open. |
 | 2026-10-22 | 2.10–2.14 | Added foreground viewport-only reads, resume/reconnect rechecks, exact-message acknowledgements and contiguous unread pointers, immutable send-time recipients, all-recipient group ticks, sender-only Message info, first-ack timestamps, monotonic summary updates, and historical-view receipt recovery. Membership changes preserve the original audience; legacy history is explicitly incomplete. | Backend unit checks: 37 passed; client checks: 58 passed; PostgreSQL/Redis suite: 220 passed, 0 failed, 6 R2-dependent checks skipped; final two-server realtime suite: 22 passed; desktop/mobile fixture-based Playwright: 26 passed; production build and whitespace checks passed. Migration 033 applied locally. API contracts and rollout documentation updated. Phase 2 is complete; production rollout requires migration 033 before API/client deployment. No commits made. |
+
+| 2026-10-22 | 3.1–3.6, 4.1–4.5 | Added a transactional change journal with committed cursor allocation, durable delivery recovery, authorized versioned snapshots, reconnect/foreground/polling reconciliation, tombstone and pending-draft protection, session-bound browser push with scoped renewal, permission/opt-out controls, preference/block/presence enforcement, and authoritative notification counts. | Backend unit checks: 39 passed; client checks: 68 passed; PostgreSQL/Redis suite: 226 passed, 0 failed, 6 live R2 checks skipped; desktop/mobile Playwright: 36 passed; production build and whitespace checks passed. Migrations 034–035 applied locally and rerun safely. Fixed stale removal fixtures to reflect server membership. Push provider and closed-app delivery are mocked; real VAPID contact/key configuration and deployed device acceptance remain open for Phase 4. See docs/SYNC_AND_PUSH.md. No commits made. |

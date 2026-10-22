@@ -647,3 +647,135 @@ test('explicit mark read updates durable recipient receipts without changing the
   assert.equal(solo.receipt_summary.recipient_count, 0);
   assert.equal(solo.receipt_summary.read_count, 0);
 });
+
+test('sync cursors include late commits and replay edits, deletions and reactions on old messages', async () => {
+  const sync=require('../src/services/sync.service');
+  const owner=await account();const member=await account();const id=await room(owner,member);
+  const first=(await request('/messages',owner.token,'POST',{roomId:id,content:'Original'})).body.data;
+  const second=(await request('/messages',owner.token,'POST',{roomId:id,content:'Other message'})).body.data;
+  const baseline=await sync.replay(member.userId);
+  const db=await pool.connect();
+  try{
+    await db.query('BEGIN');await db.query('UPDATE messages SET content=$2 WHERE id=$1',[first.id,'Late commit']);
+    await query('UPDATE messages SET content=$2 WHERE id=$1',[second.id,'Fast commit']);
+    const fast=await sync.replay(member.userId,baseline.cursor);
+    assert.ok(fast.changes.some(c=>c.entity_id===second.id));assert.ok(!fast.changes.some(c=>c.entity_id===first.id));
+    await db.query('COMMIT');
+    const late=await sync.replay(member.userId,fast.cursor);assert.ok(late.changes.some(c=>c.entity_id===first.id));
+    await query("INSERT INTO message_reactions(message_id,user_id,emoji) VALUES($1,$2,'👍')",[first.id,member.userId]);
+    await query('UPDATE messages SET content=NULL,deleted_at=NOW() WHERE id=$1',[second.id]);
+    const changes=await sync.replay(member.userId,late.cursor);
+    assert.ok(changes.changes.some(c=>c.entity_id===first.id));assert.ok(changes.changes.some(c=>c.entity_id===second.id));
+    const page=(await request(`/messages/room/${id}?ids=${first.id},${second.id}`,member.token)).body.data;
+    assert.equal(page.messages.find(m=>m.id===first.id).content,'Late commit');
+    assert.equal(page.messages.find(m=>m.id===first.id).reactions[0].reacted,true);
+    assert.equal(page.messages.find(m=>m.id===second.id).content,null);assert.equal(page.messages.find(m=>m.id===second.id).is_deleted,true);
+    assert.ok(page.messages.find(m=>m.id===first.id).sync_version>first.sync_version);
+    assert.deepEqual((await request(`/messages/room/${id}?ids=${randomUUID()}`,member.token)).body.data.missingIds.length,1);
+  }finally{await db.query('ROLLBACK').catch(()=>{});db.release();}
+});
+
+test('sync uses current membership, preserves removal invalidations and keeps private pins private', async () => {
+  const sync=require('../src/services/sync.service');const owner=await account();const member=await account();const outsider=await account();const id=await room(owner,member);
+  const message=(await request('/messages',owner.token,'POST',{roomId:id,content:'Visible before removal'})).body.data;
+  const before=await sync.replay(owner.userId);
+  await query("INSERT INTO message_pins(message_id,user_id,scope) VALUES($1,$2,'user')",[message.id,owner.userId]);
+  const own=await sync.replay(owner.userId,before.cursor);const other=await sync.replay(member.userId,before.cursor);
+  assert.ok(own.changes.some(c=>c.entity_id===message.id));assert.ok(!other.changes.some(c=>c.entity_id===message.id));
+  await query('UPDATE users SET bio=$2 WHERE id=$1',[owner.userId,'Updated biography']);
+  await query('UPDATE room_members SET role=$3 WHERE room_id=$1 AND user_id=$2',[id,member.userId,'admin']);
+  const updated=await sync.replay(member.userId,other.cursor);
+  assert.ok(updated.changes.some(c=>c.kind==='profile'));assert.ok(updated.changes.some(c=>c.kind==='membership'));
+  await query("UPDATE room_members SET role='member' WHERE room_id=$1 AND user_id=$2",[id,member.userId]);
+  assert.equal((await request(`/rooms/${id}/members/${member.userId}`,owner.token,'DELETE')).status,200);
+  await query('UPDATE messages SET content=$2 WHERE id=$1',[message.id,'Must not leak']);
+  const removed=await sync.replay(member.userId,before.cursor);
+  assert.ok(removed.changes.some(c=>c.kind==='membership'&&c.operation==='DELETE'&&c.user_id===member.userId));
+  assert.ok(!removed.changes.some(c=>c.kind==='message'));
+  assert.ok(!(await sync.replay(outsider.userId,before.cursor)).changes.some(c=>c.room_id===id));
+  assert.equal((await request(`/messages/room/${id}?ids=${message.id}`,member.token)).status,403);
+  assert.equal((await request('/sync?after=bad',owner.token)).status,400);
+});
+
+test('committed change outbox recovers a missing broadcast and notifications without duplication', async () => {
+  const sync=require('../src/services/sync.service');const owner=await account();const member=await account();const id=await room(owner,member);const mid=randomUUID();
+  const seq=await query('UPDATE rooms SET message_sequence=message_sequence+1 WHERE id=$1 RETURNING message_sequence',[id]);
+  await query('INSERT INTO messages(id,room_id,sender_id,content,room_sequence) VALUES($1,$2,$3,$4,$5)',[mid,id,owner.userId,'Saved before a crash',seq.rows[0].message_sequence]);
+  const broken={to(){return{emit(){throw new Error('Simulated lost transport');}};}};
+  await sync.dispatchChanges(broken,1000);
+  assert.equal((await query('SELECT COUNT(*)::int AS n FROM notifications WHERE reference_id=$1 AND recipient_id=$2',[mid,member.userId])).rows[0].n,1);
+  await query('UPDATE sync_changes SET next_attempt_at=NOW(),lease_until=NULL WHERE entity_id=$1',[mid]);
+  const events=[];const recovered={to(target){return{emit(name,payload){events.push({target,name,payload});}};}};
+  await sync.dispatchChanges(recovered,1000);
+  assert.ok(events.some(e=>e.name==='sync:changed'));
+  assert.equal((await query('SELECT delivered_at FROM sync_changes WHERE entity_id=$1 AND operation=$2',[mid,'INSERT'])).rows[0].delivered_at instanceof Date,true);
+  assert.equal((await query('SELECT COUNT(*)::int AS n FROM notifications WHERE reference_id=$1 AND recipient_id=$2',[mid,member.userId])).rows[0].n,1);
+  const retry=(await request('/messages',owner.token,'POST',{roomId:id,clientId:randomUUID(),content:'Stable acknowledgement'})).body.data;
+  const duplicate=await request('/messages',owner.token,'POST',{roomId:id,clientId:retry.client_id,content:'Stable acknowledgement'});
+  assert.equal(duplicate.body.data.id,retry.id);
+});
+
+async function pushFixture(fn){
+  const env=require('../src/config/env');const previous=env.push;const keys=require('web-push').generateVAPIDKeys();
+  env.push={...previous,publicKey:keys.publicKey,privateKey:keys.privateKey,subject:'mailto:push-tests@example.test',allowedOrigins:[]};
+  const owner=await account();const member=await account();const id=await room(owner,member);
+  const crypto=require('node:crypto');const ecdh=crypto.createECDH('prime256v1');
+  const subscription={endpoint:`https://fcm.googleapis.com/fcm/send/${randomUUID()}`,keys:{p256dh:ecdh.generateKeys().toString('base64url'),auth:crypto.randomBytes(16).toString('base64url')}};
+  try{
+    const registered=await request('/push/subscriptions',member.token,'POST',{subscription});assert.equal(registered.status,201);
+    await fn({owner,member,id,subscription,registration:registered.body.data,push:require('../src/services/push.service')});
+  }finally{await query('DELETE FROM push_subscriptions WHERE user_id=$1',[member.userId]);env.push=previous;}
+}
+async function pushMessage(f,text='Private text never put in push'){
+  const response=await request('/messages',f.owner.token,'POST',{roomId:f.id,content:text});assert.equal(response.status,201);
+  return response.body.data;
+}
+
+test('push delivery retries transient failure, uses generic content and expires dead subscriptions', async()=>pushFixture(async f=>{
+  const message=await pushMessage(f);let calls=0;
+  await f.push.dispatch(100,async()=>{calls++;const error=new Error('Provider unavailable');error.statusCode=503;throw error;});
+  assert.equal(calls,1);
+  assert.equal((await query('SELECT completed_at FROM push_jobs WHERE notification_id IN(SELECT id FROM notifications WHERE reference_id=$1)',[message.id])).rows[0].completed_at,null);
+  await query('UPDATE push_jobs SET next_attempt_at=NOW() WHERE subscription_id=$1',[f.registration.subscriptionId]);
+  await f.push.dispatch(100,async(sub,payload)=>{const data=JSON.parse(payload);assert.equal(data.bindingId,f.registration.bindingId);assert.ok(!payload.includes(message.content));assert.equal(data.url,'/notifications');calls++;});
+  assert.equal(calls,2);
+  assert.equal((await query('SELECT outcome FROM push_jobs WHERE notification_id IN(SELECT id FROM notifications WHERE reference_id=$1)',[message.id])).rows[0].outcome,'accepted');
+  await pushMessage(f,'Second');
+  await f.push.dispatch(100,async()=>{const error=new Error('Gone');error.statusCode=410;throw error;});
+  assert.equal((await query('SELECT COUNT(*)::int AS n FROM push_subscriptions WHERE user_id=$1',[f.member.userId])).rows[0].n,0);
+}));
+
+test('push enforces global, per-type and room preferences, blocks and active viewing at send time', async()=>pushFixture(async f=>{
+  const dispatch=async()=>{let calls=0;await f.push.dispatch(100,async()=>{calls++;});return calls;};
+  await query("INSERT INTO notification_preferences(user_id,activity_level) VALUES($1,'none')",[f.member.userId]);
+  await pushMessage(f);assert.equal(await dispatch(),0);
+  await query("UPDATE notification_preferences SET activity_level='all',muted=$2 WHERE user_id=$1",[f.member.userId,{new_message:true}]);
+  await pushMessage(f);assert.equal(await dispatch(),0);
+  await query('UPDATE notification_preferences SET muted=$2 WHERE user_id=$1',[f.member.userId,{}]);
+  await query('INSERT INTO room_member_preferences(room_id,user_id,muted) VALUES($1,$2,TRUE)',[f.id,f.member.userId]);
+  await pushMessage(f);assert.equal(await dispatch(),0);
+  await query('UPDATE room_member_preferences SET muted=FALSE WHERE room_id=$1 AND user_id=$2',[f.id,f.member.userId]);
+  const blocked=await pushMessage(f);
+  await query('INSERT INTO user_blocks(blocker_id,blocked_id) VALUES($1,$2)',[f.member.userId,f.owner.userId]);
+  assert.equal(await dispatch(),0);
+  const bell=(await request('/notifications',f.member.token)).body.data;assert.ok(!bell.notifications.some(n=>n.reference_id===blocked.id));
+  await query('DELETE FROM user_blocks WHERE blocker_id=$1 AND blocked_id=$2',[f.member.userId,f.owner.userId]);
+  const active=await pushMessage(f);const peer=await open(f.member.token);await ack(peer,'join-room',{roomId:f.id});await ack(peer,'heartbeat',{foreground:true,roomId:f.id,revision:1});
+  assert.equal(await dispatch(),0);
+  await ack(peer,'heartbeat',{foreground:false,roomId:null,revision:2});
+  await pushMessage(f);assert.equal(await dispatch(),1);
+  await query('UPDATE notification_preferences SET push_enabled=FALSE WHERE user_id=$1',[f.member.userId]);await pushMessage(f);assert.equal(await dispatch(),0);
+}));
+
+test('push renewal rotates its token, preserves pending jobs and logout revokes subscriptions',async()=>pushFixture(async f=>{
+  await pushMessage(f);
+  const next={...f.subscription,endpoint:`https://fcm.googleapis.com/fcm/send/${randomUUID()}`};
+  const push=require('../src/services/push.service');const renewed=await push.renew(f.registration.renewalToken,next);
+  assert.equal(renewed.bindingId,f.registration.bindingId);
+  await assert.rejects(push.renew(f.registration.renewalToken,next),error=>error.status===401);
+  assert.equal((await query('SELECT COUNT(*)::int AS n FROM push_jobs WHERE subscription_id=$1',[renewed.subscriptionId])).rows[0].n,1);
+  let calls=0;await push.dispatch(100,async()=>{calls++;});assert.equal(calls,1);
+  assert.equal((await request('/auth/logout',null,'POST',{refreshToken:f.member.refreshToken})).status,200);
+  assert.equal((await query('SELECT COUNT(*)::int AS n FROM push_subscriptions WHERE user_id=$1',[f.member.userId])).rows[0].n,0);
+  await assert.rejects(push.renew(renewed.renewalToken,next),error=>error.status===401);
+}));

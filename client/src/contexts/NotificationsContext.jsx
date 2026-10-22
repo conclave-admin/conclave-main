@@ -1,187 +1,48 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { useRealtime } from './RealtimeContext';
-import { listNotifications, markSeen } from '../services/notifications.service';
-
-const NotificationsContext = createContext(null);
-
-/**
- * The caller's notifications, and the single number the bell badge shows.
- *
- * Sits here rather than in the page because two surfaces need the same count
- * and fetching it twice would mean two requests that can disagree for a
- * moment — the badge and the page would briefly show different numbers, which
- * reads as a bug even when both are correct.
- *
- * Realtime comes from `notification` and `notification:seen`, both emitted to
- * the personal room `user:<id>`, which `sockets/index.js` joins on connect.
- * There is no join for the client to make; listening is the whole of it.
- *
- * The `notification:seen` handling is the subtle part. That event carries a
- * DELTA — how many rows a mark-seen call changed — and the server emits it to
- * every socket the user has open, including the tab that made the call. So a tab
- * that subtracts from its own request and then again from the echo would drive
- * the badge below what is actually unread.
- *
- * Suppression is a COUNT of in-flight optimistic marks, not a list of the
- * values we expect back. The two are not equivalent: `markSeen` is concurrent
- * with its own echo, so the echo can arrive before the response that tells this
- * tab what the value was — and matching on a value we do not have yet cannot
- * work. A counter does not need the value. Each optimistic mark produces
- * exactly one echo to this tab, so decrementing the counter and dropping that
- * echo is correct regardless of arrival order, and an echo from another tab is
- * applied normally because the counter has already been spent.
- *
- * This also survives the server answering `updated: 0` — a row that was already
- * seen — because a zero delta changes nothing either way.
- */
-export function NotificationsProvider({ children }) {
-  const { socket, isConnected } = useRealtime();
-  const [notifications, setNotifications] = useState([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [nextCursor, setNextCursor] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  // How many mark-seen calls this tab has made whose echo it has not yet seen.
-  const pendingOwnMarks = useRef(0);
-
-  const applyDelta = useCallback((updated) => {
-    if (!updated) return;
-    setUnreadCount((count) => Math.max(0, count - updated));
-  }, []);
-
-  // --- initial page ----------------------------------------------------------
-  useEffect(() => {
-    let active = true;
-    setIsLoading(true);
-    setError('');
-
-    listNotifications()
-      .then(({ notifications: rows, unreadCount: count, nextCursor: cursor }) => {
-        if (!active) return;
-        setNotifications(rows);
-        setUnreadCount(count);
-        setNextCursor(cursor);
-      })
-      .catch((err) => {
-        if (active) setError(err.response?.data?.message || 'Could not load notifications.');
-      })
-      .finally(() => {
-        if (active) setIsLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  // --- live ------------------------------------------------------------------
-  useEffect(() => {
-    if (!socket) return undefined;
-
-    // The list payload and this event's payload are byte-identical — the
-    // server presents both through the same function — so an incoming row is
-    // inserted as-is with no translation and no refetch.
-    const onNotification = ({ notification }) => {
-      if (!notification) return;
-      setNotifications((prev) =>
-        prev.some((item) => item.id === notification.id) ? prev : [notification, ...prev],
-      );
-      if (!notification.seen) setUnreadCount((count) => count + 1);
-    };
-
-    const onSeen = ({ updated }) => {
-      if (pendingOwnMarks.current > 0) {
-        pendingOwnMarks.current -= 1;
-        return;
-      }
-      applyDelta(updated);
-    };
-
-    socket.on('notification', onNotification);
-    socket.on('notification:seen', onSeen);
-    return () => {
-      socket.off('notification', onNotification);
-      socket.off('notification:seen', onSeen);
-    };
-  }, [socket, applyDelta]);
-
-  // --- actions ---------------------------------------------------------------
-
-  /** Mark one notification seen, and clear it from the list's unread state. */
-  const markOne = useCallback(
-    async (notificationId) => {
-      // The list flips immediately; the count does not. Waiting for the round
-      // trip to clear one row of a list the reader is already looking at makes
-      // the row feel sticky, and the badge is corrected by either the echo or
-      // the response — whichever lands first, exactly once.
-      setNotifications((prev) =>
-        prev.map((item) => (item.id === notificationId ? { ...item, seen: true } : item)),
-      );
-      pendingOwnMarks.current += 1;
-      try {
-        const { updated } = await markSeen({ notificationId });
-        applyDelta(updated);
-      } catch {
-        pendingOwnMarks.current = Math.max(0, pendingOwnMarks.current - 1);
-      }
-    },
-    [applyDelta],
-  );
-
-  /** Mark everything seen. Used by the page's "Mark all as read". */
-  const markAll = useCallback(async () => {
-    setNotifications((prev) => prev.map((item) => ({ ...item, seen: true })));
-    pendingOwnMarks.current += 1;
-    try {
-      const { updated } = await markSeen({ all: true });
-      applyDelta(updated);
-    } catch {
-      pendingOwnMarks.current = Math.max(0, pendingOwnMarks.current - 1);
-    }
-  }, [applyDelta]);
-
-  /** Fetch the next page and append it. */
-  const loadMore = useCallback(async () => {
-    if (!nextCursor) return;
-    try {
-      const { notifications: rows, nextCursor: cursor } = await listNotifications({
-        before: nextCursor,
-      });
-      setNotifications((prev) => {
-        const known = new Set(prev.map((item) => item.id));
-        return [...prev, ...rows.filter((item) => !known.has(item.id))];
-      });
-      setNextCursor(cursor);
-    } catch (err) {
-      setError(err.response?.data?.message || 'Could not load more notifications.');
-    }
-  }, [nextCursor]);
-
-  const value = useMemo(
-    () => ({
-      notifications,
-      unreadCount,
-      nextCursor,
-      isLoading,
-      error,
-      isConnected,
-      markOne,
-      markAll,
-      loadMore,
-    }),
-    [notifications, unreadCount, nextCursor, isLoading, error, isConnected, markOne, markAll, loadMore],
-  );
-
-  return (
-    <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>
-  );
+import {createContext,useCallback,useContext,useEffect,useMemo,useRef,useState} from 'react';
+import {useRealtime} from './RealtimeContext';
+import {useAuth} from './AuthContext';
+import {useSyncReconciler} from './SyncContext';
+import {listNotifications,markSeen} from '../services/notifications.service';
+const NotificationsContext=createContext(null);
+export function NotificationsProvider({children}){
+  const {socket,isConnected}=useRealtime();const {user}=useAuth();
+  const [notifications,setNotifications]=useState([]);const [unreadCount,setUnreadCount]=useState(0);
+  const [nextCursor,setNextCursor]=useState(null);const [isLoading,setIsLoading]=useState(true);const [error,setError]=useState('');
+  const generation=useRef(0);const loaded=useRef(0);loaded.current=notifications.length;
+  const refresh=useCallback(async()=>{
+    const version=++generation.current;
+    try{
+      let page=await listNotifications();const rows=[...page.notifications];const count=page.unreadCount;
+      while(page.nextCursor&&rows.length<loaded.current){page=await listNotifications({before:page.nextCursor});rows.push(...page.notifications);}
+      if(generation.current!==version)throw new Error('Notification refresh superseded');
+      setNotifications([...new Map(rows.map(row=>[row.id,row])).values()]);setUnreadCount(count);setNextCursor(page.nextCursor);setError('');
+    }catch(err){if(generation.current===version)setError(err.response?.data?.message||'Could not refresh notifications.');throw err;}
+    finally{if(generation.current===version)setIsLoading(false);}
+  },[user?.id]);
+  useEffect(()=>{setNotifications([]);setUnreadCount(0);setIsLoading(true);refresh().catch(()=>{});return()=>{generation.current++;};},[refresh]);
+  useSyncReconciler(async batch=>{if(batch.reset||batch.changes.some(c=>['notification','membership','block'].includes(c.kind)))await refresh();},[user?.id]);
+  useEffect(()=>{
+    if(!socket)return undefined;let timer;
+    const schedule=()=>{clearTimeout(timer);timer=setTimeout(()=>refresh().catch(()=>{}),100);};
+    // IDs and counts are server-owned. Duplicate/replayed events request an
+    // authoritative snapshot instead of applying unreliable arithmetic deltas.
+    const events=['notification','notification:seen','connect','privacy:changed'];
+    events.forEach(name=>socket.on(name,schedule));
+    return()=>{clearTimeout(timer);events.forEach(name=>socket.off(name,schedule));};
+  },[socket,refresh]);
+  const mark=useCallback(async values=>{
+    setNotifications(rows=>rows.map(row=>values.all||row.id===values.notificationId?{...row,seen:true}:row));
+    try{await markSeen(values);}catch(err){if(err.response?.status!==404)setError('Could not mark this notification read.');}
+    await refresh().catch(()=>{});
+  },[refresh]);
+  const markOne=useCallback(notificationId=>mark({notificationId}),[mark]);const markAll=useCallback(()=>mark({all:true}),[mark]);
+  const loadMore=useCallback(async()=>{
+    if(!nextCursor)return;const version=generation.current;
+    try{const page=await listNotifications({before:nextCursor});if(version!==generation.current)return;
+      setNotifications(rows=>[...new Map([...rows,...page.notifications].map(row=>[row.id,row])).values()]);setNextCursor(page.nextCursor);
+    }catch{setError('Could not load more notifications.');}
+  },[nextCursor]);
+  const value=useMemo(()=>({notifications,unreadCount,nextCursor,isLoading,error,isConnected,markOne,markAll,loadMore}),[notifications,unreadCount,nextCursor,isLoading,error,isConnected,markOne,markAll,loadMore]);
+  return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>;
 }
-
-export function useNotifications() {
-  const value = useContext(NotificationsContext);
-  if (!value) {
-    throw new Error('useNotifications must be used inside NotificationsProvider');
-  }
-  return value;
-}
+export function useNotifications(){const value=useContext(NotificationsContext);if(!value)throw new Error('useNotifications must be used inside NotificationsProvider');return value;}

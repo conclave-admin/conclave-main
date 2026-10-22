@@ -3,11 +3,6 @@ const ApiError = require('../utils/ApiError');
 const { notifyAndEmit, emitChatUpdated } = require('./notification.service');
 const { isMentioned } = require('./mention.service');
 const { getRoomViewingUsers } = require('./presence.service');
-const { attachReactions } = require('./reaction.service');
-const { attachPins } = require('./messagePin.service');
-const { attachPolls } = require('./poll.service');
-const { attachReceiptSummaries } = require('./messageReceipt.service');
-const attachPollsAndReceipts = async rows => attachReceiptSummaries(await attachPolls(rows));
 const r2 = require('../config/r2');
 
 // A media item is its own message. Multiple items sent together share albumId.
@@ -44,25 +39,6 @@ function validateAttachments(attachments) {
   }
 
   return urls;
-}
-
-/**
- * Map an `attachments` row to the shape the client expects. Mirrors the
- * json_build_object in messages.controller.listMessages so history loads
- * and live socket messages agree (BACKEND_TASKS.md Bug 6).
- */
-function serializeAttachment(row) {
-  return {
-    id: row.id,
-    filename: row.filename,
-    size: row.size_bytes,
-    mime_type: row.file_type,
-    url: row.file_url,
-    width: row.width,
-    height: row.height,
-    preview_url: row.preview_url,
-    duration: row.duration,
-  };
 }
 
 /**
@@ -327,12 +303,6 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
     client.release();
   }
 
-  // 6. Fetch sender display_name + avatar for the broadcast
-  const sender = await query(
-    `SELECT display_name, avatar_url FROM users WHERE id = $1`,
-    [senderId],
-  );
-
   // 7. Notify the people recorded as mentioned. After the commit, so a mention is
   //    never announced for a message that rolled back.
   //
@@ -362,20 +332,11 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
   //    number, never the room's.
   await emitChatUpdated(io, roomId);
 
-  // Reactions are attached for the same reason the other payload fields are: all
-  // six surfaces return one message shape, and a message that was just created has
-  // none, so this is always [].
-  const [payload] = await attachPollsAndReceipts(await attachPins(await attachReactions([{
-    ...message,
-    client_id: message.client_id || clientId || null,
-    sender_name: sender.rows[0]?.display_name || null,
-    sender_avatar: sender.rows[0]?.avatar_url || null,
-    attachments: savedAttachments.map(serializeAttachment),
-    // Exposed so the client can style a real mention rather than regex-matching
-    // the text, and so a client can learn which ids a send actually resolved to.
-    mentioned_user_ids: mentionedIds,
-    _idempotentRetry: isRetry,
-  }], senderId), senderId));
+  // Read body, related state and versions from one authorized snapshot.
+  // This also returns the latest state for an idempotent retry.
+  const result=await require('./messageSnapshot.service').snapshots(roomId,senderId,[message.id]);
+  const payload=result.messages[0];
+  payload._idempotentRetry=isRetry;
 
   return payload;
 }

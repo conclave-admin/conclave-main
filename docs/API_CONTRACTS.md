@@ -1,7 +1,9 @@
 # API Contracts
 
 Base URL: `http://localhost:7000/api`
-Auth: `Authorization: Bearer <accessToken>` on every route except `/auth/*` and `/health`.
+Auth: `Authorization: Bearer <accessToken>` on protected routes. Public health,
+auth, and push configuration routes have their own rules; push renewal uses a
+scoped credential as documented below.
 
 Every response uses the same envelope, from `utils/apiResponse.js`:
 
@@ -19,6 +21,50 @@ written after the fact. Where a shape is marked ⚠️, read the note before rel
 on it.
 
 ---
+
+## Recoverable synchronization
+
+`GET /sync?after=<decimal cursor>` returns
+`{cursor, reset, changes, hasMore}`. Cursors are opaque decimal strings; retain
+their precision. Omit `after` for initial/full reconciliation. Invalid cursors
+return 400; expired/future cursors return `reset: true`. A page has up to 200
+authorized changes, each with `cursor`, `kind`, `operation`, `entity_id`,
+`room_id`, and `user_id`. Changes identify invalidated state and contain no body.
+Fetch current authorized state before persisting the returned cursor; continue
+while `hasMore` is true. Repeated changes and socket hints are safe to replay.
+
+`GET /messages/room/:roomId?ids=<comma-separated UUIDs>` returns
+`{messages, missingIds, nextCursor: null}` from an atomic per-viewer snapshot.
+Supply 1–200 IDs without another paging parameter. Current membership is required
+(403 after removal). Missing IDs are authoritative removals for this room.
+Message `sync_version` orders body/related-state updates; `sender_profile_version`
+separately orders sender metadata. Receipt summary versions retain their existing
+monotonic semantics. Preserve pending local outbox entries during reconciliation.
+
+`sync:changed {cursor}` on the personal socket channel is an invalidation hint,
+not an acknowledgement or message payload. Polling `/sync` recovers missed hints.
+
+## Browser push
+
+| Method | Route | Authorization / result |
+| --- | --- | --- |
+| GET | `/push/config` | Public; `{configured, publicKey}`; no private key |
+| POST | `/push/subscriptions` | Bearer session; `{subscription}`; 201 with binding below |
+| DELETE | `/push/subscriptions` | Bearer session; `{endpoint}`; removes caller's endpoint |
+| POST | `/push/renew` | `Authorization: PushRenew <renewalToken>`; `{subscription}`; rotates binding credential |
+
+Registration/renewal returns `{subscriptionId, bindingId, renewalToken, publicKey,
+sessionExpiresAt}`. Store the scoped renewal credential only for the current
+account/session. It cannot read messages or call authenticated APIs. Old tokens
+stop working after renewal; expired/revoked sessions cannot renew. Subscriptions
+must have a supported HTTPS provider endpoint and valid encryption keys.
+Unconfigured delivery returns 503. Registration and renewal are rate limited.
+
+Push payloads contain generic activity and a binding identifier. Current access,
+blocking, preferences, unread state, room mute and foreground presence are checked
+when dispatching. Notification socket events remain hints: clients refresh the
+authoritative list and unread total after delivery/seen events rather than
+subtracting `updated` deltas. See [setup and delivery guarantees](SYNC_AND_PUSH.md).
 
 ## Health
 

@@ -5,18 +5,19 @@ const { withRoomMembership } = require('./realtimeAccess.service');
 
 async function attachReceiptSummaries(messages, db = { query }) {
   if (!messages.length) return messages;
-  const result = await db.query(`SELECT m.id, m.receipt_history_complete, m.receipt_version,
+  const result = await db.query(`SELECT m.id, m.state_version, m.receipt_history_complete, m.receipt_version,
     COUNT(r.recipient_id)::int AS recipient_count,
     COUNT(r.recipient_id) FILTER (WHERE r.delivered)::int AS delivered_count,
     COUNT(r.recipient_id) FILTER (WHERE r.read)::int AS read_count
     FROM messages m LEFT JOIN message_recipients r ON r.message_id = m.id
     WHERE m.id = ANY($1::uuid[]) GROUP BY m.id`, [messages.map(m => m.id)]);
+  const versions = new Map(result.rows.map(row => [row.id, Number(row.state_version)]));
   const summaries = new Map(result.rows.map(row => [row.id, {
     recipient_count: row.recipient_count, delivered_count: row.delivered_count,
     read_count: row.read_count, history_complete: row.receipt_history_complete,
     version: Number(row.receipt_version),
   }]));
-  return messages.map(message => ({ ...message, receipt_summary: summaries.get(message.id) || null }));
+  return messages.map(message => {const {state_version,...payload}=message;return {...payload,sync_version:state_version==null?versions.get(message.id):Number(state_version),receipt_summary:summaries.get(message.id)||null};});
 }
 
 // A read acknowledges this message only. Gaps remain unread even if the user

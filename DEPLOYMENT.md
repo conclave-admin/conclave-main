@@ -98,6 +98,19 @@ variables are needed for issues 2.1–2.4 beyond the existing Phase 1 session se
 
 ## Render API
 
+### Synchronization and background notifications
+
+Run `npm run migrate` before deploying the Phase 3–4 API/client changes. Migrations
+034–035 add the committed change journal, message/profile versions, and durable
+push subscriptions/jobs. The persistent API process runs both recovery workers;
+no separate scheduler is needed. PostgreSQL and Redis must remain available.
+
+Configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and a real public contact in
+`VAPID_SUBJECT` to enable browser push. Keep the key pair stable across instances.
+See [synchronization and push setup](docs/SYNC_AND_PUSH.md) for key generation,
+privacy policy, subscription lifecycle, and the required live acceptance checks.
+
+
 Import the root `render.yaml` as a Render Blueprint. It explicitly selects the
 free web-service plan and creates only the API service, with these settings:
 

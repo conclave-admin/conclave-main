@@ -77,3 +77,47 @@ self.addEventListener('fetch', (event) => {
     })());
   }
 });
+
+// Push contains no message text or actor names. A binding scoped to the active
+// account/session prevents delayed notifications appearing after logout/login.
+function pushState(value,write=false){return new Promise((resolve,reject)=>{
+  const request=indexedDB.open('conclave-push',1);
+  request.onupgradeneeded=()=>request.result.createObjectStore('state');request.onerror=()=>reject(request.error);
+  request.onsuccess=()=>{const db=request.result;const tx=db.transaction('state',write?'readwrite':'readonly');const op=write?tx.objectStore('state').put(value,'binding'):tx.objectStore('state').get('binding');tx.oncomplete=()=>{db.close();resolve(write?value:op.result);};tx.onerror=()=>{db.close();reject(tx.error);};};
+});}
+self.addEventListener('push',event=>event.waitUntil((async()=>{
+  let data;try{data=event.data?.json();}catch{return;}
+  const binding=await pushState();
+  if(!binding||binding.bindingId!==data?.bindingId||typeof data.id!=='string'||data.id.length>100)return;
+  if(binding.sessionExpiresAt&&Date.parse(binding.sessionExpiresAt)<=Date.now())return;
+  const windows=await self.clients.matchAll({type:'window'});
+  if(data.roomId&&windows.some(client=>client.focused&&client.visibilityState==='visible'&&new URL(client.url).pathname===`/chats/${data.roomId}`)){windows.forEach(client=>client.postMessage({type:'SYNC_REQUEST'}));return;}
+  await self.registration.showNotification('Conclave',{body:'You have new activity in Conclave',tag:`conclave:${data.id}`,renotify:false,data:{id:data.id,bindingId:data.bindingId,url:'/notifications'}});
+  for(const client of await self.clients.matchAll({type:'window'}))client.postMessage({type:'SYNC_REQUEST'});
+})()));
+self.addEventListener('notificationclick',event=>{
+  event.notification.close();
+  event.waitUntil((async()=>{
+    const binding=await pushState();if(!binding||binding.bindingId!==event.notification.data?.bindingId)return;
+    const target=new URL('/notifications',self.location.origin).href;
+    const clients=await self.clients.matchAll({type:'window',includeUncontrolled:true});
+    const existing=clients.find(client=>new URL(client.url).origin===self.location.origin);
+    if(existing){await existing.focus();existing.postMessage({type:'SYNC_REQUEST'});await existing.navigate(target);}else await self.clients.openWindow(target);
+  })());
+});
+self.addEventListener('pushsubscriptionchange',event=>event.waitUntil((async()=>{
+  const binding=await pushState();if(!binding)return;
+  try{
+    const config=await(await fetch(`${binding.apiBase}/push/config`)).json();
+    if(!config.data?.configured)return;
+    const key=Uint8Array.from(atob(config.data.publicKey.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+    const subscription=event.newSubscription||await self.registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:key});
+    const response=await fetch(`${binding.apiBase}/push/renew`,{method:'POST',headers:{'content-type':'application/json',authorization:`PushRenew ${binding.renewalToken}`},body:JSON.stringify({subscription:subscription.toJSON()})});
+    if(!response.ok)throw new Error('Renewal unavailable');
+    const value=(await response.json()).data;const current=await pushState();
+    if(current?.renewalToken===binding.renewalToken)await pushState({...binding,...value},true);
+  }catch{
+    // A signed-in page repairs registration; no API login tokens live here.
+    for(const client of await self.clients.matchAll({type:'window'}))client.postMessage({type:'PUSH_SUBSCRIPTION_CHANGED'});
+  }
+})()));

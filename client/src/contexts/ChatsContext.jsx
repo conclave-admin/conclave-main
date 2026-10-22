@@ -1,3 +1,4 @@
+import {useSyncReconciler} from './SyncContext';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listRooms, markRoomSeen, updateRoomPreferences } from '@/services/rooms.service';
 import { useRealtime } from './RealtimeContext';
@@ -37,16 +38,18 @@ export function ChatsProvider({ children }) {
   const { typingByRoom, recordingByRoom } = usePresence();
   const revokedRooms = useRef(new Set());
   const membershipEpoch = useRef(0);
+  const refreshGeneration=useRef(0);
   const currentUser = useRef(userId);
   currentUser.current = userId;
   useEffect(() => { revokedRooms.current.clear(); }, [userId]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options={}) => {
     const epoch = membershipEpoch.current;
+    const version=++refreshGeneration.current;
     setIsLoading(true);
     setError('');
     const apply = (rows) => {
-      if (currentUser.current !== userId) return;
+      if (currentUser.current !== userId || version!==refreshGeneration.current || options?.isCurrent&&!options.isCurrent()) {if(options?.strict)throw new Error('Chat refresh superseded');return;}
       const loaded = rows.filter((room) => !revokedRooms.current.has(room.id));
       setRooms(loaded);
       setPinned(loaded.filter((room) => room.is_pinned).map((room) => room.id));
@@ -54,7 +57,7 @@ export function ChatsProvider({ children }) {
       setArchived(loaded.filter((room) => room.is_archived).map((room) => room.id));
     };
     const cached = await readChatList(userId);
-    if (cached.length) { apply(cached); setIsLoading(false); }
+    if (cached.length && !options?.strict) { apply(cached); setIsLoading(false); }
     if (navigator.onLine === false) {
       if (!cached.length) setError('No conversations have been saved on this device yet.');
       setIsLoading(false);
@@ -68,10 +71,13 @@ export function ChatsProvider({ children }) {
       apply(loaded);
     } catch (err) {
       setError(err.response?.data?.message || 'Could not load chats.');
+      if(options?.strict)throw err;
     } finally {
       setIsLoading(false);
     }
   }, [userId]);
+
+  useSyncReconciler(async batch=>{if(batch.reset||batch.changes.some(c=>['message','room','membership','profile','preferences','block'].includes(c.kind)))await refresh({strict:true,isCurrent:batch.isCurrent});},[userId]);
 
   useEffect(() => {
     refresh();

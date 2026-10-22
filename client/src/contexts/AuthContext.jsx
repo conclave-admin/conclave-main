@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import {clearBrowserPush} from '../lib/pushNotifications';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { isDevAuthBypass, previewUser } from "../config/devPreview";
 import * as authService from "../services/auth.service";
 import { clearLocalData } from "../lib/fileCache";
@@ -11,9 +12,10 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => isDevAuthBypass ? previewUser : getCachedSessionUser());
   const [isLoading, setIsLoading] = useState(!isDevAuthBypass);
   const sessionId = getSessionId();
+  const profileGeneration=useRef(0);
   useEffect(() => {
     if (isDevAuthBypass) return;
-    const endSession = () => { clearLocalData(); setUser(null); };
+    const endSession = () => { window.dispatchEvent(new Event('conclave:sync-stop')); clearBrowserPush().catch(()=>{}); clearLocalData(); setUser(null); };
     const onStorage = (event) => {
       if ((event.key === 'refreshToken' || event.key === null) && !getRefreshToken()) endSession();
       else if (['refreshToken', 'conclave.session-user'].includes(event.key)) setUser(getCachedSessionUser());
@@ -57,6 +59,14 @@ export function AuthProvider({ children }) {
       window.removeEventListener('online', restore);
     };
   }, []);
+  async function refreshUser() {
+    const version=++profileGeneration.current;
+    const current=await authService.getCurrentUser();
+    if(version!==profileGeneration.current)return;
+    if(getSessionUserId()!==current.id)return;
+    saveSessionUser(current);setUser(current);
+    return current;
+  }
   async function login(values) {
     if (isDevAuthBypass) {
       setUser(previewUser);
@@ -78,7 +88,9 @@ export function AuthProvider({ children }) {
       setUser(previewUser);
       return;
     }
+    window.dispatchEvent(new Event('conclave:sync-stop'));
     window.dispatchEvent(new Event('conclave:outbox-stop'));
+    await clearBrowserPush({server:true});
     await authService.logout();
     await clearLocalData();
     setUser(null);
@@ -89,6 +101,7 @@ export function AuthProvider({ children }) {
   // just told you it saved would be the one place it had not.
   async function updateProfile(updates) {
     const next = await updateProfileRequest(updates);
+    profileGeneration.current++;
     saveSessionUser(next);
     setUser((prev) => prev?.id === next.id ? { ...prev, ...next } : prev);
     return next;
@@ -97,7 +110,9 @@ export function AuthProvider({ children }) {
   // local session has to go too — leaving it in place would render a shell that
   // 401s on every request until the next reload.
   async function deleteAccount() {
+    await clearBrowserPush({server:true});
     await deleteAccountRequest();
+    window.dispatchEvent(new Event('conclave:sync-stop'));
     window.dispatchEvent(new Event('conclave:outbox-stop'));
     await clearLocalData();
     setUser(null);
@@ -112,6 +127,7 @@ export function AuthProvider({ children }) {
       register,
       logout,
       updateProfile,
+      refreshUser,
       deleteAccount,
     }),
     [user, sessionId, isLoading],

@@ -559,6 +559,7 @@ export const previewSocket = {
       edited_at: null,
       created_at: new Date().toISOString(),
     };
+    previewMessages.push(message);
     queueMicrotask(() =>
       listeners
         .get('receive-message')

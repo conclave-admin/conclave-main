@@ -1,3 +1,7 @@
+import {useSyncReconciler} from '../contexts/SyncContext';
+import {mergeServerMessages} from '../lib/synchronization';
+import {getMessageSnapshots} from '../services/messages.service';
+import {isDevAuthBypass} from '../config/devPreview';
 import { getRoomReceiptSummaries } from '../services/messages.service';
 import { newerReceipt } from '../lib/messageMeta';
 import { usePresence } from '../contexts/PresenceContext';
@@ -25,20 +29,16 @@ function byTime(a, b) {
 }
 
 function mergeMessages(current, rows) {
-  const merged = new Map(current.map((message) => [message.id, message]));
-  rows.forEach((message) => merged.set(message.id, { ...message, receipt_summary: newerReceipt(merged.get(message.id)?.receipt_summary, message.receipt_summary) }));
-  return [...merged.values()].sort(byTime);
+  return mergeServerMessages(current, rows).map(message => ({...message, receipt_summary:newerReceipt(current.find(m=>m.id===message.id)?.receipt_summary,message.receipt_summary)}));
 }
 
 /**
  * One room's timeline: history, live updates, delivery state and read
  * pointers.
  *
- * Sending goes over the socket, not `POST /messages`. Both write through the
- * same service, but only the socket handler emits `receive-message` — a REST
- * send updates everyone's sidebar via `chat:updated` and leaves the open
- * conversation stale for every other member. So the socket is not an
- * optimisation here, it is the only path that delivers.
+ * Socket acknowledgements provide immediate sending feedback. Both REST and
+ * socket sends use the same persistence service; committed change replay repairs
+ * missed broadcasts and older mutations independently of the live transport.
  *
  * Pending messages come from the account-level outbox. They are matched to
  * saved messages by client_id, including history fetched after a reconnect.
@@ -67,6 +67,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   const [lastSeenSequence, setLastSeenSequence] = useState(0);
   const historyVersion = useRef(0);
   const historyReady = useRef(false);
+  const retiredIds = useMemo(()=>new Set(),[roomId,viewerId]);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
@@ -79,6 +80,30 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     return () => window.removeEventListener('conclave:conversation-cleared', onCleared);
   }, [viewerId, roomId]);
 
+
+  const requestSync=useSyncReconciler(async batch=>{
+    if(!roomId||!historyReady.current)return;
+    const changes=batch.changes.filter(c=>c.room_id===roomId);
+    if(!batch.reset&&!changes.some(c=>['message','membership','room','profile'].includes(c.kind))&&!batch.changes.some(c=>c.kind==='profile'))return;
+    const generation=historyVersion.current;
+    try {
+      const latest=batch.reset&&!anchorId?(await listMessages(roomId)).messages:[];
+      const cached=batch.reset?await readRoomMessages(viewerId,roomId):[];
+      const ids=[...new Set([...messagesRef.current,...cached,...latest].filter(m=>!m._optimistic).map(m=>m.id).concat(changes.filter(c=>c.kind==='message').map(c=>c.entity_id)))];
+      const incoming=[];const missing=[];
+      for(let i=0;i<ids.length;i+=200){const page=await getMessageSnapshots(roomId,ids.slice(i,i+200));incoming.push(...page.messages);missing.push(...(page.missingIds||[]));}
+      if(historyVersion.current!==generation||(batch.isCurrent&&!batch.isCurrent()))return;
+      missing.forEach(id=>retiredIds.add(id));
+      const next=mergeServerMessages(messagesRef.current,incoming,missing).filter(m=>!retiredIds.has(m.id));
+      messagesRef.current=next;setMessages(next);
+      await saveRoomMessages(viewerId,roomId,next);
+      if(socket?.connected)incoming.filter(m=>m.sender_id!==viewerId).forEach(m=>socket.emit('message-delivered',{roomId,messageId:m.id}));
+    }catch(error){
+      if(historyVersion.current!==generation||(batch.isCurrent&&!batch.isCurrent()))return;
+      if([403,404].includes(error.response?.status)){setMessages([]);messagesRef.current=[];await saveRoomMessages(viewerId,roomId,[]);return;}
+      throw error;
+    }
+  },[roomId,viewerId]);
 
   // --- history ---------------------------------------------------------------
   useEffect(() => {
@@ -118,7 +143,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
         if (active) setError(err.response?.data?.message || err.message || 'Could not load messages.');
       })
       .finally(() => {
-        if (active) { historyReady.current = true; setIsLoading(false); }
+        if (active) { historyReady.current = true; setIsLoading(false); requestSync?.(true); }
       });
 
     return () => {
@@ -127,7 +152,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   }, [roomId, viewerId, user?.display_name, socket, anchorId]);
 
   useEffect(() => {
-    if (!anchorId && messages.length) saveRoomMessages(viewerId, roomId, messages.map(message => ({ ...message, receipt_summary: newerReceipt(message.receipt_summary, receiptUpdates.get(message.id)) })));
+    if (!anchorId && messages.length) saveRoomMessages(viewerId, roomId, messages.filter(m=>!retiredIds.has(m.id)).map(message => ({ ...message, receipt_summary: newerReceipt(message.receipt_summary, receiptUpdates.get(message.id)) })));
   }, [messages, roomId, viewerId, anchorId, receiptUpdates]);
 
   // --- read pointers ---------------------------------------------------------
@@ -208,11 +233,13 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     // through one serializer for edit, delete and reaction alike, so a client
     // that trusts the payload cannot end up with three slightly different
     // message shapes.
-    const replaceMessage = (message) => {
+    const replaceMessage = (payload) => {
+      const message=payload.message||payload;
       if (message.room_id !== roomId) return;
+      if(!isDevAuthBypass){getMessageSnapshots(roomId,[message.id]).then(page=>{if(active)setMessages(current=>mergeServerMessages(current,page.messages,page.missingIds));}).catch(()=>requestSync?.());return;}
       setMessages((current) =>
         current.some((item) => item.id === message.id)
-          ? current.map((item) => (item.id === message.id ? message : item))
+          ? mergeMessages(current,[message])
           : [...current, message].sort(byTime),
       );
     };
@@ -381,9 +408,9 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     const known = new Set(messages.map((message) => message.client_id).filter(Boolean));
     const pending = roomDrafts.filter((item) => !known.has(item.clientId)).map((item) => draftMessage(item, user?.display_name));
     return mergeMessages(messages.filter((message) => !message._optimistic), pending)
-      .filter((message) => new Date(message.created_at).getTime() > clearedAt)
+      .filter((message) => !retiredIds.has(message.id) && new Date(message.created_at).getTime() > clearedAt)
       .map(message => ({ ...message, receipt_summary: newerReceipt(message.receipt_summary, receiptUpdates.get(message.id)) }));
-  }, [messages, roomDrafts, clearedAt, user?.display_name, receiptUpdates]);
+  }, [messages, roomDrafts, clearedAt, user?.display_name, receiptUpdates, retiredIds]);
 
   // Both scopes. The panel and the message menu call these same two functions,
   // so a pin started in one place behaves identically to one started in the

@@ -1,3 +1,4 @@
+import {usePush} from '../contexts/PushContext';
 import { useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import useNetworkStatus from '@/hooks/useNetworkStatus';
@@ -27,6 +28,8 @@ const TYPES = [
   { value: 'new_message', label: 'New messages' },
   { value: 'file_uploaded', label: 'Uploaded files' },
   { value: 'room_invite', label: 'Room invites' },
+  { value: 'member_joined', label: 'New room members' },
+  { value: 'task', label: 'Task assignments' },
 ];
 
 /**
@@ -46,6 +49,7 @@ const TYPES = [
 export default function Settings() {
   const { setRoomHeader } = useOutletContext();
   const { toast } = useToast();
+  const push=usePush();
 
   const [preferences, setPreferences] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -61,12 +65,13 @@ export default function Settings() {
 
   useEffect(() => {
     let active = true;
-    getPreferences()
+    const refresh=()=>getPreferences()
       .then((value) => active && setPreferences(value))
       .catch(() => active && setPreferences(null))
       .finally(() => active && setIsLoading(false));
+    refresh();window.addEventListener('conclave:preferences-changed',refresh);
     return () => {
-      active = false;
+      active = false;window.removeEventListener('conclave:preferences-changed',refresh);
     };
   }, []);
 
@@ -131,6 +136,21 @@ export default function Settings() {
           Conclave records everything you are shown either way. These settings decide what interrupts
           you, not what the workspace keeps.
         </p>
+
+        <div className="mt-5 space-y-3 rounded-lg border border-line p-4">
+          <h3 className="text-label font-semibold text-ink">Background notifications</h3>
+          <label className="flex items-center justify-between gap-3 text-body text-ink">Allow background alerts on your devices
+            <input type="checkbox" checked={preferences?.push_enabled!==false} disabled={savingKey==='push'} onChange={event=>save({push_enabled:event.target.checked},'push')} className="h-4 w-4 rounded border-line text-brand" />
+          </label>
+          <p role="status" className="text-metadata text-muted">{({loading:'Checking this browser…',enabled:'This browser is subscribed.',disabled:'Background notifications are off in this browser.',denied:'Notifications are blocked in browser settings. Allow them there, then retry.',unsupported:'Background notifications are not supported in this browser or context.',unconfigured:'Background notifications are not configured on the server.',error:'Background notifications need attention.'})[push?.status||'unsupported']}</p>
+          {push?.error&&<p role="alert" className="text-metadata text-error">{push.error}</p>}
+          <div className="flex flex-wrap gap-2">
+            {['disabled','error'].includes(push?.status)&&<button type="button" onClick={push.enable} className="rounded-lg bg-brand px-3 py-2 text-label text-surface">Enable in this browser</button>}
+            {push?.status==='enabled'&&<button type="button" onClick={push.disable} className="rounded-lg border border-line px-3 py-2 text-label text-ink">Disable in this browser</button>}
+            {['denied','error'].includes(push?.status)&&<button type="button" onClick={push.retry} className="rounded-lg border border-line px-3 py-2 text-label text-ink">Retry notification setup</button>}
+          </div>
+          <p className="text-metadata text-muted">Background alerts use a generic preview. Your saved preferences, conversation mutes, blocks and active conversations control delivery. Browser and operating system settings also apply.</p>
+        </div>
 
         <fieldset className="mt-5">
           <legend className="text-label font-semibold text-ink">Notify me about</legend>

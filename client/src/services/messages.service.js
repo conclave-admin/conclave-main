@@ -160,3 +160,11 @@ export async function getRoomReceiptSummaries(roomId, ids) {
   const { data } = await api.get(`/messages/room/${roomId}/receipts`, { params: { ids: ids.join(',') } });
   return data.data;
 }
+
+export async function getMessageSnapshots(roomId, ids) {
+  if(isDevAuthBypass){
+    const messages=previewMessages.filter(m=>ids.includes(m.id)).map(m=>({...m,room_id:roomId}));
+    return {messages,missingIds:ids.filter(id=>!messages.some(m=>m.id===id))};
+  }
+  return (await api.get(`/messages/room/${roomId}`,{params:{ids:ids.join(',')}})).data.data;
+}

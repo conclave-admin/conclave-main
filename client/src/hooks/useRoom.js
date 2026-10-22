@@ -1,3 +1,4 @@
+import {useSyncReconciler} from '../contexts/SyncContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { subscribeToRoom } from '../lib/roomSubscriptions';
 import { getRoom } from '../services/rooms.service';
@@ -16,27 +17,30 @@ export default function useRoom(roomId) {
   const generation = useRef(0);
   const revoked = useRef(false);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (options={}) => {
     const version = ++generation.current;
-    const valid = () => generation.current === version && !revoked.current;
+    const valid = () => generation.current === version && !revoked.current && (!options?.isCurrent||options.isCurrent());
     try {
       const value = navigator.onLine === false
         ? await readRoomMetadata(userId, roomId) : await getRoom(roomId);
-      if (!valid()) return null;
+      if (!valid()) {if(options?.strict)throw new Error('Room refresh superseded');return null;}
       setRoom(value);
       setError(value ? '' : 'This conversation has not been saved on this device yet.');
       if (value) await saveRoomMetadata(userId, roomId, value);
       return value;
     } catch (err) {
-      if (!valid()) return null;
+      if (!valid()) {if(options?.strict)throw new Error('Room refresh superseded');return null;}
       if ([403, 404].includes(err.response?.status)) {
         setRoom(null);
         await saveRoomMetadata(userId, roomId, null);
       }
       setError(err.response?.data?.message || 'Could not refresh this conversation.');
+      if(options?.strict && ![403,404].includes(err.response?.status))throw err;
       return null;
     } finally { if (valid()) setIsLoading(false); }
   }, [roomId, userId]);
+
+  useSyncReconciler(async batch=>{if(batch.reset||batch.changes.some(c=>c.kind==='profile'||c.room_id===roomId&&['room','membership','preferences'].includes(c.kind))){revoked.current=false;await reload({strict:true,isCurrent:batch.isCurrent});}},[userId,roomId]);
 
   useEffect(() => {
     revoked.current = false;

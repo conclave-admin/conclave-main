@@ -1,3 +1,4 @@
+import {useSyncReconciler} from '../../contexts/SyncContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Avatar from '@/components/ui/Avatar';
 import PopoverMenu from '@/components/ui/PopoverMenu';
@@ -41,6 +42,8 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
   const triggerRef = useRef(null);
   const { toast } = useToast();
   const { socket } = useRealtime();
+
+  useSyncReconciler(async batch=>{if(batch.reset||batch.changes.some(c=>c.room_id===roomId&&c.kind==='message')){try{setMessages(await listPinnedMessages(roomId));}catch(error){if([403,404].includes(error.response?.status))setMessages([]);else throw error;}}},[roomId]);
 
   const merge = useCallback((incoming) => {
     setMessages((prev) => {

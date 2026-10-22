@@ -36,8 +36,8 @@ export async function listNotifications({ before, unseenOnly } = {}) {
  * Mark notifications seen — one, or all of them.
  *
  * The response is `{ updated }`, the count of rows THIS call changed, not the
- * total remaining. The client subtracts it, so a badge can be corrected
- * without a second request.
+ * total remaining. The client refreshes the authoritative list and count;
+ * subtracting deltas would double-count echoed or replayed events.
  *
  * Marking something already seen returns a 404 for the single path; the server
  * treats "not yours" and "already seen" as the same answer on purpose, since
@@ -51,6 +51,7 @@ export async function markSeen({ notificationId, all } = {}) {
     const count = all
       ? previewNotifications.filter((n) => !n.seen).length
       : previewNotifications.filter((n) => n.id === notificationId && !n.seen).length;
+    previewNotifications.forEach(n=>{if(all||n.id===notificationId)n.seen=true;});
     return { updated: count };
   }
   const { data } = await api.patch('/notifications/seen', { notificationId, all });

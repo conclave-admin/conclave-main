@@ -1370,6 +1370,8 @@ dbTest('a notification resolves to readable text, and a deleted message to a tom
     )
   ).rows[0];
 
+  await query("INSERT INTO room_members(room_id,user_id,role) VALUES($1,$2,'admin'),($1,$3,'member')",[room.id,authorId,me]);
+
   const message = (
     await query(
       `INSERT INTO messages (room_id, sender_id, content)

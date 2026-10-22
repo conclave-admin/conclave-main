@@ -63,7 +63,8 @@ export async function updateRoomPreferences(roomId, updates) {
 export async function getRoom(roomId) {
   if (isDevAuthBypass) {
     const found = previewRooms.find((room) => room.id === roomId);
-    return { ...(found || previewRoom), id: roomId };
+    if (!found) throw Object.assign(new Error('You no longer have access to this conversation.'), { response: { status: 403, data: { message: 'You no longer have access to this conversation.' } } });
+    return { ...found, id: roomId };
   }
   const { data } = await api.get(`/rooms/${roomId}`);
   return data.data;

@@ -5,6 +5,8 @@ import ProtectedRoute from './components/routing/ProtectedRoute';
 import PublicOnlyRoute from './components/routing/PublicOnlyRoute';
 import Spinner from './components/ui/Spinner';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { PushProvider } from './contexts/PushContext';
+import { SyncProvider } from './contexts/SyncContext';
 import { RealtimeProvider } from './contexts/RealtimeContext';
 import { OutboxProvider } from './contexts/OutboxContext';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -62,6 +64,8 @@ export default function App() {
       <ToastProvider>
         <AuthProvider>
           <RealtimeProvider>
+            <SyncProvider>
+            <PushProvider>
             <OutboxProvider>
             <Suspense fallback={<Spinner fullPage label="Loading" />}>
             <Routes>
@@ -116,6 +120,8 @@ export default function App() {
             </Routes>
             </Suspense>
             </OutboxProvider>
+            </PushProvider>
+            </SyncProvider>
           </RealtimeProvider>
         </AuthProvider>
       </ToastProvider>
