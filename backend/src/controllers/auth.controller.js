@@ -5,6 +5,7 @@ const env = require('../config/env');
 const asyncHandler = require('../utils/asyncHandler');
 const { ok } = require('../utils/apiResponse');
 const ApiError = require('../utils/ApiError');
+const { revokeSessionAccess } = require('../services/realtimeAccess.service');
 const {
   signAccessToken,
   signRefreshToken,
@@ -66,15 +67,18 @@ function hashToken(token) {
 }
 
 async function issueSession(user) {
-  const accessToken = signAccessToken({ id: user.id, email: user.email });
-  const refreshToken = signRefreshToken({ id: user.id });
-
+  const sessionId = crypto.randomUUID();
+  const accessToken = signAccessToken({ ...user, sessionId });
+  const refreshToken = signRefreshToken({ id: user.id, sessionId });
+  // One statement ensures a refresh token never exists without its session.
   await query(
-    `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
-     VALUES ($1, $2, NOW() + $3::interval)`,
-    [user.id, hashToken(refreshToken), refreshExpiryInterval()],
+    `WITH session AS (
+       INSERT INTO auth_sessions (id, user_id, expires_at)
+       VALUES ($1, $2, NOW() + $4::interval) RETURNING id
+     ) INSERT INTO refresh_tokens (user_id, token_hash, expires_at, session_id)
+       SELECT $2, $3, NOW() + $4::interval, id FROM session`,
+    [sessionId, user.id, hashToken(refreshToken), refreshExpiryInterval()],
   );
-
   return { user, accessToken, refreshToken };
 }
 
@@ -139,6 +143,7 @@ const refresh = asyncHandler(async (req, res) => {
     throw new ApiError(401, 'Invalid or expired refresh token');
   }
 
+  if (!payload.sid) throw new ApiError(401, 'Please sign in again to renew this session');
   const tokenHash = hashToken(refreshToken);
   const client = await pool.connect();
   let committed = false;
@@ -151,10 +156,12 @@ const refresh = asyncHandler(async (req, res) => {
     await client.query('BEGIN');
 
     const stored = await client.query(
-      `SELECT 1 FROM refresh_tokens
-        WHERE user_id = $1 AND token_hash = $2 AND revoked_at IS NULL AND expires_at > NOW()
-        FOR UPDATE`,
-      [payload.sub, tokenHash],
+      `SELECT s.id FROM auth_sessions s
+        JOIN refresh_tokens r ON r.session_id = s.id
+        WHERE s.id = $3 AND s.user_id = $1 AND s.revoked_at IS NULL AND s.expires_at > NOW()
+          AND r.user_id = $1 AND r.token_hash = $2 AND r.revoked_at IS NULL AND r.expires_at > NOW()
+        FOR UPDATE OF s, r`,
+      [payload.sub, tokenHash, payload.sid],
     );
     if (stored.rows.length === 0) {
       throw new ApiError(401, 'Refresh token not recognized — please log in again');
@@ -169,19 +176,20 @@ const refresh = asyncHandler(async (req, res) => {
       throw new ApiError(401, 'User no longer exists');
     }
 
-    const accessToken = signAccessToken(user);
-    const nextRefresh = signRefreshToken({ id: user.id });
+    const accessToken = signAccessToken({ ...user, sessionId: payload.sid });
+    const nextRefresh = signRefreshToken({ id: user.id, sessionId: payload.sid });
 
     await client.query(
       `UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1`,
       [tokenHash],
     );
     await client.query(
-      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
-       VALUES ($1, $2, NOW() + $3::interval)`,
-      [user.id, hashToken(nextRefresh), refreshExpiryInterval()],
+      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, session_id)
+       VALUES ($1, $2, NOW() + $3::interval, $4)`,
+      [user.id, hashToken(nextRefresh), refreshExpiryInterval(), payload.sid],
     );
 
+    await client.query('UPDATE auth_sessions SET expires_at = NOW() + $2::interval WHERE id = $1', [payload.sid, refreshExpiryInterval()]);
     await client.query('COMMIT');
     committed = true;
 
@@ -196,14 +204,32 @@ const refresh = asyncHandler(async (req, res) => {
 
 const logout = asyncHandler(async (req, res) => {
   const { refreshToken } = req.body;
-  if (refreshToken) {
-    await query(
-      `UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL`,
-      [hashToken(refreshToken)],
-    );
+  if (typeof refreshToken === 'string' && refreshToken) {
+    const client = await pool.connect();
+    let sessionId;
+    try {
+      await client.query('BEGIN');
+      // Lock the stable session, just as refresh does. A rotated token can
+      // still revoke its own session, but never another device's session.
+      const result = await client.query(
+        `SELECT s.id FROM auth_sessions s JOIN refresh_tokens r ON r.session_id = s.id
+          WHERE r.token_hash = $1 FOR UPDATE OF s`, [hashToken(refreshToken)],
+      );
+      sessionId = result.rows[0]?.id;
+      if (sessionId) {
+        await client.query('UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE id = $1', [sessionId]);
+        await client.query('UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, NOW()) WHERE session_id = $1', [sessionId]);
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally { client.release(); }
+    const io = req.app.get('io');
+    if (sessionId && io) {
+      await revokeSessionAccess(io, sessionId);
+    }
   }
-  // Always the same response either way, so this cannot be used to probe
-  // whether a token is live.
   return ok(res, { message: 'Logged out' });
 });
 

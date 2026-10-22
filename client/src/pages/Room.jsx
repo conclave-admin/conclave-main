@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { activeReadView } from '../lib/messageReads';
+import MessageInfoDialog from '../components/chat/MessageInfoDialog';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
 import ForwardMessageDialog from '../components/chat/ForwardMessageDialog';
 import FlagAsTaskDialog from '../components/chat/FlagAsTaskDialog';
@@ -47,6 +49,7 @@ export default function Room() {
   const { toast } = useToast();
   const [browserOnline, setBrowserOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine !== false);
   const { room, isLoading: roomLoading, error: roomError } = useRoom(roomId);
+  const [messageInfo, setMessageInfo] = useState(null);
   const [replyTo, setReplyTo] = useState(null);
   const [editing, setEditing] = useState(null);
   const [editDraft, setEditDraft] = useState('');
@@ -91,12 +94,13 @@ export default function Room() {
     pinMessage,
     unpinMessage,
     typingUserIds,
+    recordingUserIds,
     readPointers,
     readSequences,
     deliveredSequences,
     deliveryIds,
     lastSeenSequence,
-  } = useMessages(roomId, members, anchorId);
+  } = useMessages(roomError && !room ? null : roomId, members, anchorId);
 
   useEffect(() => {
     setHighlightedId(null);
@@ -141,11 +145,11 @@ export default function Room() {
     [members, readPointers, readSequences, deliveredSequences],
   );
 
-  const handleMessageVisible = (message) => {
-    if (socket?.connected && message?.id && !String(message.id).startsWith('optimistic-')) {
-      socket.emit('message-read', { roomId, messageId: message.id });
-    }
-  };
+  const handleMessageVisible = useCallback(async (message) => {
+    if (!socket?.connected || !activeReadView() || !message?.id || message._optimistic) return false;
+    const response = await socket.timeout(6000).emitWithAck('message-read', { roomId, messageId: message.id });
+    return response?.ok === true;
+  }, [socket, roomId]);
 
   useEffect(() => {
     if (!room) return undefined;
@@ -310,6 +314,7 @@ export default function Room() {
             roomId={roomId}
             deliveryIds={deliveryIds}
             typingUserIds={typingUserIds}
+            recordingUserIds={recordingUserIds}
             hasMore={hasMore}
             isLoadingOlder={isLoadingOlder}
             onLoadOlder={loadOlder}
@@ -326,6 +331,8 @@ export default function Room() {
             onUnpin={handleUnpin}
             lastSeenSequence={lastSeenSequence}
             onMessageVisible={handleMessageVisible}
+            readsEnabled={isConnected && !messageInfo && !threadRoot && !editing && !deleting && !promoting && !flagging && !creatingPoll && !forwarding}
+            onMessageInfo={setMessageInfo}
             onOpenThread={setThreadRoot}
             onForward={setForwarding}
             onJumpToMessage={jumpToMessage}
@@ -347,10 +354,16 @@ export default function Room() {
         onCreateDecision={() => setPromoting({ manual: true })}
         onCreateTask={() => setFlagging({ manual: true })}
         members={members}
+        activityScope={roomId}
         onTyping={handleTyping}
+        onStopTyping={stopTyping}
+        onRecording={() => { if (socket?.connected) socket.emit('start-recording', { roomId }); }}
+        onStopRecording={() => { if (socket?.connected) socket.emit('stop-recording', { roomId }); }}
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(null)}
       />
+
+      <MessageInfoDialog message={messageInfo} onClose={() => setMessageInfo(null)} />
 
       <ForwardMessageDialog message={forwarding} onClose={() => setForwarding(null)} />
 

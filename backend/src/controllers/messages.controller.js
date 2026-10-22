@@ -13,6 +13,8 @@ const {
 const { assertAllowedEmoji, attachReactions } = require("../services/reaction.service");
 const { attachPins: attachMessagePins, pinMessage, unpinMessage, listRoomPins } = require("../services/messagePin.service");
 const { attachPolls } = require("../services/poll.service");
+const { attachReceiptSummaries } = require("../services/messageReceipt.service");
+const attachPollsAndReceipts = async rows => attachReceiptSummaries(await attachPolls(rows));
 
 const PAGE_SIZE = 50;
 
@@ -52,6 +54,12 @@ const listMessages = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
   const { before, afterSeq } = req.query;
 
+  if(req.query.ids!==undefined){
+    const ids=typeof req.query.ids==='string'?req.query.ids.split(','):[];
+    if(!ids.length||ids.length>200||ids.some(id=>!UUID.test(id))||before!==undefined||afterSeq!==undefined||req.query.around!==undefined)throw new ApiError(400,'Provide 1–200 message IDs without another cursor');
+    return ok(res,await require('../services/messageSnapshot.service').snapshots(roomId,req.user.id,ids));
+  }
+
   // 1. Verify the caller is a member of this room
   const membership = await query(
     `SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2`,
@@ -73,13 +81,14 @@ const listMessages = asyncHandler(async (req, res) => {
   let sql = `
     SELECT
       m.id,
+      m.state_version,
       m.client_id,
       m.album_id,
       m.forwarded,
       m.room_sequence,
       m.room_id,
       m.sender_id,
-      u.display_name AS sender_name,
+      u.profile_version AS sender_profile_version,u.display_name AS sender_name,
       u.avatar_url   AS sender_avatar,
       -- Deleted messages stay in the timeline (so replies and ordering hold)
       -- but their body is withheld. is_deleted lets the client render a
@@ -162,7 +171,7 @@ const listMessages = asyncHandler(async (req, res) => {
 
   const ascending = afterSeq !== undefined;
   sql += `
-    GROUP BY m.id, m.room_id, m.sender_id, u.display_name, u.avatar_url,
+    GROUP BY m.id, m.room_id, m.sender_id, u.profile_version, u.display_name, u.avatar_url,
              m.client_id, m.album_id, m.forwarded, m.room_sequence, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
     ORDER BY m.room_sequence ${ascending ? 'ASC' : 'DESC'} LIMIT $${params.length + 1}`;
   params.push(ascending ? 200 : PAGE_SIZE);
@@ -171,7 +180,7 @@ const listMessages = asyncHandler(async (req, res) => {
 
   // 3. Attach reactions, then return with the cursor for the next page.
   //    One extra query for the whole page, not one per message.
-  const messages = await attachPolls(
+  const messages = await attachPollsAndReceipts(
     await attachMessagePins(
       await attachReactions(result.rows, req.user.id),
       req.user.id,
@@ -202,60 +211,12 @@ const listMessages = asyncHandler(async (req, res) => {
  * shape. Returning the raw updated row would have reintroduced exactly the drift
  * that Bug 6 describes, one endpoint at a time.
  */
-async function getMessagePayload(messageId, viewerId) {
-  const result = await query(
-    `SELECT m.id, m.room_id, m.sender_id, m.client_id, m.album_id, m.forwarded, m.room_sequence,
-            u.display_name AS sender_name,
-            u.avatar_url   AS sender_avatar,
-            CASE WHEN m.deleted_at IS NOT NULL THEN NULL ELSE m.content END AS content,
-            m.deleted_at IS NOT NULL AS is_deleted,
-            m.reply_to_id,
-            m.edited_at,
-            m.deleted_at,
-            m.created_at,
-            COALESCE(
-              json_agg(
-                json_build_object(
-                  'id',        a.id,
-                  'filename',  a.filename,
-                  'size',      a.size_bytes,
-                  'mime_type', a.file_type,
-                  'url',       a.file_url,
-                  'width',     a.width,
-                  'height',    a.height,
-                  'preview_url', a.preview_url,
-                  'duration', a.duration
-                )
-              ) FILTER (WHERE a.id IS NOT NULL),
-              '[]'
-            ) AS attachments,
-            COALESCE(
-              (SELECT json_agg(mm.user_id)
-                 FROM message_mentions mm
-                WHERE mm.message_id = m.id),
-              '[]'
-            ) AS mentioned_user_ids
-     FROM messages m
-     INNER JOIN users u ON u.id = m.sender_id
-     LEFT JOIN attachments a ON a.message_id = m.id
-     WHERE m.id = $1
-     GROUP BY m.id, m.room_id, m.sender_id, m.client_id, m.room_sequence, u.display_name, u.avatar_url,
-              m.album_id,
-      m.forwarded, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at`,
-    [messageId],
-  );
-
-  if (result.rows.length === 0) {
-    throw new ApiError(404, "Message not found");
-  }
-
-  const [message] = await attachPolls(
-    await attachMessagePins(
-      await attachReactions(result.rows, viewerId),
-      viewerId,
-    ),
-  );
-  return message;
+async function getMessagePayload(messageId,viewerId){
+  const found=await query('SELECT room_id FROM messages WHERE id=$1',[messageId]);
+  if(!found.rows.length)throw new ApiError(404,'Message not found');
+  const result=await require('../services/messageSnapshot.service').snapshots(found.rows[0].room_id,viewerId,[messageId]);
+  if(!result.messages.length)throw new ApiError(404,'Message not found');
+  return result.messages[0];
 }
 
 // ---------- searchMessages ----------
@@ -295,13 +256,14 @@ const searchMessages = asyncHandler(async (req, res) => {
   const result = await query(
     `SELECT
        m.id,
+      m.state_version,
        m.room_id,
        m.sender_id,
        m.client_id,
        m.album_id,
       m.forwarded,
        m.room_sequence,
-       u.display_name AS sender_name,
+       u.profile_version AS sender_profile_version,u.display_name AS sender_name,
        u.avatar_url   AS sender_avatar,
        m.content,
        m.reply_to_id,
@@ -344,7 +306,7 @@ const searchMessages = asyncHandler(async (req, res) => {
      WHERE m.room_id = $1
        AND m.deleted_at IS NULL
        AND to_tsvector('english', m.content) @@ plainto_tsquery('english', $2)
-     GROUP BY m.id, m.room_id, m.sender_id, m.client_id, m.room_sequence, u.display_name, u.avatar_url,
+     GROUP BY m.id, m.room_id, m.sender_id, m.client_id, m.room_sequence, u.profile_version, u.display_name, u.avatar_url,
               m.album_id,
       m.forwarded, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
      ORDER BY rank DESC, m.created_at DESC
@@ -353,7 +315,7 @@ const searchMessages = asyncHandler(async (req, res) => {
   );
 
   return ok(res, {
-    messages: await attachPolls(
+    messages: await attachPollsAndReceipts(
       await attachMessagePins(
         await attachReactions(result.rows, req.user.id),
         req.user.id,
@@ -542,3 +504,15 @@ const listRoomMedia = asyncHandler(async (req, res) => {
 });
 
 module.exports = { sendMessage, listMessages, searchMessages, editMessage: editMessageHandler, deleteMessage: deleteMessageHandler, addReaction: addReactionHandler, removeReaction: removeReactionHandler, pinMessageHandler, unpinMessageHandler, listPinnedMessages, listRoomMedia };
+
+module.exports.getMessageReceipts = asyncHandler(async (req, res) => ok(res, await require('../services/messageReceipt.service').details(req.params.messageId, req.user.id)));
+
+module.exports.getRoomReceiptSummaries = asyncHandler(async (req, res) => {
+  const ids = typeof req.query.ids === 'string' ? req.query.ids.split(',') : [];
+  if (!ids.length || ids.length > 200 || ids.some(id => !UUID.test(id))) throw new ApiError(400, 'Provide up to 200 message IDs');
+  const receipts = await require('../services/realtimeAccess.service').withRoomMembership(req.params.roomId, req.user.id, async db => {
+    const rows = await db.query('SELECT id FROM messages WHERE room_id=$1 AND id=ANY($2::uuid[])', [req.params.roomId, ids]);
+    return (await attachReceiptSummaries(rows.rows, db)).map(m => ({ messageId: m.id, receipt_summary: m.receipt_summary }));
+  });
+  return ok(res, { roomId: req.params.roomId, receipts });
+});

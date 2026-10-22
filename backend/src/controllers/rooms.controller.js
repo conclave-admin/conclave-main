@@ -2,6 +2,8 @@ const { pool, query } = require("../config/db");
 const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
+const presence = require("../services/presence.service");
+const { revokeRoomAccess } = require("../services/realtimeAccess.service");
 const {
   createNotification,
   presentNotification,
@@ -630,6 +632,11 @@ const addMember = asyncHandler(async (req, res) => {
   // tell the invitee about a membership that could still roll back — and this row
   // sat unreachable for the whole of item A, so actually sending it is the point.
   const io = req.app.get("io");
+  if (io) {
+    const event = { roomId, action: 'joined', userId, actorId: req.user.id };
+    io.to(roomId).emit('room:members', event);
+    io.to(`user:${userId}`).emit('room:members', event);
+  }
   const presented = await presentNotification(inviteRow);
   emitNotification(io, userId, presented);
   for (const row of joinedRows) {
@@ -649,42 +656,19 @@ const addMember = asyncHandler(async (req, res) => {
 });
 
 // ---------- markRoomSeen ----------
-// Stamps room_members.last_seen_at for the caller. This is the only REST
-// writer of that column, and the digest depends on it: until it moves, every
-// digest reports everything since the user joined the room (BACKEND_TASKS.md
-// Bug 2). Called by the client when a room is opened, and by the socket on
-// leave-room.
-//
-// It now emits `room-seen` to the room. Without this there were two writers of
-// last_seen_at — this route and the message-read socket event — and only one
-// of them told anybody. A read tick on another member's screen would therefore
-// update when they scrolled a room live and stay stale when they opened it,
-// which is the same bug from two directions.
+// Explicit mark-all-read command. Opening and leaving a timeline do not call
+// this endpoint; automatic reads acknowledge individual visible messages.
 const markRoomSeen = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
 
-  const result = await query(
-    `UPDATE room_members
-        SET last_seen_at = NOW(),
-            last_seen_sequence = COALESCE((SELECT MAX(room_sequence) FROM messages WHERE room_id = $1), last_seen_sequence)
-      WHERE room_id = $1 AND user_id = $2
-      RETURNING last_seen_at, last_seen_sequence`,
-    [roomId, req.user.id],
-  );
-
-  if (result.rows.length === 0) {
-    throw new ApiError(403, "You are not a member of this room");
-  }
-
-  const lastSeenAt = result.rows[0].last_seen_at;
-
-  const io = req.app.get('io');
-  if (io) io.to(roomId).emit('room-seen', {
-    roomId, userId: req.user.id, lastSeenAt,
-    lastSeenSequence: result.rows[0].last_seen_sequence,
+  // An explicit “mark read” command, independent of automatic viewport reads.
+  const result = await require('../services/messageReceipt.service').acknowledge({
+    roomId, userId: req.user.id, read: true, all: true, io: req.app.get('io'),
   });
-
-  return ok(res, { roomId, lastSeenAt });
+  const io = req.app.get('io');
+  if (io) io.to(roomId).emit('room-seen', { roomId, userId: req.user.id,
+    lastSeenAt: result.last_seen_at, lastSeenSequence: result.last_seen_sequence });
+  return ok(res, { roomId, lastSeenAt: result.last_seen_at });
 });
 
 // ---------- updateRoom ----------
@@ -777,6 +761,8 @@ const updateRoom = asyncHandler(async (req, res) => {
 const removeMember = asyncHandler(async (req, res) => {
   const { roomId, userId } = req.params;
   const isSelf = userId === req.user.id;
+  const io = req.app.get('io');
+  let revocationStarted = false;
   const client = await pool.connect();
   try {
   await client.query('BEGIN');
@@ -817,9 +803,12 @@ const removeMember = asyncHandler(async (req, res) => {
     roomId,
     userId,
   ]);
+  revocationStarted = true;
+  await revokeRoomAccess(io, roomId, userId);
   await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
+    if (revocationStarted && io) io.to(`user:${userId}`).emit('room:resync', { roomId });
     throw err;
   } finally {
     client.release();
@@ -828,8 +817,8 @@ const removeMember = asyncHandler(async (req, res) => {
   // After the delete, not inside it: a member removed here is told over the same
   // channel every other membership change goes out on, so an open room in their
   // client does not keep showing them as a member until they refresh.
-  const io = req.app.get("io");
   if (io) {
+    await presence.publishRoomPresence(io, roomId);
     io.to(roomId).emit("room:members", {
       roomId,
       action: isSelf ? "left" : "removed",

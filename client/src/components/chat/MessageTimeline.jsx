@@ -1,3 +1,4 @@
+import { observeMessageReads } from '../../lib/messageReads';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import IconArrowDown from '@/assets/icons/arrow-down.svg?react';
 import EmptyState from '../ui/EmptyState';
@@ -46,6 +47,7 @@ export default function MessageTimeline({
   roomId,
   deliveryIds,
   typingUserIds = [],
+  recordingUserIds = [],
   hasMore,
   isLoadingOlder,
   onLoadOlder,
@@ -58,7 +60,9 @@ export default function MessageTimeline({
   onUnpin,
   onToggleReaction,
   lastSeenSequence = 0,
+  onMessageInfo,
   onMessageVisible,
+  readsEnabled = true,
   onOpenThread,
   onForward,
   onJumpToMessage,
@@ -72,7 +76,8 @@ export default function MessageTimeline({
   const heightBeforeOlderRef = useRef(0);
   const [showJump, setShowJump] = useState(false);
   const [newBelow, setNewBelow] = useState(0);
-  const visibleIds = useRef(new Set());
+  const visibleIds = useMemo(() => new Set(), [roomId]);
+  const pendingReads = useMemo(() => new Set(), [roomId]);
 
   const hasMessages = messages.length > 0;
   const annotated = useMemo(() => annotateMessages(messages), [messages]);
@@ -169,20 +174,10 @@ export default function MessageTimeline({
 
   useEffect(() => {
     const container = scrollContainerRef?.current;
-    if (!container || !onMessageVisible || typeof IntersectionObserver === 'undefined') return undefined;
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (!entry.isIntersecting) return;
-        const id = entry.target.getAttribute('data-message-id');
-        const message = annotated.find((row) => row.id === id);
-        if (!message || visibleIds.current.has(id)) return;
-        visibleIds.current.add(id);
-        onMessageVisible(message);
-      });
-    }, { root: container, threshold: 0.55 });
-    container.querySelectorAll('[data-message-id]').forEach((node) => observer.observe(node));
-    return () => observer.disconnect();
-  }, [annotated, onMessageVisible, scrollContainerRef]);
+    if (!container || !onMessageVisible) return undefined;
+    return observeMessageReads({ container, confirmed: visibleIds, inFlight: pendingReads, enabled: readsEnabled,
+      messages: new Map(annotated.filter(message => message.sender_id !== viewerId && !message._optimistic).map(message => [message.id, message])), onRead: onMessageVisible });
+  }, [annotated, onMessageVisible, scrollContainerRef, visibleIds, pendingReads, readsEnabled, viewerId]);
 
   // Images loading, the composer growing and the mobile keyboard opening all
   // change heights without a message arriving. Stay on the bottom through them.
@@ -276,6 +271,7 @@ export default function MessageTimeline({
               roomId={roomId}
               replyTarget={replyTargetFor(message)}
               deliveryIds={deliveryIds}
+              onMessageInfo={onMessageInfo}
               onReply={onReply}
               onEdit={onEdit}
               onDelete={onDelete}
@@ -292,7 +288,7 @@ export default function MessageTimeline({
         </Fragment>
       ))}</div></div>)}
 
-      <TypingIndicator typingUserIds={typingUserIds} members={members} />
+      <TypingIndicator recordingUserIds={recordingUserIds} typingUserIds={typingUserIds} members={members} />
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {annotated.length ? `${annotated.length} messages loaded. Latest message from ${annotated.at(-1)?.sender_name || 'a member'}.` : ''}
       </span>

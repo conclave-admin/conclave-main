@@ -43,10 +43,13 @@ async function shutdown(signal) {
     // that are already being disconnected.
     presence.stopHeartbeatSweep();
     await storageCleanup.stopStorageCleanup();
+    await require('./services/sync.service').stop();
+    await require('./services/push.service').stop();
 
     // io.close() disconnects every socket and, because the server was attached,
     // closes the underlying HTTP server too.
     if (io) await new Promise((resolve) => io.close(resolve));
+    await presence.drainCleanup();
 
     // Belt and braces in case the HTTP server outlived io.close().
     if (httpServer && httpServer.listening) {
@@ -98,6 +101,8 @@ async function main() {
   // addMember writes a room_invite notification row that nobody is ever told
   // about. Controllers read it as req.app.get('io').
   app.set('io', io);
+  require('./services/sync.service').start(io);
+  require('./services/push.service').start();
 
   httpServer.listen(env.port, () => {
     console.log(`API + Socket.IO listening on http://localhost:${env.port}`);

@@ -1,7 +1,9 @@
 # API Contracts
 
 Base URL: `http://localhost:7000/api`
-Auth: `Authorization: Bearer <accessToken>` on every route except `/auth/*` and `/health`.
+Auth: `Authorization: Bearer <accessToken>` on protected routes. Public health,
+auth, and push configuration routes have their own rules; push renewal uses a
+scoped credential as documented below.
 
 Every response uses the same envelope, from `utils/apiResponse.js`:
 
@@ -20,6 +22,50 @@ on it.
 
 ---
 
+## Recoverable synchronization
+
+`GET /sync?after=<decimal cursor>` returns
+`{cursor, reset, changes, hasMore}`. Cursors are opaque decimal strings; retain
+their precision. Omit `after` for initial/full reconciliation. Invalid cursors
+return 400; expired/future cursors return `reset: true`. A page has up to 200
+authorized changes, each with `cursor`, `kind`, `operation`, `entity_id`,
+`room_id`, and `user_id`. Changes identify invalidated state and contain no body.
+Fetch current authorized state before persisting the returned cursor; continue
+while `hasMore` is true. Repeated changes and socket hints are safe to replay.
+
+`GET /messages/room/:roomId?ids=<comma-separated UUIDs>` returns
+`{messages, missingIds, nextCursor: null}` from an atomic per-viewer snapshot.
+Supply 1–200 IDs without another paging parameter. Current membership is required
+(403 after removal). Missing IDs are authoritative removals for this room.
+Message `sync_version` orders body/related-state updates; `sender_profile_version`
+separately orders sender metadata. Receipt summary versions retain their existing
+monotonic semantics. Preserve pending local outbox entries during reconciliation.
+
+`sync:changed {cursor}` on the personal socket channel is an invalidation hint,
+not an acknowledgement or message payload. Polling `/sync` recovers missed hints.
+
+## Browser push
+
+| Method | Route | Authorization / result |
+| --- | --- | --- |
+| GET | `/push/config` | Public; `{configured, publicKey}`; no private key |
+| POST | `/push/subscriptions` | Bearer session; `{subscription}`; 201 with binding below |
+| DELETE | `/push/subscriptions` | Bearer session; `{endpoint}`; removes caller's endpoint |
+| POST | `/push/renew` | `Authorization: PushRenew <renewalToken>`; `{subscription}`; rotates binding credential |
+
+Registration/renewal returns `{subscriptionId, bindingId, renewalToken, publicKey,
+sessionExpiresAt}`. Store the scoped renewal credential only for the current
+account/session. It cannot read messages or call authenticated APIs. Old tokens
+stop working after renewal; expired/revoked sessions cannot renew. Subscriptions
+must have a supported HTTPS provider endpoint and valid encryption keys.
+Unconfigured delivery returns 503. Registration and renewal are rate limited.
+
+Push payloads contain generic activity and a binding identifier. Current access,
+blocking, preferences, unread state, room mute and foreground presence are checked
+when dispatching. Notification socket events remain hints: clients refresh the
+authoritative list and unread total after delivery/seen events rather than
+subtracting `updated` deltas. See [setup and delivery guarantees](SYNC_AND_PUSH.md).
+
 ## Health
 
 | Method | Path      | Notes                                         |
@@ -37,10 +83,33 @@ by signed-in users; room reads still require membership.
 | POST   | /auth/register | `{ email, password, displayName }` | `{ user, accessToken, refreshToken }` | Validates email format, password 8–72 bytes. Email is stored lowercased.                                                                                         |
 | POST   | /auth/login    | `{ email, password }`              | `{ user, accessToken, refreshToken }` | Case-insensitive on email. Same 401 for unknown, soft-deleted, and wrong password.                                                                               |
 | POST   | /auth/refresh  | `{ refreshToken }`                 | `{ accessToken, refreshToken }`       | ⚠️ **Rotates.** The old token is revoked and a new one issued. **You must persist the returned `refreshToken`** or the user is signed out on the _next_ refresh. |
-| POST   | /auth/logout   | `{ refreshToken }`                 | `{ message }`                         | Revokes. Always returns success, so it cannot be used to probe a token.                                                                                          |
+| POST   | /auth/logout   | `{ refreshToken }`                 | `{ message }`                         | Revokes the stable session and all rotated refresh tokens, disconnecting its sockets on every API instance. Unknown tokens also return success; cluster failures return 503.                                                                                          |
 
 ⚠️ `user` is the same shape from register and login:
 `{ id, email, display_name, avatar_url, bio, created_at }`.
+
+### Durable sessions and realtime access
+
+Access and refresh JWTs contain `sid`, the stable `auth_sessions.id`. Every
+protected REST request, socket handshake and inbound socket action checks the
+session and account in PostgreSQL. Refresh rotates the token while preserving
+`sid`; logout revokes that session across devices sharing its tokens. Other
+independent logins remain active. Account deletion revokes all sessions.
+
+- `session:revoked { sessionId? }`: sign out and stop reconnecting.
+- `session:expired { sessionId }`: the server disconnects even idle sockets at
+  access-token expiry. Refresh the active session and reconnect.
+- Handshake error `data.code`: `AUTH_INVALID`, `ACCESS_EXPIRED`,
+  `SESSION_REVOKED`, or `AUTH_UNAVAILABLE`. Only temporary failures retry.
+- `room:members { roomId, userId, action, actorId, role? }`: `removed` / `left`
+  invalidate local room access; `joined` / `role` refresh membership controls.
+  Affected users receive changes through their personal channel after eviction.
+- `room:resync { roomId }`: rejoin/refetch after a failed removal rolled back.
+
+Room removal holds a database lock until every Redis-adapter peer acknowledges
+local socket eviction and presence/typing cleanup completes. Joining and typing
+use the same room lock so in-flight actions cannot restore revoked access.
+A failed acknowledgement rolls membership back and returns 503.
 
 ## Users
 
@@ -67,7 +136,7 @@ by signed-in users; room reads still require membership.
 | POST   | /rooms/:roomId/join    | —                             | `{ roomId, joined, existing }`          | Joins a public room. Idempotent; private rooms return 403. Membership is required before reading messages. |
 | GET    | /rooms/:roomId         | —                             | room + `members[]`                      | Membership required. Member profiles include `bio` and `account_created_at` alongside room role, join time, and room-scoped last-seen/read pointers. Email addresses are never included. |
 | POST   | /rooms/:roomId/members | `{ userId }`                  | `{ roomId, userId, displayName, role }` | Admin only. 404 if the target is soft-deleted. Writes a `room_invite` notification row but does **not** emit it on the socket.                                                                                                      |
-| POST   | /rooms/:roomId/seen    | —                             | `{ roomId, lastSeenAt }`                | **Call this when a room is opened.** It is the only thing that advances `room_members.last_seen_at` apart from socket `leave-room`, and the entire digest depends on it.                                                            |
+| POST   | /rooms/:roomId/seen    | —                             | `{ roomId, lastSeenAt }`                | **Explicit mark-all-read action only.** Marks existing recipient receipts read and delivered, advances the room pointer, and emits receipt and room-seen updates. Automatic timeline reads use message-read; opening or leaving a room does not mark it all read.                                                            |
 | PATCH  | /rooms/:roomId         | `{ name?, description?, avatar_url? }` | room | Admin only; DMs cannot be edited as rooms. Group avatar uploads are selected from the room info page. |
 | DELETE | /rooms/:roomId/members/:userId | — | `{ roomId, userId, removed }` | Members may remove themselves to leave. Only admins may remove another member; a room must retain an admin. |
 | PATCH  | /rooms/:roomId/members/:userId | `{ role: "admin" | "member" }` | `{ roomId, userId, role }` | Admin only. DMs have no member roles. |
@@ -95,8 +164,9 @@ by signed-in users; room reads still require membership.
 }
 ```
 
-`unread_count` counts messages sent **after `last_seen_at`** that are neither
-your own nor tombstones — a badge pointing at deleted content would open into
+`unread_count` counts messages beyond the contiguous `last_seen_sequence`
+that are neither your own nor tombstones, excluding individually acknowledged
+read receipts even when an earlier unread gap remains — a badge pointing at deleted content would open into
 nothing. It is computed by the same SQL as `chat:updated`, so a row and its
 badge can never disagree.
 
@@ -394,12 +464,11 @@ an existing DM by user id, home summary, or a global cross-room search. See
 ## Socket events
 
 Server → client, as documented at the top of `backend/src/sockets/index.js`:
-`receive-message`, `chat:updated`, `room-presence`, `room:members`, `room-typing`, `typing`, `stop-typing`, `message-read`,
+`receive-message`, `chat:updated`, `room-presence`, `room:members`, `room-typing`, `typing`, `stop-typing`, `start-recording`, `stop-recording`, `privacy:changed`, `message-read`, `message-delivered`, `message:receipts`,
 `task:updated`, `message:updated`, `message:deleted`, `message:reaction`,
 `notification`, `notification:seen`, and `error:message`.
 
-`chat:updated { roomId, lastMessage, unreadCount }` is the **only** event that
-is not broadcast to the chat room: it goes to each member's personal channel
+`chat:updated { roomId, lastMessage, unreadCount }` goes to each member's personal channel
 (`user:<id>`), because `unreadCount` is one person's number. It fires after every
 message create, edit and delete, so a sidebar row updates without being opened.
 `lastMessage` is `null` for a room with nothing in it, and carries
@@ -415,13 +484,177 @@ Errors are emitted on **`error:message`**, not `error` — Socket.IO reserves
 
 Client → server payloads: `join-room { roomId }`, `leave-room { roomId }`,
 `send-message { roomId, clientId?, content?, replyToId?, attachments?, albumId?, mentionedUserIds? }`,
-`typing { roomId }`, `stop-typing { roomId }`, `message-read { roomId, messageId }`,
-`heartbeat {}`.
+`typing { roomId }`, `stop-typing { roomId }`, `start-recording { roomId }`,
+`stop-recording { roomId }`, `message-read { roomId, messageId }`,
+`message-delivered { roomId, messageId }`,
+`heartbeat { foreground?, roomId?, revision? }`.
+
+### Presence and foreground attention
+
+`room-presence` carries a complete, membership-scoped snapshot:
+
+```json
+{
+  "roomId": "uuid",
+  "available": true,
+  "onlineUserIds": [],
+  "viewingUserIds": [],
+  "typingUserIds": [],
+  "recordingUserIds": [],
+  "hiddenUserIds": [],
+  "activity": [],
+  "activityVersion": 12,
+  "checkedAt": 1792670400000
+}
+```
+
+- **Online** means at least one authenticated device has a fresh socket lease,
+  including a connected device elsewhere in Conclave or in a background tab.
+- **Viewing this conversation** additionally requires a visible, focused chat
+  timeline. Subscribing to a room or opening its info page does not imply viewing.
+- **Typing** is temporary; the presence label expires it after five seconds.
+- **Offline** comes from an available, fresh snapshot with no live device.
+- **Unknown** is shown as “Presence unavailable” while disconnected, after resume
+  pending a new snapshot, during a storage outage, or after 45 seconds without a
+  fresh snapshot. Read pointers are never presented as last-seen presence.
+
+Clients send a heartbeat every 15 seconds and immediately on route, focus,
+visibility, online, and page-resume changes. `foreground` is a boolean, `roomId`
+is the active timeline UUID or null, and `revision` increases per device update.
+Delayed older revisions cannot restore an outdated foreground state. The server
+checks room membership before accepting a viewing claim. Legacy empty heartbeats
+renew connectivity without claiming foreground attention.
+
+Heartbeat acknowledgements return `{ ok: true, data: { available, checkedAt } }`.
+`presence:unavailable` invalidates cached snapshots; `presence:resync` asks clients
+to send a fresh heartbeat. Room subscriptions receive full snapshots on join and
+heartbeat. Online/viewing changes are broadcast only to rooms the user belongs to.
+
+Each device lease lasts 45 seconds. A sweep runs every 10 seconds, atomically
+removing expired device, room, typing, and reverse-index records without removing
+another device's renewed lease. Index reconciliation runs approximately once per
+minute. Heartbeats rebuild indexes after Redis data loss using current socket
+subscriptions and locked database membership checks. Redis outages report
+unknown presence; they do not manufacture offline snapshots.
+
+### Typing, recording, and activity privacy
+
+The composer emits typing at most once every 2.5 seconds while text changes,
+with a stop after three idle seconds. Recording pulses every 2.5 seconds only
+while capture is active. Blur, blank input, sending, navigation, disconnect,
+and background transitions stop typing. Blur, navigation, disconnect, and
+background transitions also stop recording indicators. Backgrounding finishes active
+microphone capture; late permission grants after navigation release their tracks.
+Recorder errors and ended microphone tracks stop recording indicators and release
+the microphone.
+
+The server requires membership, a room subscription, a fresh device lease, and
+foreground viewing before accepting a positive activity event. It limits each
+socket to 24 indicator events per 10 seconds before session verification and
+limits positive events to 120 per minute per account across Redis-backed instances.
+Negative events skip the account start limit. Activity acknowledgements return
+`{ ok: true, data: { roomId, accepted } }`; invalid membership or subscription
+returns 403, throttling returns 429, and unavailable activity storage rejects
+positive events with 503.
+
+Activity is stored per device for five seconds. A stop, send, leave, or disconnect
+clears that device; other devices remain active. Event ordering prevents delayed
+starts from undoing newer stops or foreground changes. Full `room-presence` and
+`room-typing` snapshots include `activity` entries shaped as
+`{ userId, kind: "typing" | "recording", ttlMs }`. Clients expire both snapshots
+and incremental events using their remaining TTL. `activityVersion` is a shared,
+increasing room revision; clients reject older activity snapshots and deltas.
+Legacy deltas carry `{ roomId, userId, ttlMs, activityVersion }` and reflect the
+user's aggregate state rather than the originating device alone.
+
+Snapshots are filtered per subscribed member. A block in either direction hides
+online, viewing, typing, and recording between the two users, including in shared
+rooms. Other room members still receive their allowed activity. Block/unblock
+emits `privacy:changed { userId, hidden }` to both users' personal channels,
+invalidates client activity, and refreshes shared-room snapshots. Reverse blocks
+remain effective after one user unblocks. Hidden peers display unknown presence.
+Device IDs, audio content, and microphone permissions are not broadcast.
+These changes require no new migration or environment variables.
 
 `send-message` takes the same body as `POST /messages` and returns the same
 message row on `receive-message`. Pass `mentionedUserIds` — see the warning above
 for what omitting it costs.
 
+
+### Message receipts and send-time recipients
+
+Migration `033_message_receipts.sql` snapshots every message's recipients in the
+same transaction as insertion. This includes text, media, forwards and polls.
+The sender is excluded. Joining, leaving, removal, rejoining, and account deletion
+do not add or remove the original recipients. These rows never grant access to
+a conversation or its attachments.
+
+Message payloads on creation, history, search, pins, edits, deletions and reactions
+include `receipt_summary`:
+
+```json
+{
+  "recipient_count": 3,
+  "delivered_count": 3,
+  "read_count": 1,
+  "history_complete": true,
+  "version": 4
+}
+```
+
+- **Sent:** the server stored the message. A single recipient's acknowledgement
+  does not change a group's tick.
+- **Delivered:** every original recipient acknowledged the message on at least
+  one device. This acknowledges message metadata, not a media download.
+- **Read:** every original recipient acknowledged that specific message as read.
+  Reading also implies delivery. Partial reads remain delivered if everybody
+  received the message, otherwise sent.
+- With zero recipients, or incomplete historical recipient data, the tick stays
+  sent. Pending, queued and failed outbox states still take precedence.
+- A departed recipient's pending receipt stays pending; the information dialog
+  identifies them as no longer in the conversation. New members do not become
+  recipients of older messages.
+
+Automatic reads require a visible, focused, online timeline. The client checks
+intersection against the scrollport and viewport, including very tall messages,
+and suppresses reads behind modal dialogs. It rechecks unchanged intersections
+on focus, visibility, page resume, reconnection and foreground-heartbeat success.
+Only acknowledged reads are deduplicated; failed/offline attempts retry while
+visible. In-flight reads remain deduplicated across renders.
+
+The server checks current membership for all receipt events. Reads additionally
+require a room subscription and that originating device's unexpired Redis lease and foreground
+room claim; background read attempts return 409 and storage outages return 503.
+A read acknowledges only the specified message. The contiguous room pointer
+advances once earlier unread gaps close, rather than marking skipped messages
+read. Delivery works in background tabs and for metadata fetched before a subscription
+finishes. Reconnect retransmits delivery acknowledgements for cached messages,
+including anchored historical timelines. Explicit `POST /rooms/:roomId/seen`
+intentionally marks all existing messages read without a viewport claim.
+
+`message:receipts { roomId, receipts: [{ messageId, receipt_summary }] }` publishes
+aggregate changes to room subscribers. Summary versions increase per message;
+clients reject older summaries, including delayed history and send acknowledgements.
+Existing `message-read` and `message-delivered` events retain user and contiguous
+pointer fields. Per-recipient timestamps are first-ack times and do not change
+on duplicates or acknowledgements from another device.
+
+| Method | Path | Returns | Access |
+| --- | --- | --- | --- |
+| GET | /messages/:messageId/receipts | `{ messageId, sentAt, summary, recipients }` | Sender who is still a room member; otherwise 404. |
+| GET | /messages/room/:roomId/receipts?ids=uuid,uuid | `{ roomId, receipts }` | Current members; 1–200 valid IDs; other rooms' IDs return no data. |
+
+Each recipient detail includes `user_id`, `display_name`, `delivered`, `read`,
+`delivered_at`, `read_at`, and `current_member`. The sender's **Message info**
+action opens these details; receipt events and reconnects refresh an open dialog.
+Reconnection also refreshes summaries for all loaded messages, in batches of 200,
+so a message need not arrive again for its tick to recover.
+
+Older messages are explicitly marked `history_complete: false`: only surviving
+memberships present by the message's creation can be reconstructed. Known flags
+are backfilled from existing pointers, but acknowledgement times stay null.
+The UI explains missing history and shows unavailable times. Missing historical
+recipients and exact times cannot be recovered by this migration.
 
 ### Durable media sends and album ownership
 

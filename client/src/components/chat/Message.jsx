@@ -87,6 +87,7 @@ export default function Message({
   replyTarget,
   albumTile = false,
   deliveryIds,
+  onMessageInfo,
   onReply,
   onEdit,
   onDelete,
@@ -99,7 +100,7 @@ export default function Message({
   onForward,
   onJumpToMessage,
 }) {
-  const { isOnlineIn } = usePresence();
+  const { isOnlineIn, getPresence } = usePresence();
   const mine = message.sender_id === viewerId;
   const [menuOpen, setMenuOpen] = useState(false);
   const bodyRef = useRef(null);
@@ -134,7 +135,7 @@ const bubbleClass = [
           src={message.sender_avatar}
           size="md"
           presence={
-            isOnlineIn(roomId, message.sender_id) ? "online" : "offline"
+            getPresence(roomId, message.sender_id) === 'unknown' ? null : isOnlineIn(roomId, message.sender_id) ? "online" : "offline"
           }
         />
       ) : (
@@ -212,6 +213,7 @@ const bubbleClass = [
                 anchorRef={bodyRef}
                 align={mine ? "end" : "start"}
                 onToggleReaction={(emoji) => onToggleReaction(message, emoji)}
+                onMessageInfo={mine && onMessageInfo ? () => onMessageInfo(message) : undefined}
                 onReply={() => onReply(message)}
                 onOpenThread={() => onOpenThread(message)}
                 onForward={onForward ? () => onForward(message) : undefined}
@@ -253,7 +255,9 @@ const bubbleClass = [
             >
               {formatClockTime(message.created_at)}
             </time>
-            <Tick status={status} />
+            {mine && !message._optimistic && onMessageInfo
+              ? <button type="button" aria-label="Message info" title="View delivery and read details" onClick={() => onMessageInfo(message)} className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"><Tick status={status} /></button>
+              : <Tick status={status} />}
           </div>
         )}
       </div>

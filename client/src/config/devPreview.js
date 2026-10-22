@@ -508,6 +508,9 @@ const listeners = new Map();
 let previewSequence = 100;
 export const previewSocket = {
   connected: true,
+  timeout() {
+    return { emitWithAck: (event, payload) => new Promise(resolve => this.emit(event, payload, resolve)) };
+  },
   on(event, handler) {
     const handlers = listeners.get(event) || new Set();
     handlers.add(handler);
@@ -517,6 +520,7 @@ export const previewSocket = {
     listeners.get(event)?.delete(handler);
   },
   emit(event, payload = {}, acknowledge) {
+    if (['heartbeat', 'message-read', 'message-delivered'].includes(event)) { acknowledge?.({ ok: true, data: { available: true } }); return; }
     // Typing is echoed back as room-typing so the indicator renders offline.
     // `stop-typing` is dropped deliberately: sending clears the sender's typing
     // state, and echoing it would put them straight back on the list.
@@ -555,6 +559,7 @@ export const previewSocket = {
       edited_at: null,
       created_at: new Date().toISOString(),
     };
+    previewMessages.push(message);
     queueMicrotask(() =>
       listeners
         .get('receive-message')

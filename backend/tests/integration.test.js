@@ -57,6 +57,7 @@ let available = false;
 // so anything that needs a user or a room has to be handed one — several tests
 // below were silently asserting against an empty table before this existed.
 let user;
+let fixtureSessionId;
 let room;
 
 async function dropTestDb() {
@@ -101,6 +102,8 @@ test.before(async () => {
        VALUES ('fixture@test.com', 'x', 'Fixture User') RETURNING id, display_name`,
     )
   ).rows[0];
+  fixtureSessionId = randomUUID();
+  await query("INSERT INTO auth_sessions (id, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '7 days')", [fixtureSessionId, user.id]);
   room = (
     await query(
       `INSERT INTO rooms (name, type, created_by, slug)
@@ -373,7 +376,7 @@ async function authedAccount(email) {
 function tokenForFixtureUser() {
   const jwt = require('jsonwebtoken');
   return jwt.sign(
-    { sub: user.id, email: 'fixture@test.com' },
+    { sub: user.id, sid: fixtureSessionId, email: 'fixture@test.com' },
     process.env.JWT_ACCESS_SECRET,
     { expiresIn: '15m' },
   );
@@ -1366,6 +1369,8 @@ dbTest('a notification resolves to readable text, and a deleted message to a tom
       [authorId],
     )
   ).rows[0];
+
+  await query("INSERT INTO room_members(room_id,user_id,role) VALUES($1,$2,'admin'),($1,$3,'member')",[room.id,authorId,me]);
 
   const message = (
     await query(
@@ -2732,7 +2737,6 @@ dbTest('REST and socket sends emit persisted mentions to the recipient personal 
   const presence = require('../src/services/presence.service');
   t.mock.method(presence, 'startHeartbeatSweep', () => {});
   t.mock.method(presence, 'socketConnected', async () => 1);
-  t.mock.method(presence, 'userConnected', async () => {});
   t.mock.method(presence, 'clearTyping', async () => {});
   require('../src/sockets')(io);
   const handlers = new Map();
@@ -2740,6 +2744,8 @@ dbTest('REST and socket sends emit persisted mentions to the recipient personal 
   const joined = [];
   connect({
     id: 'mention-test-socket', user: { id: user.id }, connected: true,
+    data: { sessionId: fixtureSessionId }, authClaims: { sub: user.id, sid: fixtureSessionId },
+    sessionExpiresAt: Date.now() + 60000, disconnect() {},
     on(event, handler) { handlers.set(event, handler); },
     join(target) { joined.push(target); },
     emit(event, body) { if (event === 'error:message') errors.push(body); },
@@ -4599,7 +4605,7 @@ dbTest('a message notifies a member who is not present, but not one who is', asy
   // pass for the wrong reason. Skipped rather than silently green if there is
   // no Redis to talk to.
   const { redisClient, connectRedis } = require('../src/config/redis');
-  const { userJoinedRoom, userLeftRoom } = require('../src/services/presence.service');
+  const { userJoinedRoom, userLeftRoom, socketConnected, socketDisconnected, renewSocket } = require('../src/services/presence.service');
   const connectedHere = !redisClient.isOpen;
   if (connectedHere) {
     try {
@@ -4624,7 +4630,17 @@ dbTest('a message notifies a member who is not present, but not one who is', asy
 
     // Added the way joining a room does it, so the service reads a genuinely
     // populated set rather than a stub.
-    await userJoinedRoom(present.userId, room.id);
+    const socketId = `notification-${randomUUID()}`;
+    t.after(async () => {
+      const reopen = !redisClient.isOpen;
+      if (reopen) await connectRedis();
+      await userLeftRoom(present.userId, room.id, socketId);
+      await socketDisconnected(present.userId, socketId);
+      if (reopen) await redisClient.quit();
+    });
+    await socketConnected(present.userId, socketId);
+    await userJoinedRoom(present.userId, room.id, socketId);
+    await renewSocket(present.userId, socketId, { foreground: true, roomId: room.id });
     await sendVia(sender.token, room.id, 'Are you there?');
 
     const bell = (token) => fetch(`${baseUrl}/api/notifications`, {
@@ -4639,7 +4655,11 @@ dbTest('a message notifies a member who is not present, but not one who is', asy
     assert.equal(await count(sender.token, 'new_message'), 0,
       'the sender is not notified of their own message');
 
-    await userLeftRoom(present.userId, room.id);
+    await renewSocket(present.userId, socketId, { foreground: false, roomId: null });
+    await sendVia(sender.token, room.id, 'Still there?');
+    assert.equal(await count(present.token, 'new_message'), 1, 'a background subscription must not suppress an alert');
+    await userLeftRoom(present.userId, room.id, socketId);
+    await socketDisconnected(present.userId, socketId);
   } finally {
     // Left open, the client would keep the test process alive after the suite.
     if (connectedHere) await redisClient.quit();
@@ -5167,8 +5187,9 @@ dbTest('forwarding reuses immutable media with independent access, idempotency a
   const history=await fetch(`${baseUrl}/api/messages/room/${target.id}`,{headers:{authorization:`Bearer ${recipient.token}`}});
   assert.equal((await history.json()).data.messages[0].forwarded,true);
   const storage=require('../src/config/r2'); const cleanup=require('../src/services/storageCleanup.service');
-  const oldDelete=storage.deleteObject; const oldConfigured=storage.isConfigured;const removed=[];
+  const oldDelete=storage.deleteObject; const oldConfigured=storage.isConfigured; const oldSigned=storage.signedGetUrl; const removed=[];
   storage.isConfigured=()=>true;storage.deleteObject=async object=>{removed.push(object);};
+  storage.signedGetUrl=async()=> 'https://media.example.test/forwarded-original';
   try {
     const deleted=await fetch(`${baseUrl}/api/messages/${original.messageId}`,{method:'DELETE',headers:{authorization:`Bearer ${me.token}`}});assert.equal(deleted.status,200);
     assert.equal((await send(me.token,{...body,clientId:randomUUID()})).status,404);
@@ -5179,5 +5200,5 @@ dbTest('forwarding reuses immutable media with independent access, idempotency a
     const last=await fetch(`${baseUrl}/api/messages/${forwarded.id}`,{method:'DELETE',headers:{authorization:`Bearer ${me.token}`}});assert.equal(last.status,200);
     await query('UPDATE storage_deletion_jobs SET next_attempt_at=NOW() WHERE object_key=$1',[key]);
     await cleanup.runStorageCleanup({limit:500});assert.equal(removed.includes(key),true);
-  } finally {storage.deleteObject=oldDelete;storage.isConfigured=oldConfigured;}
+  } finally {storage.deleteObject=oldDelete;storage.isConfigured=oldConfigured;storage.signedGetUrl=oldSigned;}
 });

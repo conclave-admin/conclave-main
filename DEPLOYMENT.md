@@ -83,7 +83,33 @@ An HTTP REST Redis endpoint is not compatible with the existing client and
 Socket.IO adapter. Confirm the selected service supports Pub/Sub and its command
 budget fits presence heartbeats plus three Redis connections per API instance.
 
+Presence uses one 45-second lease per socket, 15-second client heartbeats, a
+10-second expiry sweep, and periodic index reconciliation. Redis state is
+reconstructed from authenticated sockets after data loss; a full presence keyspace
+flush is not required for deployment or recovery. Do not remove another running
+instance's presence records on startup. Dead API-instance leases expire while
+healthy devices continue renewing independently. Shutdown drains presence cleanup
+before closing Redis and PostgreSQL.
+
+Deploy the presence API and client together. The client expects complete snapshots
+with separate connected and foreground-viewing rosters. Missing/outdated snapshots
+show “Presence unavailable”. No additional database migration or environment
+variables are needed for issues 2.1–2.4 beyond the existing Phase 1 session setup.
+
 ## Render API
+
+### Synchronization and background notifications
+
+Run `npm run migrate` before deploying the Phase 3–4 API/client changes. Migrations
+034–035 add the committed change journal, message/profile versions, and durable
+push subscriptions/jobs. The persistent API process runs both recovery workers;
+no separate scheduler is needed. PostgreSQL and Redis must remain available.
+
+Configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and a real public contact in
+`VAPID_SUBJECT` to enable browser push. Keep the key pair stable across instances.
+See [synchronization and push setup](docs/SYNC_AND_PUSH.md) for key generation,
+privacy policy, subscription lifecycle, and the required live acceptance checks.
+
 
 Import the root `render.yaml` as a Render Blueprint. It explicitly selects the
 free web-service plan and creates only the API service, with these settings:
@@ -159,3 +185,34 @@ prints a merged CORS/lifecycle plan; its `--apply` option writes reviewed bucket
 settings. Leave the direct-upload flag false until the real client origins and
 exposed ETag header are configured. The API process runs durable cleanup; hosts
 that sleep can schedule `npm run media:cleanup` separately.
+
+## Phase 1 session rollout
+
+Apply migration `032_revocable_sessions.sql` with `cd backend && npm run migrate`
+before starting the updated API. Deploy all API instances and the client
+in a coordinated restart: older servers do not enforce the new session or
+cluster revocation protocol. Existing users must sign in again; legacy tokens
+have no stable session and are intentionally rejected. New refreshes preserve
+session identity, and logout invalidates both REST and realtime access.
+
+The Redis adapter must be connected on every instance. Removal fails with 503
+and rolls back if a peer cannot acknowledge eviction. Do not report a successful
+removal to users when that check fails. Already downloaded history remains on
+devices; revocation prevents future authorized access, not copies already held.
+
+Security checks use disposable databases and require PostgreSQL `CREATEDB` plus
+Redis. Run `cd backend && npm test && npm run test:db`. The database suite includes
+two Socket.IO servers with a real Redis adapter, multiple devices, join/removal
+races, refresh rotation, logout, and idle expiry. For client removal checks run
+`cd client && npx playwright test --config=playwright.realtime-access.config.js`.
+
+
+### Phase 2 receipt rollout
+
+Run `cd backend && npm run migrate` before deploying the updated API and client.
+Migration 033 adds immutable message recipients, acknowledgement times and summary
+versions, with a transactional trigger for all message creation paths. Existing
+messages are marked as having incomplete recipient history; departed recipients
+and historical acknowledgement times cannot be reconstructed. No new environment
+variables or services are required. Deploy the API and client together so ticks
+use send-time summaries and automatic reads use foreground viewport checks.

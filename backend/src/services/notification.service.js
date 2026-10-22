@@ -88,12 +88,13 @@ async function createNotification({
 
   const run = db ? db.query.bind(db) : pool.query.bind(pool);
   const { rows } = await run(
-    `INSERT INTO notifications (recipient_id, type, reference_id, actor_id)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO notifications (recipient_id, type, reference_id, actor_id, dedupe_key)
+     VALUES ($1, $2, $3, $4, $5) ON CONFLICT(dedupe_key) DO NOTHING
      RETURNING id, recipient_id, type, reference_id, actor_id, seen, created_at`,
-    [recipientId, type, referenceId, actorId],
+    [recipientId, type, referenceId, actorId, MESSAGE_TARGET_TYPES.includes(type)&&referenceId?`${recipientId}:${type}:${referenceId}`:null],
   );
-  return rows[0];
+  if (rows.length) return rows[0];
+  return (await run('SELECT * FROM notifications WHERE dedupe_key=$1',[`${recipientId}:${type}:${referenceId}`])).rows[0];
 }
 
 function preview(content) {
@@ -333,6 +334,8 @@ const UNREAD_COUNT_SQL = `(
      AND m.room_sequence > rm.last_seen_sequence
      AND m.deleted_at IS NULL
      AND m.sender_id <> rm.user_id
+     AND NOT EXISTS (SELECT 1 FROM message_recipients mr
+       WHERE mr.message_id=m.id AND mr.recipient_id=rm.user_id AND mr.read)
 )::int`;
 
 /**

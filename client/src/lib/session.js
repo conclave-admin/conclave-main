@@ -1,6 +1,13 @@
 export const getAccessToken = () => localStorage.getItem('accessToken');
 export const getRefreshToken = () => localStorage.getItem('refreshToken');
 
+export function getSessionId() {
+  try {
+    const body = getAccessToken()?.split('.')[1];
+    return JSON.parse(atob(body.replace(/-/g, '+').replace(/_/g, '/'))).sid || null;
+  } catch { return null; }
+}
+
 export function getSessionUserId() {
   try {
     const body = getAccessToken()?.split('.')[1];

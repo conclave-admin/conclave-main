@@ -1,8 +1,10 @@
+import {useSyncReconciler} from './SyncContext';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listRooms, markRoomSeen, updateRoomPreferences } from '@/services/rooms.service';
 import { useRealtime } from './RealtimeContext';
+import { usePresence } from './PresenceContext';
 import { useAuth } from './AuthContext';
-import { readChatList, saveChatList } from '../lib/fileCache';
+import { readChatList, saveChatList, saveRoomMetadata } from '../lib/fileCache';
 
 const ChatsContext = createContext(null);
 
@@ -33,20 +35,29 @@ export function ChatsProvider({ children }) {
   const [pinned, setPinned] = useState([]);
   const [muted, setMuted] = useState([]);
   const [archived, setArchived] = useState([]);
-  const [typingByRoom, setTypingByRoom] = useState(new Map());
-  const typingTimers = useRef(new Map());
+  const { typingByRoom, recordingByRoom } = usePresence();
+  const revokedRooms = useRef(new Set());
+  const membershipEpoch = useRef(0);
+  const refreshGeneration=useRef(0);
+  const currentUser = useRef(userId);
+  currentUser.current = userId;
+  useEffect(() => { revokedRooms.current.clear(); }, [userId]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options={}) => {
+    const epoch = membershipEpoch.current;
+    const version=++refreshGeneration.current;
     setIsLoading(true);
     setError('');
-    const apply = (loaded) => {
+    const apply = (rows) => {
+      if (currentUser.current !== userId || version!==refreshGeneration.current || options?.isCurrent&&!options.isCurrent()) {if(options?.strict)throw new Error('Chat refresh superseded');return;}
+      const loaded = rows.filter((room) => !revokedRooms.current.has(room.id));
       setRooms(loaded);
       setPinned(loaded.filter((room) => room.is_pinned).map((room) => room.id));
       setMuted(loaded.filter((room) => room.is_muted).map((room) => room.id));
       setArchived(loaded.filter((room) => room.is_archived).map((room) => room.id));
     };
     const cached = await readChatList(userId);
-    if (cached.length) { apply(cached); setIsLoading(false); }
+    if (cached.length && !options?.strict) { apply(cached); setIsLoading(false); }
     if (navigator.onLine === false) {
       if (!cached.length) setError('No conversations have been saved on this device yet.');
       setIsLoading(false);
@@ -54,13 +65,19 @@ export function ChatsProvider({ children }) {
     }
     try {
       const loaded = await listRooms();
+      if (currentUser.current === userId && membershipEpoch.current === epoch) {
+        for (const room of loaded) revokedRooms.current.delete(room.id);
+      }
       apply(loaded);
     } catch (err) {
       setError(err.response?.data?.message || 'Could not load chats.');
+      if(options?.strict)throw err;
     } finally {
       setIsLoading(false);
     }
   }, [userId]);
+
+  useSyncReconciler(async batch=>{if(batch.reset||batch.changes.some(c=>['message','room','membership','profile','preferences','block'].includes(c.kind)))await refresh({strict:true,isCurrent:batch.isCurrent});},[userId]);
 
   useEffect(() => {
     refresh();
@@ -69,8 +86,8 @@ export function ChatsProvider({ children }) {
   }, [refresh]);
 
   useEffect(() => {
-    if (rooms.length) saveChatList(userId, rooms);
-  }, [userId, rooms]);
+    if (!isLoading) saveChatList(userId, rooms);
+  }, [userId, rooms, isLoading]);
 
   // Phase 1 emits this after every message create, edit and delete, to each
   // member's personal channel. The client was not listening to it at all until
@@ -88,52 +105,27 @@ export function ChatsProvider({ children }) {
       );
     };
 
-    const onTyping = ({ roomId, userId }) => {
-      const key = `${roomId}:${userId}`;
-      clearTimeout(typingTimers.current.get(key));
-      typingTimers.current.set(key, setTimeout(() => {
-        setTypingByRoom((rows) => {
-          const next = new Map(rows);
-          const ids = new Set(next.get(roomId) || []);
-          ids.delete(userId);
-          next.set(roomId, ids);
-          return next;
-        });
-        typingTimers.current.delete(key);
-      }, 6000));
-      setTypingByRoom((current) => {
-      const next = new Map(current);
-      next.set(roomId, new Set([...(next.get(roomId) || []), userId]));
-      return next;
-      });
+    const onMembers = ({ roomId, userId: targetId, action }) => {
+      membershipEpoch.current++;
+      if (targetId === userId && ['removed', 'left'].includes(action)) {
+        revokedRooms.current.add(roomId);
+        setRooms((rows) => rows.filter((room) => room.id !== roomId));
+        for (const setter of [setPinned, setMuted, setArchived]) setter((ids) => ids.filter((id) => id !== roomId));
+        saveRoomMetadata(userId, roomId, null);
+      } else if (targetId === userId && action === 'joined') {
+        revokedRooms.current.delete(roomId);
+        refresh();
+      }
     };
-    const onStopTyping = ({ roomId, userId }) => {
-      const key = `${roomId}:${userId}`;
-      clearTimeout(typingTimers.current.get(key));
-      typingTimers.current.delete(key);
-      setTypingByRoom((current) => {
-      const next = new Map(current);
-      const ids = new Set(next.get(roomId) || []);
-      ids.delete(userId);
-      next.set(roomId, ids);
-      return next;
-      });
-    };
-    const onRoomTyping = ({ roomId, typingUserIds }) => setTypingByRoom((current) => new Map(current).set(roomId, new Set(typingUserIds || [])));
-
+    socket.on('connect', refresh);
+    socket.on('room:members', onMembers);
     socket.on('chat:updated', onChatUpdated);
-    socket.on('typing', onTyping);
-    socket.on('stop-typing', onStopTyping);
-    socket.on('room-typing', onRoomTyping);
     return () => {
+      socket.off('connect', refresh);
+      socket.off('room:members', onMembers);
       socket.off('chat:updated', onChatUpdated);
-      socket.off('typing', onTyping);
-      socket.off('stop-typing', onStopTyping);
-      socket.off('room-typing', onRoomTyping);
-      typingTimers.current.forEach((timer) => clearTimeout(timer));
-      typingTimers.current.clear();
     };
-  }, [socket]);
+  }, [socket, userId, refresh]);
 
   /**
    * Mark a room read, optimistically.
@@ -217,13 +209,14 @@ export function ChatsProvider({ children }) {
       muted,
       archived,
       typingByRoom,
+      recordingByRoom,
       refresh,
       markSeen,
       togglePin,
       toggleMute,
       toggleArchive,
     }),
-    [sortedRooms, rooms, archived, typingByRoom, isLoading, error, unreadTotal, pinned, muted, refresh, markSeen, togglePin, toggleMute, toggleArchive],
+    [sortedRooms, rooms, archived, typingByRoom, recordingByRoom, isLoading, error, unreadTotal, pinned, muted, refresh, markSeen, togglePin, toggleMute, toggleArchive],
   );
 
   return <ChatsContext.Provider value={value}>{children}</ChatsContext.Provider>;

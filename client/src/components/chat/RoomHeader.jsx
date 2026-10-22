@@ -27,7 +27,7 @@ import { usePresence } from '@/contexts/PresenceContext';
 export default function RoomHeader({ room, isConnected }) {
   const title = room.display_name || room.name;
   const { user } = useAuth();
-  const { isOnlineIn } = usePresence();
+  const { isOnlineIn, getPresence, labelFor } = usePresence();
   const isDm = room.type === 'dm';
   const peer = isDm ? room.members?.find((member) => member.id !== user?.id) : null;
   const peerActive = Boolean(peer && isOnlineIn(room.id, peer.id));
@@ -44,7 +44,7 @@ export default function RoomHeader({ room, isConnected }) {
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          {isDm && <Avatar name={title} src={peer?.avatar_url} size="sm" presence={peerActive ? 'online' : 'offline'} />}
+          {isDm && <Avatar name={title} src={peer?.avatar_url} size="sm" presence={getPresence(room.id, peer?.id) === 'unknown' ? null : peerActive ? 'online' : 'offline'} />}
           <h1 className="truncate text-sm font-bold leading-5 text-ink md:text-base">{title}</h1>
           <span
             className={`h-2 w-2 shrink-0 rounded-full md:hidden ${
@@ -54,7 +54,7 @@ export default function RoomHeader({ room, isConnected }) {
           />
         </div>
         <p className="mt-0.5 text-[11px] leading-4 text-muted md:text-xs">
-          {isDm ? (peerActive ? 'Active in this chat' : 'Not active in this chat') : `${room.members?.length || 0} members`}
+          {isDm ? labelFor(room.id, peer?.id) : `${room.members?.length || 0} members`}
           <span className="md:hidden"> · {isConnected ? 'Live' : 'Reconnecting'}</span>
         </p>
       </div>
