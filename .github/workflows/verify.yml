@@ -4,22 +4,34 @@ permissions:
   contents: read
 jobs:
   backend:
-    # if: false
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: postgres.ueauwvdkcupdzigzkyps
-          POSTGRES_PASSWORD: VTdEy65jxbPYCRvZ
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U app -d postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 10
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
-      DATABASE_URL: postgres://postgres.ueauwvdkcupdzigzkyps:VTdEy65jxbPYCRvZ@aws-0-eu-central-1.pooler.supabase.com/postgres
+      DATABASE_URL: postgresql://app:app@127.0.0.1:5432/postgres
+      REDIS_URL: redis://127.0.0.1:6379
     defaults:
       run:
         working-directory: backend
@@ -31,15 +43,15 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
-      - run: npm test
+      - name: Run backend unit tests
+        run: npm test
       - name: Apply migrations to fresh PostgreSQL
         run: npm run migrate
       - name: Verify migration rerun
         run: npm run migrate
       - name: Verify API queries and permissions against PostgreSQL
+        timeout-minutes: 10
         run: npm run test:db
-        env:
-          DATABASE_URL: postgresql://postgres.ueauwvdkcupdzigzkyps:VTdEy65jxbPYCRvZ@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
   client:
     # if: false
     runs-on: ubuntu-latest
