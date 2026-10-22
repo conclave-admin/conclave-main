@@ -10,16 +10,16 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: app
-          POSTGRES_PASSWORD: test-only-password
-          POSTGRES_DB: conclave_migrations_test
+          POSTGRES_USER: postgres.ueauwvdkcupdzigzkyps
+          POSTGRES_PASSWORD: VTdEy65jxbPYCRvZ
+          POSTGRES_DB: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U app -d conclave_migrations_test"
+          --health-cmd "pg_isready -U app -d postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      DATABASE_URL: postgres://app:test-only-password@localhost:5432/conclave_migrations_test
+      DATABASE_URL: postgres://postgres.ueauwvdkcupdzigzkyps:VTdEy65jxbPYCRvZ@aws-0-eu-central-1.pooler.supabase.com/postgres
     defaults:
       run:
         working-directory: backend
@@ -39,7 +39,7 @@ jobs:
       - name: Verify API queries and permissions against PostgreSQL
         run: npm run test:db
         env:
-          DATABASE_URL: postgres://app:test-only-password@localhost:5432/postgres
+          DATABASE_URL: postgresql://postgres.ueauwvdkcupdzigzkyps:VTdEy65jxbPYCRvZ@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
   client:
     # if: false
     runs-on: ubuntu-latest
