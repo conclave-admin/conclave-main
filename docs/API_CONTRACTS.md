@@ -90,7 +90,7 @@ A failed acknowledgement rolls membership back and returns 503.
 | POST   | /rooms/:roomId/join    | —                             | `{ roomId, joined, existing }`          | Joins a public room. Idempotent; private rooms return 403. Membership is required before reading messages. |
 | GET    | /rooms/:roomId         | —                             | room + `members[]`                      | Membership required. Member profiles include `bio` and `account_created_at` alongside room role, join time, and room-scoped last-seen/read pointers. Email addresses are never included. |
 | POST   | /rooms/:roomId/members | `{ userId }`                  | `{ roomId, userId, displayName, role }` | Admin only. 404 if the target is soft-deleted. Writes a `room_invite` notification row but does **not** emit it on the socket.                                                                                                      |
-| POST   | /rooms/:roomId/seen    | —                             | `{ roomId, lastSeenAt }`                | **Call this when a room is opened.** It is the only thing that advances `room_members.last_seen_at` apart from socket `leave-room`, and the entire digest depends on it.                                                            |
+| POST   | /rooms/:roomId/seen    | —                             | `{ roomId, lastSeenAt }`                | **Explicit mark-all-read action only.** Marks existing recipient receipts read and delivered, advances the room pointer, and emits receipt and room-seen updates. Automatic timeline reads use message-read; opening or leaving a room does not mark it all read.                                                            |
 | PATCH  | /rooms/:roomId         | `{ name?, description?, avatar_url? }` | room | Admin only; DMs cannot be edited as rooms. Group avatar uploads are selected from the room info page. |
 | DELETE | /rooms/:roomId/members/:userId | — | `{ roomId, userId, removed }` | Members may remove themselves to leave. Only admins may remove another member; a room must retain an admin. |
 | PATCH  | /rooms/:roomId/members/:userId | `{ role: "admin" | "member" }` | `{ roomId, userId, role }` | Admin only. DMs have no member roles. |
@@ -118,8 +118,9 @@ A failed acknowledgement rolls membership back and returns 503.
 }
 ```
 
-`unread_count` counts messages sent **after `last_seen_at`** that are neither
-your own nor tombstones — a badge pointing at deleted content would open into
+`unread_count` counts messages beyond the contiguous `last_seen_sequence`
+that are neither your own nor tombstones, excluding individually acknowledged
+read receipts even when an earlier unread gap remains — a badge pointing at deleted content would open into
 nothing. It is computed by the same SQL as `chat:updated`, so a row and its
 badge can never disagree.
 
@@ -417,7 +418,7 @@ an existing DM by user id, home summary, or a global cross-room search. See
 ## Socket events
 
 Server → client, as documented at the top of `backend/src/sockets/index.js`:
-`receive-message`, `chat:updated`, `room-presence`, `room:members`, `room-typing`, `typing`, `stop-typing`, `start-recording`, `stop-recording`, `privacy:changed`, `message-read`,
+`receive-message`, `chat:updated`, `room-presence`, `room:members`, `room-typing`, `typing`, `stop-typing`, `start-recording`, `stop-recording`, `privacy:changed`, `message-read`, `message-delivered`, `message:receipts`,
 `task:updated`, `message:updated`, `message:deleted`, `message:reaction`,
 `notification`, `notification:seen`, and `error:message`.
 
@@ -439,6 +440,7 @@ Client → server payloads: `join-room { roomId }`, `leave-room { roomId }`,
 `send-message { roomId, clientId?, content?, replyToId?, attachments?, albumId?, mentionedUserIds? }`,
 `typing { roomId }`, `stop-typing { roomId }`, `start-recording { roomId }`,
 `stop-recording { roomId }`, `message-read { roomId, messageId }`,
+`message-delivered { roomId, messageId }`,
 `heartbeat { foreground?, roomId?, revision? }`.
 
 ### Presence and foreground attention
@@ -532,6 +534,81 @@ These changes require no new migration or environment variables.
 message row on `receive-message`. Pass `mentionedUserIds` — see the warning above
 for what omitting it costs.
 
+
+### Message receipts and send-time recipients
+
+Migration `033_message_receipts.sql` snapshots every message's recipients in the
+same transaction as insertion. This includes text, media, forwards and polls.
+The sender is excluded. Joining, leaving, removal, rejoining, and account deletion
+do not add or remove the original recipients. These rows never grant access to
+a conversation or its attachments.
+
+Message payloads on creation, history, search, pins, edits, deletions and reactions
+include `receipt_summary`:
+
+```json
+{
+  "recipient_count": 3,
+  "delivered_count": 3,
+  "read_count": 1,
+  "history_complete": true,
+  "version": 4
+}
+```
+
+- **Sent:** the server stored the message. A single recipient's acknowledgement
+  does not change a group's tick.
+- **Delivered:** every original recipient acknowledged the message on at least
+  one device. This acknowledges message metadata, not a media download.
+- **Read:** every original recipient acknowledged that specific message as read.
+  Reading also implies delivery. Partial reads remain delivered if everybody
+  received the message, otherwise sent.
+- With zero recipients, or incomplete historical recipient data, the tick stays
+  sent. Pending, queued and failed outbox states still take precedence.
+- A departed recipient's pending receipt stays pending; the information dialog
+  identifies them as no longer in the conversation. New members do not become
+  recipients of older messages.
+
+Automatic reads require a visible, focused, online timeline. The client checks
+intersection against the scrollport and viewport, including very tall messages,
+and suppresses reads behind modal dialogs. It rechecks unchanged intersections
+on focus, visibility, page resume, reconnection and foreground-heartbeat success.
+Only acknowledged reads are deduplicated; failed/offline attempts retry while
+visible. In-flight reads remain deduplicated across renders.
+
+The server checks current membership for all receipt events. Reads additionally
+require a room subscription and that originating device's unexpired Redis lease and foreground
+room claim; background read attempts return 409 and storage outages return 503.
+A read acknowledges only the specified message. The contiguous room pointer
+advances once earlier unread gaps close, rather than marking skipped messages
+read. Delivery works in background tabs and for metadata fetched before a subscription
+finishes. Reconnect retransmits delivery acknowledgements for cached messages,
+including anchored historical timelines. Explicit `POST /rooms/:roomId/seen`
+intentionally marks all existing messages read without a viewport claim.
+
+`message:receipts { roomId, receipts: [{ messageId, receipt_summary }] }` publishes
+aggregate changes to room subscribers. Summary versions increase per message;
+clients reject older summaries, including delayed history and send acknowledgements.
+Existing `message-read` and `message-delivered` events retain user and contiguous
+pointer fields. Per-recipient timestamps are first-ack times and do not change
+on duplicates or acknowledgements from another device.
+
+| Method | Path | Returns | Access |
+| --- | --- | --- | --- |
+| GET | /messages/:messageId/receipts | `{ messageId, sentAt, summary, recipients }` | Sender who is still a room member; otherwise 404. |
+| GET | /messages/room/:roomId/receipts?ids=uuid,uuid | `{ roomId, receipts }` | Current members; 1–200 valid IDs; other rooms' IDs return no data. |
+
+Each recipient detail includes `user_id`, `display_name`, `delivered`, `read`,
+`delivered_at`, `read_at`, and `current_member`. The sender's **Message info**
+action opens these details; receipt events and reconnects refresh an open dialog.
+Reconnection also refreshes summaries for all loaded messages, in batches of 200,
+so a message need not arrive again for its tick to recover.
+
+Older messages are explicitly marked `history_complete: false`: only surviving
+memberships present by the message's creation can be reconstructed. Known flags
+are backfilled from existing pointers, but acknowledgement times stay null.
+The UI explains missing history and shows unavailable times. Missing historical
+recipients and exact times cannot be recovered by this migration.
 
 ### Durable media sends and album ownership
 

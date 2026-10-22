@@ -1,3 +1,5 @@
+import { getRoomReceiptSummaries } from '../services/messages.service';
+import { newerReceipt } from '../lib/messageMeta';
 import { usePresence } from '../contexts/PresenceContext';
 import { subscribeToRoom } from '../lib/roomSubscriptions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -24,7 +26,7 @@ function byTime(a, b) {
 
 function mergeMessages(current, rows) {
   const merged = new Map(current.map((message) => [message.id, message]));
-  rows.forEach((message) => merged.set(message.id, message));
+  rows.forEach((message) => merged.set(message.id, { ...message, receipt_summary: newerReceipt(merged.get(message.id)?.receipt_summary, message.receipt_summary) }));
   return [...merged.values()].sort(byTime);
 }
 
@@ -51,6 +53,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   const outbox = useOutbox();
 
   const [messages, setMessages] = useState([]);
+  const [receiptUpdates, setReceiptUpdates] = useState(() => new Map());
   const [clearedAt, setClearedAt] = useState(() => getConversationClearTime(viewerId, roomId));
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -81,6 +84,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   useEffect(() => {
     let active = true;
     historyVersion.current += 1;
+    setReceiptUpdates(new Map());
     historyReady.current = false;
     setIsLoadingOlder(false);
     if (!roomId) {
@@ -123,8 +127,8 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   }, [roomId, viewerId, user?.display_name, socket, anchorId]);
 
   useEffect(() => {
-    if (!anchorId && messages.length) saveRoomMessages(viewerId, roomId, messages);
-  }, [messages, roomId, viewerId, anchorId]);
+    if (!anchorId && messages.length) saveRoomMessages(viewerId, roomId, messages.map(message => ({ ...message, receipt_summary: newerReceipt(message.receipt_summary, receiptUpdates.get(message.id)) })));
+  }, [messages, roomId, viewerId, anchorId, receiptUpdates]);
 
   // --- read pointers ---------------------------------------------------------
   // Seeded from the room's member list, which already carries each member's
@@ -150,19 +154,35 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   // --- live ------------------------------------------------------------------
   useEffect(() => {
     if (!socket || !roomId) return undefined;
+    let active = true;
     const fillGap = async () => {
-      if (anchorId || !historyReady.current) return;
+      if (!historyReady.current) return;
       try {
-        let sequence = Math.max(0, ...messagesRef.current.map((item) => Number(item.room_sequence) || 0));
-        let missing;
-        do {
-          ({ messages: missing } = await listMessages(roomId, undefined, sequence));
-          if (missing.length) {
-            setMessages((current) => mergeMessages(current, missing));
-            missing.filter((message) => message.sender_id !== viewerId).forEach((message) => socket.emit('message-delivered', { roomId, messageId: message.id }));
-            sequence = Math.max(sequence, ...missing.map((item) => Number(item.room_sequence) || 0));
-          }
-        } while (missing.length === 200);
+        const received = [];
+        if (!anchorId) {
+          let sequence = Math.max(0, ...messagesRef.current.map(item => Number(item.room_sequence) || 0));
+          let missing;
+          do {
+            ({ messages: missing } = await listMessages(roomId, undefined, sequence));
+            if (!active) return;
+            received.push(...missing);
+            if (missing.length) {
+              const page = missing;
+              setMessages(current => mergeMessages(current, page));
+              sequence = Math.max(sequence, ...missing.map(item => Number(item.room_sequence) || 0));
+            }
+          } while (missing.length === 200);
+        }
+        const loaded = mergeMessages(messagesRef.current, received).filter(message => !message._optimistic);
+        // A previous delivery ack may have been lost after the bytes were
+        // cached. Retransmit it, including on anchored historical timelines.
+        loaded.filter(message => message.sender_id !== viewerId).forEach(message => socket.emit('message-delivered', { roomId, messageId: message.id }));
+        const ids = loaded.map(message => message.id);
+        for (let offset = 0; offset < ids.length; offset += 200) {
+          const snapshot = await getRoomReceiptSummaries(roomId, ids.slice(offset, offset + 200));
+          if (!active) return;
+          onReceipts(snapshot);
+        }
       } catch { /* reconnect will retry on the next connect */ }
     };
     const unsubscribe = subscribeToRoom(socket, roomId);
@@ -232,6 +252,15 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
       if (userId === viewerId && sequence != null) setLastSeenSequence((value) => Math.max(value, Number(sequence) || 0));
     };
 
+    const onReceipts = ({ roomId: eventRoom, receipts = [] }) => {
+      if (eventRoom !== roomId) return;
+      setReceiptUpdates(previous => {
+        const next = new Map(previous);
+        for (const entry of receipts) next.set(entry.messageId, newerReceipt(next.get(entry.messageId), entry.receipt_summary));
+        return next;
+      });
+    };
+    socket.on('message:receipts', onReceipts);
     socket.on('connect', join);
     socket.on('receive-message', receive);
     socket.on('message-delivered', onDelivered);
@@ -250,6 +279,8 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     if (socket.connected) join();
 
     return () => {
+      active = false;
+      socket.off('message:receipts', onReceipts);
       socket.off('connect', join);
       socket.off('receive-message', receive);
       socket.off('message-delivered', onDelivered);
@@ -350,8 +381,9 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     const known = new Set(messages.map((message) => message.client_id).filter(Boolean));
     const pending = roomDrafts.filter((item) => !known.has(item.clientId)).map((item) => draftMessage(item, user?.display_name));
     return mergeMessages(messages.filter((message) => !message._optimistic), pending)
-      .filter((message) => new Date(message.created_at).getTime() > clearedAt);
-  }, [messages, roomDrafts, clearedAt, user?.display_name]);
+      .filter((message) => new Date(message.created_at).getTime() > clearedAt)
+      .map(message => ({ ...message, receipt_summary: newerReceipt(message.receipt_summary, receiptUpdates.get(message.id)) }));
+  }, [messages, roomDrafts, clearedAt, user?.display_name, receiptUpdates]);
 
   // Both scopes. The panel and the message menu call these same two functions,
   // so a pin started in one place behaves identically to one started in the

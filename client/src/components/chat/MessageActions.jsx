@@ -12,6 +12,7 @@ import IconForward from '@/assets/icons/forward.svg?react';
 import IconReply from '@/assets/icons/reply.svg?react';
 import IconStar from '@/assets/icons/star.svg?react';
 import IconTasks from '@/assets/icons/tasks.svg?react';
+import IconInfo from '@/assets/icons/info.svg?react';
 import IconThread from '@/assets/icons/thread.svg?react';
 import PopoverMenu from '@/components/ui/PopoverMenu';
 import { REACTION_EMOJI } from "@/lib/messageMeta";
@@ -62,6 +63,7 @@ export default function MessageActions({
   anchorRef,
   align = "end",
   onToggleReaction,
+  onMessageInfo,
   onReply,
   onEdit,
   onDelete,
@@ -103,6 +105,7 @@ export default function MessageActions({
   const mayUnpinRoom = holdsRoomPin || isAdmin;
 
   const items = [
+    isMine && onMessageInfo && { key: "info", label: "Message info", Icon: IconInfo, onClick: onMessageInfo },
     { key: "thread", label: "Open thread", Icon: IconThread, onClick: onOpenThread },
     { key: "reply", label: "Reply", Icon: IconReply, onClick: onReply },
     onForward && !message.poll && { key: "forward", label: "Forward", Icon: IconForward, onClick: onForward },

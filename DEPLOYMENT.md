@@ -192,3 +192,14 @@ Redis. Run `cd backend && npm test && npm run test:db`. The database suite inclu
 two Socket.IO servers with a real Redis adapter, multiple devices, join/removal
 races, refresh rotation, logout, and idle expiry. For client removal checks run
 `cd client && npx playwright test --config=playwright.realtime-access.config.js`.
+
+
+### Phase 2 receipt rollout
+
+Run `cd backend && npm run migrate` before deploying the updated API and client.
+Migration 033 adds immutable message recipients, acknowledgement times and summary
+versions, with a transactional trigger for all message creation paths. Existing
+messages are marked as having incomplete recipient history; departed recipients
+and historical acknowledgement times cannot be reconstructed. No new environment
+variables or services are required. Deploy the API and client together so ticks
+use send-time summaries and automatic reads use foreground viewport checks.

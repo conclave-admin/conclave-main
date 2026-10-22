@@ -104,37 +104,24 @@ export function annotateMessages(messages = []) {
   });
 }
 
-/**
- * Delivery status for one of the caller's own messages.
- *
- * `queued`  kept on this device until a connection returns
- * `pending` the send is in flight and has not been acknowledged yet
- * `failed`  it errored and the composer surfaced it
- * `sent`    the server stored it
- * `read`    at least one other member's read pointer has reached it
- *
- * The read tick is derived, not stored per message. `room_members.last_seen_at`
- * is a pointer per member per room, so "has U read M" is a comparison rather
- * than a row — which is exactly why it survives a reload. The tick means
- * somebody has caught up, not everybody: in a room of forty people waiting for
- * unanimous catch-up would mean a tick that almost never appears.
- *
- * @returns {'queued'|'pending'|'failed'|'sent'|'read'|null} null when not the viewer's message
- */
+/** Sent means server-stored; group delivered/read requires every send-time
+ * recipient. Empty recipient lists and incomplete historical lists stay sent. */
+export function newerReceipt(current, incoming) {
+  if (!incoming) return current;
+  return current && Number(current.version || 0) > Number(incoming.version || 0) ? current : incoming;
+}
 export function readStatus(message, members = [], viewerId, pendingIds = new Set(), failedIds = new Set(), queuedIds = new Set()) {
   if (!message || message.sender_id !== viewerId) return null;
   if (failedIds.has(message.id)) return 'failed';
   if (queuedIds.has(message.id)) return 'queued';
   if (pendingIds.has(message.id)) return 'pending';
 
-  const others = members.filter((member) => member.id !== viewerId);
-  const hasReader = others.some(
-    (member) => message.room_sequence != null && member.last_seen_sequence != null
-      ? Number(member.last_seen_sequence) >= Number(message.room_sequence)
-      : new Date(member.last_seen_at).getTime() >= new Date(message.created_at).getTime(),
-  );
-
-  if (!hasReader && others.some((member) => Number(member.last_delivered_sequence || 0) >= Number(message.room_sequence || Infinity))) return 'delivered';
-
-  return hasReader ? 'read' : 'sent';
+  const summary = message.receipt_summary;
+  if (summary) {
+    if (!summary.history_complete || !summary.recipient_count) return 'sent';
+    if (summary.read_count === summary.recipient_count) return 'read';
+    return summary.delivered_count === summary.recipient_count ? 'delivered' : 'sent';
+  }
+  // Old caches have no reliable send-time audience. Wait for server metadata.
+  return 'sent';
 }

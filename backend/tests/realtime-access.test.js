@@ -77,9 +77,9 @@ async function session(userId) {
     [userId, createHash('sha256').update(refreshToken).digest('hex'), sessionId]);
   return { userId, sessionId, token, refreshToken };
 }
-async function room(owner, member) {
+async function room(owner, member, type = 'group') {
   const id = randomUUID();
-  await query("INSERT INTO rooms (id,name,type,created_by,slug) VALUES ($1,'Security fixture','group',$2,$3)", [id, owner.userId, id]);
+  await query("INSERT INTO rooms (id,name,type,created_by,slug) VALUES ($1,'Security fixture',$4,$2,$3)", [id, owner.userId, id, type]);
   await query("INSERT INTO room_members (room_id,user_id,role) VALUES ($1,$2,'admin'),($1,$3,'member')", [id, owner.userId, member.userId]);
   roomIds.push(id);
   return id;
@@ -548,4 +548,102 @@ test('activity flood is bounded without preventing another device from stopping 
   await Promise.all(Array.from({ length: 120 }, () => limiter.consumeShared(`activity:${member.userId}`, { windowMs: 60000, max: 120 })));
   assert.equal((await ack(b, 'start-recording', { roomId: id })).status, 429, 'account start quota is shared across instances');
   assert.equal((await ack(b, 'stop-typing', { roomId: id })).ok, true);
+});
+
+test('reads require foreground attention, acknowledge exact messages and close pointer gaps on resume', async () => {
+  const owner = await account(); const member = await account(); const id = await room(owner, member, 'dm');
+  const peer = await open(member.token, 1);
+  const first = (await request('/messages', owner.token, 'POST', { roomId: id, content: 'First unseen message' })).body.data;
+  const last = (await request('/messages', owner.token, 'POST', { roomId: id, content: 'Jump target' })).body.data;
+  assert.equal(first.receipt_summary.recipient_count, 1, 'DM messages have exactly one recipient');
+  assert.equal((await ack(peer, 'message-delivered', { roomId: id, messageId: last.id })).ok, true, 'delivery of fetched metadata does not require a subscription');
+  await ack(peer, 'join-room', { roomId: id });
+  assert.equal((await ack(peer, 'message-read', { roomId: id, messageId: last.id })).status, 409);
+  await ack(peer, 'heartbeat', { foreground: true, roomId: id, revision: 1 });
+  const result = await ack(peer, 'message-read', { roomId: id, messageId: last.id });
+  assert.equal(result.ok, true);
+  const rows = await query('SELECT message_id, read, delivered FROM message_recipients WHERE message_id=ANY($1::uuid[]) ORDER BY message_id', [[first.id,last.id]]);
+  assert.equal(rows.rows.find(row => row.message_id === first.id).read, false);
+  assert.equal(rows.rows.find(row => row.message_id === last.id).read, true);
+  assert.equal(rows.rows.find(row => row.message_id === last.id).delivered, true, 'reading implies delivery');
+  assert.equal(Number(result.data.last_seen_sequence), 0, 'a jump cannot consume the earlier unread message');
+  const list = (await request('/rooms', member.token)).body.data;
+  assert.equal(list.find(item => item.id === id).unread_count, 1, 'a later read message is excluded from the unread badge');
+  await ack(peer, 'heartbeat', { foreground: false, roomId: null, revision: 2 });
+  assert.equal((await ack(peer, 'message-read', { roomId: id, messageId: first.id })).status, 409);
+  assert.equal((await ack(peer, 'message-delivered', { roomId: id, messageId: first.id })).ok, true, 'background delivery remains valid');
+  await ack(peer, 'heartbeat', { foreground: true, roomId: id, revision: 3 });
+  const resumed = await ack(peer, 'message-read', { roomId: id, messageId: first.id });
+  assert.equal(Number(resumed.data.last_seen_sequence), Number(last.room_sequence));
+  assert.equal((await ack(peer, 'message-read', { roomId: id, messageId: randomUUID() })).status, 404);
+});
+
+test('receipt recipient lists survive joins, removals, rejoins and multiple devices', async () => {
+  const owner = await account(); const member = await account(); const removed = await account(); const added = await account();
+  const id = await room(owner, member);
+  assert.equal((await request(`/rooms/${id}/members`, owner.token, 'POST', { userId: removed.userId })).status, 201);
+  const message = (await request('/messages', owner.token, 'POST', { roomId: id, content: 'Stable audience' })).body.data;
+  assert.equal(message.receipt_summary.recipient_count, 2);
+  const peer = await open(member.token, 1); await ack(peer, 'join-room', { roomId: id });
+  await ack(peer, 'heartbeat', { foreground: true, roomId: id, revision: 1 });
+  await ack(peer, 'message-delivered', { roomId: id, messageId: message.id });
+  let details = (await request(`/messages/${message.id}/receipts`, owner.token)).body.data;
+  assert.equal(details.summary.delivered_count, 1); assert.equal(details.summary.read_count, 0);
+  await ack(peer, 'message-read', { roomId: id, messageId: message.id });
+  details = (await request(`/messages/${message.id}/receipts`, owner.token)).body.data;
+  const version = details.summary.version;
+  const readAt = details.recipients.find(row => row.user_id === member.userId).read_at;
+  const other = await open((await session(member.userId)).token);
+  await ack(other, 'join-room', { roomId: id }); await ack(other, 'heartbeat', { foreground: true, roomId: id, revision: 1 });
+  await ack(other, 'message-read', { roomId: id, messageId: message.id });
+  const duplicate = (await request(`/messages/${message.id}/receipts`, owner.token)).body.data;
+  assert.equal(duplicate.summary.version, version);
+  assert.equal(duplicate.recipients.find(row => row.user_id === member.userId).read_at, readAt);
+  assert.equal((await request(`/rooms/${id}/members/${removed.userId}`, owner.token, 'DELETE')).status, 200);
+  assert.equal((await request(`/rooms/${id}/members`, owner.token, 'POST', { userId: added.userId })).status, 201);
+  details = (await request(`/messages/${message.id}/receipts`, owner.token)).body.data;
+  assert.equal(details.summary.recipient_count, 2); assert.equal(details.summary.read_count, 1);
+  assert.equal(details.recipients.find(row => row.user_id === removed.userId).current_member, false);
+  assert.ok(!details.recipients.some(row => row.user_id === added.userId));
+  const newcomer = await open(added.token); await ack(newcomer, 'join-room', { roomId: id });
+  await ack(newcomer, 'heartbeat', { foreground: true, roomId: id, revision: 1 });
+  await ack(newcomer, 'message-read', { roomId: id, messageId: message.id });
+  assert.equal((await request(`/messages/${message.id}/receipts`, owner.token)).body.data.summary.read_count, 1, 'reading history cannot add a new recipient');
+  const newer = (await request('/messages', owner.token, 'POST', { roomId: id, content: 'New audience' })).body.data;
+  const fresh = (await request(`/messages/${newer.id}/receipts`, owner.token)).body.data;
+  assert.deepEqual(new Set(fresh.recipients.map(row => row.user_id)), new Set([member.userId, added.userId]));
+  await request(`/rooms/${id}/members`, owner.token, 'POST', { userId: removed.userId });
+  assert.equal((await request(`/messages/${message.id}/receipts`, owner.token)).body.data.summary.recipient_count, 2);
+  const history = (await request(`/messages/room/${id}`, owner.token)).body.data.messages;
+  assert.equal(history.find(row => row.id === message.id).receipt_summary.read_count, 1);
+});
+
+test('receipt details are author-only and reconnect summaries are membership scoped', async () => {
+  const owner = await account(); const member = await account(); const outsider = await account(); const id = await room(owner, member);
+  const message = (await request('/messages', owner.token, 'POST', { roomId: id, content: 'Private receipt details' })).body.data;
+  assert.equal((await request(`/messages/${message.id}/receipts`, member.token)).status, 404);
+  assert.equal((await request(`/messages/${message.id}/receipts`, outsider.token)).status, 404);
+  assert.equal((await request(`/messages/room/${id}/receipts?ids=${message.id}`, outsider.token)).status, 403);
+  const summary = await request(`/messages/room/${id}/receipts?ids=${message.id}`, owner.token);
+  assert.equal(summary.body.data.receipts[0].receipt_summary.recipient_count, 1);
+  assert.equal((await request(`/messages/room/${id}/receipts?ids=bad`, owner.token)).status, 400);
+  const otherId = await room(outsider, member);
+  const alien = (await request('/messages', outsider.token, 'POST', { roomId: otherId, content: 'Another room' })).body.data;
+  assert.deepEqual((await request(`/messages/room/${id}/receipts?ids=${alien.id}`, owner.token)).body.data.receipts, []);
+  const peer = await open(member.token); await ack(peer, 'join-room', { roomId: id });
+  await request(`/rooms/${id}/members/${member.userId}`, owner.token, 'DELETE');
+  assert.equal((await ack(peer, 'message-delivered', { roomId: id, messageId: message.id })).status, 403);
+});
+
+test('explicit mark read updates durable recipient receipts without changing their original audience', async () => {
+  const owner = await account(); const member = await account(); const id = await room(owner, member);
+  const message = (await request('/messages', owner.token, 'POST', { roomId: id, content: 'Mark all intentionally' })).body.data;
+  assert.equal((await request(`/rooms/${id}/seen`, member.token, 'POST')).status, 200);
+  const details = (await request(`/messages/${message.id}/receipts`, owner.token)).body.data;
+  assert.equal(details.summary.read_count, 1); assert.equal(details.summary.delivered_count, 1);
+  assert.ok(details.recipients[0].read_at); assert.ok(details.recipients[0].delivered_at);
+  await request(`/rooms/${id}/members/${member.userId}`, owner.token, 'DELETE');
+  const solo = (await request('/messages', owner.token, 'POST', { roomId: id, content: 'No other recipients' })).body.data;
+  assert.equal(solo.receipt_summary.recipient_count, 0);
+  assert.equal(solo.receipt_summary.read_count, 0);
 });

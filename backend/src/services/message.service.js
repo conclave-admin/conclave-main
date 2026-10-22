@@ -6,6 +6,8 @@ const { getRoomViewingUsers } = require('./presence.service');
 const { attachReactions } = require('./reaction.service');
 const { attachPins } = require('./messagePin.service');
 const { attachPolls } = require('./poll.service');
+const { attachReceiptSummaries } = require('./messageReceipt.service');
+const attachPollsAndReceipts = async rows => attachReceiptSummaries(await attachPolls(rows));
 const r2 = require('../config/r2');
 
 // A media item is its own message. Multiple items sent together share albumId.
@@ -363,7 +365,7 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
   // Reactions are attached for the same reason the other payload fields are: all
   // six surfaces return one message shape, and a message that was just created has
   // none, so this is always [].
-  const [payload] = await attachPolls(await attachPins(await attachReactions([{
+  const [payload] = await attachPollsAndReceipts(await attachPins(await attachReactions([{
     ...message,
     client_id: message.client_id || clientId || null,
     sender_name: sender.rows[0]?.display_name || null,

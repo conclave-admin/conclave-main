@@ -36,7 +36,7 @@ tracked in the phases below.
 | Phase | Priority | Work                                                              | Status      |
 | ----- | -------- | ----------------------------------------------------------------- | ----------- |
 | 1     | P0       | Realtime access revocation and session enforcement                | Complete    |
-| 2     | P1       | Presence, typing, visibility-based reads, and group receipts      | In progress |
+| 2     | P1       | Presence, typing, visibility-based reads, and group receipts      | Complete    |
 | 3     | P1       | Recoverable delivery and reconnect synchronization                | Not started |
 | 4     | P1       | Background notifications and preference enforcement               | Not started |
 | 5     | P1       | Privacy controls, account recovery, devices, and encryption       | Not started |
@@ -88,7 +88,7 @@ restart and existing users signing in again; see [rollout notes](DEPLOYMENT.md#p
 ## Phase 2 — Presence, typing, and receipt correctness
 
 **Priority:** P1  
-**Status:** In progress
+**Status:** Complete
 
 ### Presence
 
@@ -144,26 +144,37 @@ or environment variables are required for items 2.5–2.9.
 
 ### Read and delivery receipts
 
-Findings: timeline intersection can produce read receipts without checking
-whether the document is visible. Group ticks currently indicate that any other
-member has read or received the message, rather than all relevant recipients.
+Resolved: visible, focused timelines acknowledge individual messages, rechecking
+on resume and reconnect. Group ticks use immutable send-time recipient lists
+and require all recipients. The sender can inspect first delivery/read times
+and departed recipients in Message info. Older messages explicitly retain an
+incomplete-history marker because previous memberships cannot be reconstructed.
 
 References: [Room.jsx](client/src/pages/Room.jsx),
 [MessageTimeline.jsx](client/src/components/chat/MessageTimeline.jsx),
 [messageMeta.js](client/src/lib/messageMeta.js).
 
-- [ ] **2.10** Advance reads only when the message is visible in an active application view.
-- [ ] **2.11** Re-evaluate visible messages when returning from the background.
-- [ ] **2.12** Define group sent/delivered/read semantics and apply them consistently.
-- [ ] **2.13** Add per-recipient delivery/read information.
-- [ ] **2.14** Preserve relevant recipient history when membership changes.
+- [x] **2.10** Advance reads only when the message is visible in an active application view.
+- [x] **2.11** Re-evaluate visible messages when returning from the background.
+- [x] **2.12** Define group sent/delivered/read semantics and apply them consistently.
+- [x] **2.13** Add per-recipient delivery/read information.
+- [x] **2.14** Preserve relevant recipient history when membership changes.
+
+Implementation: [messageReceipt.service.js](backend/src/services/messageReceipt.service.js),
+[migration 033](backend/database/migrations/033_message_receipts.sql),
+[messageReads.js](client/src/lib/messageReads.js), and
+[MessageInfoDialog.jsx](client/src/components/chat/MessageInfoDialog.jsx).
+Exact-message receipts preserve unread gaps; badge counts exclude later messages
+already read. Summaries have monotonic versions, refresh after reconnect even
+for historical anchors, and keep send-time recipients through membership changes.
+Explicit mark-all-read commands update the same durable receipt store.
 
 ### Acceptance checks
 
-- [ ] Disconnect, reconnect, backgrounding, and multi-device scenarios produce accurate presence.
-- [ ] Typing expires without a final stop event and does not emit once per keystroke.
-- [ ] Hidden/background conversations do not incorrectly advance read receipts.
-- [ ] DM and group receipt displays match the documented rules, including after membership changes.
+- [x] Disconnect, reconnect, backgrounding, and multi-device scenarios produce accurate presence.
+- [x] Typing expires without a final stop event and does not emit once per keystroke.
+- [x] Hidden/background conversations do not incorrectly advance read receipts.
+- [x] DM and group receipt displays match the documented rules, including after membership changes.
 
 ## Phase 3 — Recoverable delivery and reconnect synchronization
 
@@ -377,3 +388,4 @@ implemented or verified equivalent behaviour.
 | 2026-10-22 | 1.1–1.5 | Added acknowledged cluster eviction, race-safe membership checks, atomic presence/typing cleanup, immediate client invalidation, shared chat/info subscriptions, and durable revocable sessions with idle token expiry. Fixed Redis v4 key scanning. | Backend unit checks: 36 passed; client checks: 44 passed; database suite: 211 passed (including 7 two-server security checks); desktop/mobile Playwright: 4 passed; client build passed. Migration 032 applied locally; deployment and fresh sign-in remain rollout steps. No commits made. |
 | 2026-10-22 | 2.1–2.4 | Separated connectivity, foreground viewing, typing, offline and unknown states; added visibility/resume heartbeats, per-device leases, atomic expiry and index repair, reconnect recovery, and drained shutdown cleanup. Info pages no longer call read pointers last-seen presence. Message alerts are suppressed only for a live foreground subscriber. | Backend unit checks: 36 passed; client checks: 47 passed; PostgreSQL/Redis suite: 218 passed, including 14 realtime access/presence checks; desktop/mobile fixture-based Playwright: 8 passed; client build passed. Remaining Phase 2 items stay open. No commits made. |
 | 2026-10-22 | 2.5–2.9 | Added client typing throttling and shared server rate limits, expiry for initial/live activity, lifecycle cleanup, device aggregation, recording indicators, symmetric block filtering, and room activity versions to reject delayed snapshots. Microphone cleanup covers backgrounding, late permission results, device loss and recorder errors. | Backend unit checks: 37 passed; client checks: 52 passed; sequential PostgreSQL/Redis suite: 216 passed, 0 failed, 6 R2-dependent checks skipped; separate two-server realtime suite: 18 passed; desktop/mobile fixture-based Playwright: 20 passed; production client build and whitespace checks passed. Initial live-R2 checks hit external DNS failure; the first concurrent run also hit a socket timeout, then targeted and sequential reruns passed. Fixed the forwarding test to mock its storage signer consistently without live credentials. No new migration/environment variables or commits. Items 2.10–2.14 remain open. |
+| 2026-10-22 | 2.10–2.14 | Added foreground viewport-only reads, resume/reconnect rechecks, exact-message acknowledgements and contiguous unread pointers, immutable send-time recipients, all-recipient group ticks, sender-only Message info, first-ack timestamps, monotonic summary updates, and historical-view receipt recovery. Membership changes preserve the original audience; legacy history is explicitly incomplete. | Backend unit checks: 37 passed; client checks: 58 passed; PostgreSQL/Redis suite: 220 passed, 0 failed, 6 R2-dependent checks skipped; final two-server realtime suite: 22 passed; desktop/mobile fixture-based Playwright: 26 passed; production build and whitespace checks passed. Migration 033 applied locally. API contracts and rollout documentation updated. Phase 2 is complete; production rollout requires migration 033 before API/client deployment. No commits made. |

@@ -120,17 +120,6 @@ const { registerAccessControl, withRoomMembership } = require('../services/realt
 // Nothing else here has changed: sockets still join a chat room only on demand
 // (client/src/hooks/useMessages.js emits join-room when a room view mounts).
 
-// Membership check for events that only relay state. createMessage already
-// authorises send-message; these three did not, so a client could spoof read
-// receipts and typing indicators into rooms it does not belong to.
-async function isMember(roomId, userId) {
-  const result = await query(
-    `SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2`,
-    [roomId, userId],
-  );
-  return result.rows.length > 0;
-}
-
 function registerSocketHandlers(io) {
   registerAccessControl(io);
   io.use(async (socket, next) => {
@@ -310,59 +299,26 @@ function registerSocketHandlers(io) {
       });
     });
 
-    // --- message-read: advance the reader's pointer, then broadcast ---
-    // Membership is checked because this previously relayed to any roomId the
-    // client named, letting a user spoof read receipts into rooms they are not
-    // in.
-    //
-    // It now PERSISTS, which is the whole point. Before this, the socket
-    // broadcast and room_members.last_seen_at were two competing notions of
-    // "read": the event evaporated the moment the recipient's tab closed, while
-    // the durable pointer that unread_count and the digest filter against was
-    // only ever moved by PATCH /rooms/:roomId/seen. A read tick that vanishes
-    // on reload is not a receipt, it is a rumour. Both paths now write the same
-    // column, so there is one definition of read and it survives a restart.
-    //
-    // last_seen_at advances to NOW(), not to the read message's created_at:
-    // reading a room means reading everything up to the point you reached, and
-    // the newest message is a safe upper bound for what the reader has seen.
-    onEvent('message-read', async ({ roomId, messageId }) => {
-      if (!roomId || !messageId) return;
-      if (!(await isMember(roomId, userId))) return;
-
-      const result = await query(
-        `UPDATE room_members rm
-            SET last_seen_at = GREATEST(rm.last_seen_at, m.created_at),
-                last_seen_sequence = GREATEST(rm.last_seen_sequence, m.room_sequence)
-           FROM messages m
-          WHERE rm.room_id = $1 AND rm.user_id = $2 AND m.id = $3 AND m.room_id = rm.room_id
-          RETURNING rm.last_seen_at, rm.last_seen_sequence`,
-        [roomId, userId, messageId],
-      );
-      const lastSeenAt = result.rows[0]?.last_seen_at;
-      const lastSeenSequence = result.rows[0]?.last_seen_sequence;
-
-      // Broadcast to the room including the sender, so the reader's own client
-      // converges on the same timestamp the server stored rather than assuming
-      // one. `.to()` would exclude them and leave their tick on a guess.
-      io.to(roomId).emit('message-read', { roomId, messageId, userId, lastSeenAt, lastSeenSequence });
-      const { emitChatUpdated } = require('../services/notification.service');
-      await emitChatUpdated(io, roomId);
-    });
-
-    onEvent('message-delivered', async ({ roomId, messageId }) => {
-      if (!roomId || !messageId || !(await isMember(roomId, userId))) return;
-      const result = await query(
-        `UPDATE room_members rm SET last_delivered_sequence = GREATEST(rm.last_delivered_sequence, m.room_sequence)
-           FROM messages m
-          WHERE rm.room_id = $1 AND rm.user_id = $2 AND m.id = $3 AND m.room_id = rm.room_id
-          RETURNING rm.last_delivered_sequence`,
-        [roomId, userId, messageId],
-      );
-      if (result.rows.length) io.to(roomId).emit('message-delivered', {
-        roomId, userId, lastDeliveredSequence: result.rows[0].last_delivered_sequence,
+    // Delivery means a device received message metadata, independent of media
+    // downloads. Reading additionally requires a live foreground timeline.
+    for (const [event, read] of [['message-read', true], ['message-delivered', false]]) {
+      onEvent(event, async ({ roomId, messageId }) => {
+        if (!roomId || !messageId) throw new ApiError(400, 'roomId and messageId are required');
+        return require('../services/messageReceipt.service').acknowledge({ roomId, messageId, userId, read, io,
+          authorize: async () => {
+            if (!socket.connected) return false;
+            if (!read) return true;
+            if (!socket.rooms.has(roomId)) return false;
+            if (!redisClient.isReady) throw new ApiError(503, 'Read receipts are temporarily unavailable');
+            const [lease, meta] = await Promise.all([
+              redisClient.zScore('presence:leases', `${userId}:${socket.id}`),
+              redisClient.hGetAll(`presence:socket:${socket.id}`),
+            ]);
+            return Number(lease) > Date.now() && meta.foreground === '1' && meta.roomId === roomId;
+          },
+        });
       });
-    });
+    }
 
     // Foreground attention is separate from subscriptions (info pages and
     // background tabs retain subscriptions). Activity updates are serialized;

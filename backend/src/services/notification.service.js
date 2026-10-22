@@ -333,6 +333,8 @@ const UNREAD_COUNT_SQL = `(
      AND m.room_sequence > rm.last_seen_sequence
      AND m.deleted_at IS NULL
      AND m.sender_id <> rm.user_id
+     AND NOT EXISTS (SELECT 1 FROM message_recipients mr
+       WHERE mr.message_id=m.id AND mr.recipient_id=rm.user_id AND mr.read)
 )::int`;
 
 /**

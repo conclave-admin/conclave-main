@@ -4,9 +4,13 @@ test.beforeEach(async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith('app-'), 'requires the authenticated preview');
   // Expose only the fixture event bus in the served test module. Production
   // code has no test dispatch hook and uses the real Socket.IO transport.
+  await page.route('**/src/services/messages.service*', async route => {
+    const response = await route.fetch();
+    await route.fulfill({ response, body: `${await response.text()}\nconst fetchReceiptsForTest = getRoomReceiptSummaries; getRoomReceiptSummaries = async (...args) => { (window.__receiptSyncs ||= []).push(args); return fetchReceiptsForTest(...args); };` });
+  });
   await page.route('**/src/config/devPreview.js*', async route => {
     const response = await route.fetch();
-    await route.fulfill({ response, body: `${await response.text()}\nwindow.__realtimeEvent = (name, payload) => listeners.get(name)?.forEach(handler => handler(payload)); window.__heartbeats = []; window.__activitySent = []; const originalEmit = previewSocket.emit.bind(previewSocket); previewSocket.emit = (name, payload, ...args) => { if (name === 'heartbeat') window.__heartbeats.push(payload); if (['typing','stop-typing','start-recording','stop-recording'].includes(name)) window.__activitySent.push({ name, ...payload }); return originalEmit(name, payload, ...args); };` });
+    await route.fulfill({ response, body: `${await response.text()}\nwindow.__realtimeEvent = (name, payload) => listeners.get(name)?.forEach(handler => handler(payload)); window.__heartbeats = []; window.__activitySent = []; window.__reads = []; window.__delivered = []; const originalEmit = previewSocket.emit.bind(previewSocket); previewSocket.emit = (name, payload, ...args) => { if (name === 'heartbeat') window.__heartbeats.push(payload); if (name === 'message-read') window.__reads.push(payload); if (name === 'message-delivered') window.__delivered.push(payload); if (['typing','stop-typing','start-recording','stop-recording'].includes(name)) window.__activitySent.push({ name, ...payload }); return originalEmit(name, payload, ...args); };` });
   });
 });
 
@@ -197,4 +201,56 @@ test('delayed activity snapshots cannot restore an indicator after a newer stop'
   });
   await expect(page.getByText('Victor is typing', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Victor is recording a voice message', { exact: true })).toHaveCount(0);
+});
+
+test('hidden and unfocused timelines wait for resume before acknowledging visible messages', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__receiptHidden = true; window.__receiptFocused = false;
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => window.__receiptHidden ? 'hidden' : 'visible' });
+    Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => window.__receiptFocused });
+  });
+  await page.goto('/chats/preview-dm');
+  await expect(page.getByRole('heading', { name: 'Victor', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.__reads.length)).toBe(0);
+  await page.evaluate(() => { window.__receiptHidden = false; document.dispatchEvent(new Event('visibilitychange')); });
+  expect(await page.evaluate(() => window.__reads.length)).toBe(0);
+  await page.evaluate(() => { window.__receiptFocused = true; window.dispatchEvent(new Event('focus')); });
+  await expect.poll(() => page.evaluate(() => window.__reads.length)).toBeGreaterThan(0);
+  const before = await page.evaluate(() => window.__reads.length);
+  await page.evaluate(() => { window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')); });
+  expect(await page.evaluate(() => window.__reads.length)).toBe(before);
+});
+
+test('message information shows recipient details and group ticks ignore stale summaries', async ({ page }) => {
+  await page.goto('/chats/preview-dm');
+  const button = page.getByRole('button', { name: 'Message info', exact: true }).first();
+  await expect(button).toBeVisible();
+  const id = await button.evaluate(node => node.closest('[data-message-id]').dataset.messageId);
+  const snapshot = { recipient_count: 2, delivered_count: 1, read_count: 1, history_complete: true, version: 3 };
+  await page.evaluate(({ id, snapshot }) => window.__realtimeEvent('message:receipts', { roomId: 'preview-dm', receipts: [{ messageId: id, receipt_summary: snapshot }] }), { id, snapshot });
+  await expect(button.locator('[data-message-status]')).toHaveAttribute('data-message-status', 'sent');
+  await page.evaluate(({ id, snapshot }) => window.__realtimeEvent('message:receipts', { roomId: 'preview-dm', receipts: [{ messageId: id, receipt_summary: { ...snapshot, delivered_count: 2, read_count: 2, version: 4 } }] }), { id, snapshot });
+  await expect(button.locator('[data-message-status]')).toHaveAttribute('data-message-status', 'read');
+  await page.evaluate(({ id, snapshot }) => window.__realtimeEvent('message:receipts', { roomId: 'preview-dm', receipts: [{ messageId: id, receipt_summary: snapshot }] }), { id, snapshot });
+  await expect(button.locator('[data-message-status]')).toHaveAttribute('data-message-status', 'read');
+  await button.click();
+  await expect(page.getByRole('dialog', { name: 'Message information' })).toBeVisible();
+  await expect(page.getByText('Not delivered', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Recipient history is incomplete/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('reconnect refreshes historical receipt summaries and retries cached delivery acknowledgements', async ({ page }) => {
+  await page.goto('/chats/preview-dm');
+  const button = page.getByRole('button', { name: 'Message info', exact: true }).last();
+  await expect(button).toBeVisible();
+  const id = await button.evaluate(node => node.closest('[data-message-id]').dataset.messageId);
+  await page.goto(`/chats/preview-dm?message=${encodeURIComponent(id)}`);
+  await expect(page.getByText('Viewing a shared message', { exact: true })).toBeVisible();
+  await expect(page.locator(`[data-message-id="${id}"]`)).toBeVisible();
+  const before = await page.evaluate(() => window.__delivered.length);
+  await page.evaluate(() => { window.__realtimeEvent('disconnect'); window.__realtimeEvent('connect'); });
+  await expect.poll(() => page.evaluate(() => window.__receiptSyncs?.length || 0)).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => window.__delivered.length)).toBeGreaterThan(before);
+  expect(await page.evaluate(id => window.__receiptSyncs.some(([roomId, ids]) => roomId === 'preview-dm' && ids.includes(id)), id)).toBe(true);
 });

@@ -146,3 +146,17 @@ export async function listRoomMedia(roomId, { kind = 'media', cursor, limit = 24
   const { data } = await api.get(`/messages/room/${roomId}/media`, { params: { kind, cursor, limit, after }, signal, timeout: 20000 });
   return data.data;
 }
+
+export async function getMessageReceipts(messageId) {
+  if (isDevAuthBypass) return { messageId, sentAt: previewMessages.find(m => m.id === messageId)?.created_at,
+    summary: { history_complete: false, recipient_count: 1, delivered_count: 0, read_count: 0 },
+    recipients: [{ user_id: 'dev-victor', display_name: 'Victor', delivered: false, read: false, current_member: true }] };
+  const { data } = await api.get(`/messages/${messageId}/receipts`);
+  return data.data;
+}
+
+export async function getRoomReceiptSummaries(roomId, ids) {
+  if (isDevAuthBypass) return { roomId, receipts: [] };
+  const { data } = await api.get(`/messages/room/${roomId}/receipts`, { params: { ids: ids.join(',') } });
+  return data.data;
+}

@@ -13,6 +13,7 @@ export function startPresenceHeartbeat(socket, {
     previous = now();
     const foreground = !background && !suspended && doc.visibilityState === 'visible' && doc.hasFocus();
     socket.emit('heartbeat', { foreground, roomId: foreground ? roomId : null, revision: nextRevision() }, (response) => {
+      if (response?.ok === true && foreground) win.dispatchEvent(new Event('conclave:read-resume'));
       if (response?.ok === false || response?.data?.available === false) win.dispatchEvent(new Event('conclave:presence-stale'));
     });
   };

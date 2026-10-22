@@ -13,6 +13,8 @@ const {
 const { assertAllowedEmoji, attachReactions } = require("../services/reaction.service");
 const { attachPins: attachMessagePins, pinMessage, unpinMessage, listRoomPins } = require("../services/messagePin.service");
 const { attachPolls } = require("../services/poll.service");
+const { attachReceiptSummaries } = require("../services/messageReceipt.service");
+const attachPollsAndReceipts = async rows => attachReceiptSummaries(await attachPolls(rows));
 
 const PAGE_SIZE = 50;
 
@@ -171,7 +173,7 @@ const listMessages = asyncHandler(async (req, res) => {
 
   // 3. Attach reactions, then return with the cursor for the next page.
   //    One extra query for the whole page, not one per message.
-  const messages = await attachPolls(
+  const messages = await attachPollsAndReceipts(
     await attachMessagePins(
       await attachReactions(result.rows, req.user.id),
       req.user.id,
@@ -249,7 +251,7 @@ async function getMessagePayload(messageId, viewerId) {
     throw new ApiError(404, "Message not found");
   }
 
-  const [message] = await attachPolls(
+  const [message] = await attachPollsAndReceipts(
     await attachMessagePins(
       await attachReactions(result.rows, viewerId),
       viewerId,
@@ -353,7 +355,7 @@ const searchMessages = asyncHandler(async (req, res) => {
   );
 
   return ok(res, {
-    messages: await attachPolls(
+    messages: await attachPollsAndReceipts(
       await attachMessagePins(
         await attachReactions(result.rows, req.user.id),
         req.user.id,
@@ -542,3 +544,15 @@ const listRoomMedia = asyncHandler(async (req, res) => {
 });
 
 module.exports = { sendMessage, listMessages, searchMessages, editMessage: editMessageHandler, deleteMessage: deleteMessageHandler, addReaction: addReactionHandler, removeReaction: removeReactionHandler, pinMessageHandler, unpinMessageHandler, listPinnedMessages, listRoomMedia };
+
+module.exports.getMessageReceipts = asyncHandler(async (req, res) => ok(res, await require('../services/messageReceipt.service').details(req.params.messageId, req.user.id)));
+
+module.exports.getRoomReceiptSummaries = asyncHandler(async (req, res) => {
+  const ids = typeof req.query.ids === 'string' ? req.query.ids.split(',') : [];
+  if (!ids.length || ids.length > 200 || ids.some(id => !UUID.test(id))) throw new ApiError(400, 'Provide up to 200 message IDs');
+  const receipts = await require('../services/realtimeAccess.service').withRoomMembership(req.params.roomId, req.user.id, async db => {
+    const rows = await db.query('SELECT id FROM messages WHERE room_id=$1 AND id=ANY($2::uuid[])', [req.params.roomId, ids]);
+    return (await attachReceiptSummaries(rows.rows, db)).map(m => ({ messageId: m.id, receipt_summary: m.receipt_summary }));
+  });
+  return ok(res, { roomId: req.params.roomId, receipts });
+});
