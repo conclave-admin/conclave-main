@@ -189,9 +189,10 @@ export default function EncryptionSettings() {
             <p className="text-body text-ink">
               Save this recovery key now. It is not sent to the server.
             </p>
-            <code className="block break-all text-body text-ink">
-              {createdKey.key}
-            </code>
+            <details>
+              <summary className="cursor-pointer text-label text-brand">Reveal recovery key</summary>
+              <code className="mt-3 block break-all text-body text-ink">{createdKey.key}</code>
+            </details>
             <Button variant="secondary" onClick={() => setCreatedKey("")}>
               I saved my recovery key
             </Button>
@@ -209,8 +210,8 @@ export default function EncryptionSettings() {
           }}
         >
           <Input
-            label="Encryption recovery key"
             type="password"
+            label="Encryption recovery key"
             autoComplete="off"
             value={key}
             onChange={(e) => setKey(e.target.value)}

@@ -19,11 +19,11 @@
 :root {
   color-scheme: light;
 
-  --color-canvas: 247 245 240; /* warm paper #f7f5f0 */
-  --color-surface: 255 254 251; /* soft white #fffefb */
-  --color-ink: 37 37 43;
-  --color-muted: 100 100 110;
-  --color-line: 222 221 216;
+  --color-canvas: 244 246 250; /* warm paper #f7f5f0 */
+  --color-surface: 255 255 255; /* soft white #fffefb */
+  --color-ink: 27 32 45;
+  --color-muted: 102 112 131;
+  --color-line: 229 233 241;
   --color-brand: 79 70 229; /* Preserve the purple brand identity. */
   --color-brand-soft: 238 235 255;
   --color-success: 21 128 74;
@@ -39,11 +39,11 @@
 html.dark {
   color-scheme: dark;
 
-  --color-canvas: 18 18 20; /* neutral charcoal #121214 */
-  --color-surface: 28 28 32;
-  --color-ink: 242 241 245;
-  --color-muted: 170 169 180;
-  --color-line: 50 50 56;
+  --color-canvas: 14 18 26; /* neutral charcoal #121214 */
+  --color-surface: 22 28 39;
+  --color-ink: 235 239 247;
+  --color-muted: 153 165 186;
+  --color-line: 42 52 69;
   --color-brand: 129 140 248; /* Preserve the existing dark-mode brand. */
   --color-brand-soft: 43 39 68;
   --color-success: 110 211 155;
@@ -54,12 +54,12 @@ html.dark {
 
 :root {
   --rail-w: 72px;
-  --list-w: 320px;
+  --list-w: 340px;
 }
 
 @media (min-width: 1280px) {
   :root {
-    --list-w: 360px;
+    --list-w: 380px;
   }
 }
 
@@ -87,7 +87,7 @@ html.dark {
       "Segoe UI",
       sans-serif;
     color: rgb(var(--color-ink));
-    line-height: 1.2;
+    line-height: 1.5;
   }
   body {
     margin: 0;
@@ -185,4 +185,226 @@ html.dark {
 }
 .message-jump-highlight {
   animation: message-jump-glow 1.8s ease-in-out;
+}
+
+/* A gathering pulse around the stationary brand mark, rather than a spinner. */
+.conclave-loading-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+  isolation: isolate;
+}
+.conclave-loading-mark img {
+  z-index: 1;
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgb(99 72 220 / 12%);
+  animation: conclave-mark-breathe 2.8s ease-in-out infinite;
+}
+.conclave-loading-halo {
+  position: absolute;
+  inset: 8px;
+  border: 1px solid rgb(123 95 240 / 35%);
+  border-radius: 28px;
+  background: rgb(123 95 240 / 4%);
+  animation: conclave-gather 2.8s ease-out infinite;
+}
+.conclave-loading-halo-delayed {
+  animation-delay: -1.4s;
+}
+.conclave-loading-spark {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-brand, #7955e9);
+  top: 10px;
+  right: 13px;
+  box-shadow: 0 0 14px rgb(123 95 240 / 45%);
+  animation: conclave-mark-breathe 2.8s ease-in-out infinite reverse;
+}
+.conclave-loading-track {
+  width: 72px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: rgb(123 95 240 / 12%);
+}
+.conclave-loading-track span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: inherit;
+  background: #7955e9;
+  animation: conclave-travel 1.8s ease-in-out infinite;
+}
+@keyframes conclave-gather {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.7;
+  }
+  85%,
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+@keyframes conclave-mark-breathe {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+@keyframes conclave-travel {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(360%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conclave-loading * {
+    animation: none !important;
+  }
+  .conclave-loading-halo-delayed {
+    display: none;
+  }
+}
+
+/* Messaging application surfaces. Public marketing keeps its own composition. */
+.app-shell {
+  --chat-canvas: 242 244 249;
+  --bubble-in: 255 255 255;
+}
+.dark .app-shell {
+  --chat-canvas: 13 18 27;
+  --bubble-in: 29 38 53;
+}
+.app-shell button,
+.app-shell a,
+.app-shell input,
+.app-shell textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+.app-shell :focus-visible {
+  outline-offset: 3px;
+}
+.app-shell ::selection {
+  background: rgb(var(--color-brand) / 0.22);
+}
+.app-rail {
+  background: rgb(var(--color-canvas));
+}
+.app-page {
+  background: rgb(var(--color-canvas));
+}
+.app-page-content > h1,
+.app-page-content > header h1 {
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+}
+.app-page-content > section {
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.025);
+}
+.app-page-content > section,
+.app-page-content > details {
+  border-radius: 20px;
+}
+.app-page-content > section + section {
+  margin-top: 20px;
+}
+.app-page-content p {
+  overflow-wrap: anywhere;
+}
+.conversation-canvas {
+  background-color: rgb(var(--chat-canvas));
+  background-image: radial-gradient(
+    rgb(var(--color-muted) / 0.09) 0.65px,
+    transparent 0.65px
+  );
+  background-size: 22px 22px;
+}
+.message-bubble {
+  border: 1px solid rgb(var(--color-line) / 0.55);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+  line-height: 1.55;
+}
+.message-bubble-in {
+  background: rgb(var(--bubble-in));
+}
+.message-bubble-out {
+  background: rgb(var(--color-brand));
+  color: #fff;
+  border-color: transparent;
+}
+.dark .message-bubble-out {
+  background: #6555d9;
+}
+.chat-composer {
+  padding: 12px 20px max(12px, env(safe-area-inset-bottom));
+  background: rgb(var(--color-surface));
+  border-top: 1px solid rgb(var(--color-line));
+}
+.chat-row {
+  min-height: 84px;
+}
+.chat-row[aria-current="page"] {
+  box-shadow: inset 3px 0 rgb(var(--color-brand));
+}
+.chat-inbox {
+  background: rgb(var(--color-surface));
+}
+.app-shell ::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.app-shell ::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-muted) / 0.25);
+  border-radius: 8px;
+}
+.auth-art {
+  background: #24203f;
+  color: #fff;
+  background-image:
+    radial-gradient(ellipse at 10% 20%, #6c54cf 0%, transparent 55%),
+    radial-gradient(ellipse at 100% 100%, #43408e 0%, transparent 60%);
+}
+@media (max-width: 767px) {
+  .chat-row {
+    min-height: 80px;
+  }
+  .chat-composer {
+    padding: 10px 12px max(10px, env(safe-area-inset-bottom));
+  }
+  .app-page-content > section {
+    border-radius: 16px;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .app-page-content {
+    animation: app-content-enter 0.18s ease-out;
+  }
+  @keyframes app-content-enter {
+    from {
+      opacity: 0.65;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+.dark .app-shell .bg-brand {
+  background-color: #6555d9;
+  color: #fff;
+}
+.app-shell .chat-composer form > div:last-of-type {
+  border-radius: 18px;
 }

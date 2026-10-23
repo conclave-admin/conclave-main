@@ -1,6 +1,6 @@
+import ConversationWelcome from "@/components/chats/ConversationWelcome";
 import { Outlet, useOutletContext, useParams } from "react-router-dom";
 import ChatList from "@/components/chats/ChatList";
-import EmptyState from "@/components/ui/EmptyState";
 
 /**
  * The chat shell: a list on the left, the open conversation on the right.
@@ -39,11 +39,8 @@ export default function Chats() {
         {roomId ? (
           <Outlet context={shellContext} />
         ) : (
-          <div className="hidden h-full items-center justify-center md:flex">
-            <EmptyState
-              title="Pick a chat"
-              description="Choose a conversation from the list to open it here."
-            />
+          <div className="hidden h-full md:block">
+            <ConversationWelcome />
           </div>
         )}
       </section>

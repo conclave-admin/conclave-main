@@ -29,7 +29,7 @@ export default function Select({
       <span className="relative block">
         <select
           id={id}
-          className={`min-h-12 w-full appearance-none rounded-lg border bg-surface pl-3.5 pr-10 text-sm text-ink outline-none transition-shadow focus:border-brand focus:ring-2 focus:ring-brand/15 ${error ? "border-error" : "border-line"} ${className}`}
+          className={`min-h-12 w-full appearance-none rounded-xl border bg-surface pl-3.5 pr-10 text-sm text-ink outline-none transition-shadow focus:border-brand focus:ring-2 focus:ring-brand/15 ${error ? "border-error" : "border-line"} ${className}`}
           {...props}
         >
           {children}

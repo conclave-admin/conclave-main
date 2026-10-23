@@ -11,6 +11,7 @@ import {
 } from "react";
 import {
   listRooms,
+  resolveChatPreview,
   markRoomSeen,
   updateRoomPreferences,
 } from "@/services/rooms.service";
@@ -156,12 +157,18 @@ export function ChatsProvider({ children }) {
   useEffect(() => {
     if (!socket) return undefined;
 
-    const onChatUpdated = ({
+    const onChatUpdated = async ({
       roomId,
       lastMessage,
       unreadCount,
       roomSequence,
     }) => {
+      try {
+        lastMessage = await resolveChatPreview(roomId, lastMessage);
+      } catch {
+        return;
+      }
+      if (currentUser.current !== userId) return;
       // Delayed pre-clear events must not restore text from hidden history.
       if (
         lastMessage &&

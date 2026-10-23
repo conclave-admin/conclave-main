@@ -40,10 +40,10 @@ export default function Page({ width = "content", className = "", children }) {
   return (
     <div
       ref={scrollRef}
-      className="h-full min-h-0 overflow-y-auto overscroll-contain"
+      className="app-page h-full min-h-0 overflow-y-auto overscroll-contain"
     >
       <div
-        className={`mx-auto w-full min-w-0 px-4 py-6 md:px-7 md:py-8 ${WIDTHS[width]} ${className}`}
+        className={`app-page-content mx-auto w-full min-w-0 px-4 py-6 md:px-8 md:py-9 ${WIDTHS[width]} ${className}`}
       >
         {children}
       </div>

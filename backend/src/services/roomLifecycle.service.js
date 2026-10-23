@@ -324,7 +324,7 @@ async function handover(roomId, userId, successorId) {
     { admin: true },
   );
 }
-async function clear(roomId, userId) {
+async function clear(roomId, userId, { hide = false } = {}) {
   return locked(roomId, userId, async (db, room) => {
     await db.query(
       "INSERT INTO room_personal_history(room_id,user_id,cleared_sequence) VALUES($1,$2,$3) ON CONFLICT(room_id,user_id) DO UPDATE SET cleared_sequence=GREATEST(room_personal_history.cleared_sequence,EXCLUDED.cleared_sequence),cleared_at=NOW()",
@@ -340,6 +340,11 @@ async function clear(roomId, userId) {
       `UPDATE notifications SET seen=TRUE WHERE recipient_id=$1 AND reference_id IN(SELECT id FROM messages WHERE room_id=$2 AND room_sequence<=$3)`,
       [userId, roomId, row.cleared_sequence],
     );
+    if (hide)
+      await db.query(
+        "INSERT INTO room_member_preferences(room_id,user_id,hidden_sequence) VALUES($1,$2,$3) ON CONFLICT(room_id,user_id) DO UPDATE SET hidden_sequence=EXCLUDED.hidden_sequence,updated_at=NOW()",
+        [roomId, userId, row.cleared_sequence],
+      );
     return { roomId, ...row };
   });
 }

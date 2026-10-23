@@ -336,7 +336,12 @@ export default function RoomInfo() {
 
   return (
     <Page width="content">
-      <ConversationEncryption room={room} />
+      <details className="mb-4 rounded-xl border border-line p-4">
+        <summary className="cursor-pointer text-label text-muted">
+          Security details
+        </summary>
+        <ConversationEncryption room={room} />
+      </details>
       <EncryptedSearch room={room} />
       <section
         className="rounded-2xl border border-line bg-surface p-5 shadow-card md:p-7"

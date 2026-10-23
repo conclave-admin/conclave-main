@@ -50,9 +50,9 @@ export default {
         // and Typography.FontWeight.* carried per style.
         h1: ["20px", { lineHeight: "1.2", fontWeight: "700" }],
         h2: ["16px", { lineHeight: "1.2", fontWeight: "600" }],
-        body: ["14px", { lineHeight: "1.2", fontWeight: "400" }],
-        label: ["13px", { lineHeight: "1.2", fontWeight: "500" }],
-        metadata: ["12px", { lineHeight: "1.2", fontWeight: "400" }],
+        body: ["14px", { lineHeight: "1.5", fontWeight: "400" }],
+        label: ["13px", { lineHeight: "1.4", fontWeight: "500" }],
+        metadata: ["12px", { lineHeight: "1.5", fontWeight: "400" }],
 
         // Landing display scale. The Foundations set tops out at h1 (20px),
         // which cannot carry an editorial hero, so the landing extends it
@@ -69,15 +69,15 @@ export default {
         // open, tighten it here rather than per component.
         "display-1": [
           "clamp(2.5rem, 6.5vw, 5rem)",
-          { lineHeight: "1.2", fontWeight: "400" },
+          { lineHeight: "1.12", fontWeight: "400" },
         ],
         "display-2": [
           "clamp(1.875rem, 3.5vw, 3rem)",
-          { lineHeight: "1.2", fontWeight: "400" },
+          { lineHeight: "1.12", fontWeight: "400" },
         ],
         "display-3": [
           "clamp(1.375rem, 2.2vw, 1.875rem)",
-          { lineHeight: "1.2", fontWeight: "400" },
+          { lineHeight: "1.12", fontWeight: "400" },
         ],
       },
       spacing: {

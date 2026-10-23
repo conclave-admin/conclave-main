@@ -1,3 +1,4 @@
+import { getMessageSnapshots } from "./messages.service";
 import { applyAccountClear } from "../lib/clearedConversations";
 import { getSessionUserId } from "../lib/session";
 import { api } from "../lib/api";
@@ -8,14 +9,60 @@ import {
   previewUser,
 } from "../config/devPreview";
 
+export async function resolveChatPreview(roomId, message) {
+  if (
+    !message ||
+    message.is_deleted ||
+    (message.content !== "[Encrypted message]" && !message.encrypted_payload)
+  )
+    return message;
+  const account = getSessionUserId();
+  try {
+    const result = await getMessageSnapshots(roomId, [message.id]);
+    if (getSessionUserId() !== account) throw new Error("Account changed");
+    const decoded = result.messages.find((m) => m.id === message.id);
+    if (!decoded) return null;
+    if (!decoded._decrypted)
+      return { ...message, content: "Message unavailable on this device" };
+    return {
+      ...message,
+      ...decoded,
+      has_attachment: Boolean(decoded.attachments?.length),
+      attachment_type: decoded.attachments?.[0]?.mime_type,
+    };
+  } catch (error) {
+    if (getSessionUserId() !== account) throw error;
+    return { ...message, content: "Message unavailable on this device" };
+  }
+}
+
 export async function listRooms() {
   if (isDevAuthBypass) return previewRooms;
   const userId = getSessionUserId();
   const { data } = await api.get("/rooms");
   if (getSessionUserId() === userId)
     for (const room of data.data)
-      applyAccountClear(userId, room.id, room.cleared_sequence,room.cleared_at);
-  return data.data;
+      applyAccountClear(
+        userId,
+        room.id,
+        room.cleared_sequence,
+        room.cleared_at,
+      );
+  const rows = data.data;
+  let index = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(4, rows.length) }, async () => {
+      while (index < rows.length) {
+        const room = rows[index++];
+        room.last_message = await resolveChatPreview(
+          room.id,
+          room.last_message,
+        );
+      }
+    }),
+  );
+  if (getSessionUserId() !== userId) throw new Error("Account changed");
+  return rows;
 }
 
 export async function discoverRooms({ q = "", page = 1 } = {}) {
@@ -96,7 +143,12 @@ export async function getRoom(roomId) {
   const userId = getSessionUserId();
   const { data } = await api.get(`/rooms/${roomId}`);
   if (getSessionUserId() === userId)
-    applyAccountClear(userId, roomId, data.data.cleared_sequence,data.data.cleared_at);
+    applyAccountClear(
+      userId,
+      roomId,
+      data.data.cleared_sequence,
+      data.data.cleared_at,
+    );
   return data.data;
 }
 

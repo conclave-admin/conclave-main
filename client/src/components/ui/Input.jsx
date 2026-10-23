@@ -6,7 +6,7 @@ export default function Input({ label, error, id, ...props }) {
       )}
       <input
         id={id}
-        className={`min-h-12 w-full rounded-lg border bg-surface px-3.5 text-sm text-ink outline-none transition-shadow placeholder:text-muted/70 focus:border-brand focus:ring-2 focus:ring-brand/15 ${error ? "border-error" : "border-line"}`}
+        className={`min-h-12 w-full rounded-xl border bg-canvas/60 px-3.5 text-sm text-ink outline-none transition-shadow placeholder:text-muted/70 focus:border-brand focus:ring-2 focus:ring-brand/15 ${error ? "border-error" : "border-line"}`}
         {...props}
       />
       {error && (

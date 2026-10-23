@@ -142,4 +142,15 @@ router.get(
     });
   }),
 );
+router.delete(
+  "/:roomId/chat",
+  auth,
+  limit({ max: 10 }),
+  wrap(async (req, res) =>
+    ok(
+      res,
+      await service.clear(req.params.roomId, req.user.id, { hide: true }),
+    ),
+  ),
+);
 module.exports = router;

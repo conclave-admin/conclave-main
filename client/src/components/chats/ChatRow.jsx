@@ -1,5 +1,8 @@
-import { useRef, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { api } from "@/lib/api";
+import { useRealtime } from "@/contexts/RealtimeContext";
+import { subscribeToRoom } from "@/lib/roomSubscriptions";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, NavLink } from "react-router-dom";
 import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
 import IconMore from "@/assets/icons/more-vertical.svg?react";
@@ -29,6 +32,7 @@ import { useAuth } from "@/contexts/AuthContext";
  */
 export default function ChatRow({ room }) {
   const {
+    refresh,
     pinned,
     muted,
     archived,
@@ -39,6 +43,14 @@ export default function ChatRow({ room }) {
     toggleArchive,
   } = useChats();
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const { socket } = useRealtime();
+  const [actionError, setActionError] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  useEffect(
+    () => (socket ? subscribeToRoom(socket, room.id) : undefined),
+    [socket, room.id],
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef(null);
 
@@ -49,12 +61,17 @@ export default function ChatRow({ room }) {
 
   return (
     <li className="relative">
+      {actionError && (
+        <p role="alert" className="text-error text-metadata">
+          {actionError}
+        </p>
+      )}
       {/* No markSeen here: Room does it on open, which covers the rail, a
           deep link and the back button too — not just this click. */}
       <NavLink
         to={`/chats/${room.id}`}
         className={({ isActive }) =>
-          `flex items-start gap-3 rounded-lg px-3 py-2.5 pr-10 transition-colors ${
+          `chat-row flex items-center gap-3.5 rounded-xl px-3 py-3 pr-10 transition-colors ${
             isActive ? "bg-brand-soft" : "hover:bg-canvas"
           }`
         }
@@ -137,6 +154,37 @@ export default function ChatRow({ room }) {
         label={`Actions for ${room.display_name}`}
         className="w-44"
       >
+        <button
+          type="button"
+          role="menuitem"
+          disabled={deleting}
+          className="w-full rounded-md px-2.5 py-2 text-left text-body text-error"
+          onClick={async () => {
+            if (
+              !window.confirm(
+                "Delete this chat for your account? Other people keep their messages. New messages will bring the chat back. Group membership and pending sends are kept.",
+              )
+            )
+              return;
+            setDeleting(true);
+            setActionError("");
+            try {
+              await api.delete(`/rooms/${room.id}/chat`);
+              await refresh();
+              navigate("/chats");
+            } catch (e) {
+              setActionError(
+                e.response?.data?.message ||
+                  "Could not delete chat. Try again when connected.",
+              );
+            } finally {
+              setDeleting(false);
+              setMenuOpen(false);
+            }
+          }}
+        >
+          Delete chat
+        </button>
         <button
           type="button"
           role="menuitem"
