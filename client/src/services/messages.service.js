@@ -1,5 +1,15 @@
+import {decryptMessage,decryptMessages,encryptEdit} from '../lib/encryption';
+import {readRoomMessages} from '../lib/fileCache';
+import {getSessionUserId} from '../lib/session';
 import { api } from '../lib/api';
 import { isDevAuthBypass, previewMessages, previewPinnedMessages } from '../config/devPreview';
+
+async function decode(value){
+  if(Array.isArray(value))return Promise.all(value.map(decode));
+  if(value?.encrypted_payload)return decryptMessage(value);
+  if(value?.messages)return {...value,messages:await decryptMessages(value.messages)};
+  return value;
+}
 
 export async function listMessages(roomId, before, afterSeq, around) {
   if (isDevAuthBypass) {
@@ -17,7 +27,7 @@ export async function listMessages(roomId, before, afterSeq, around) {
   const { data } = await api.get(`/messages/room/${roomId}`, {
     params: around ? { around } : afterSeq !== undefined ? { afterSeq } : before ? { before } : undefined,
   });
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -28,9 +38,10 @@ export async function listMessages(roomId, before, afterSeq, around) {
  * letting an edit rewrite them would change who was notified after the fact.
  * A 403 from someone else's message is the server enforcing that, not a bug.
  */
-export async function editMessage(messageId, content) {
-  const { data } = await api.patch(`/messages/${messageId}`, { content });
-  return data.data;
+export async function editMessage(messageId, content,message) {
+  const body=message?.encrypted_payload?{encryptedPayload:await encryptEdit(message,content)}:{content};
+  const { data } = await api.patch(`/messages/${messageId}`, body);
+  return decode(data.data);
 }
 
 /**
@@ -42,7 +53,7 @@ export async function editMessage(messageId, content) {
  */
 export async function deleteMessage(messageId) {
   const { data } = await api.delete(`/messages/${messageId}`);
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -53,7 +64,7 @@ export async function deleteMessage(messageId) {
  */
 export async function addReaction(messageId, emoji) {
   const { data } = await api.put(`/messages/${messageId}/reactions`, { emoji });
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -68,7 +79,7 @@ export async function removeReaction(messageId, emoji) {
   const { data } = await api.delete(
     `/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`,
   );
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -90,7 +101,7 @@ export async function uploadFile(file, { onProgress, signal, filename, metadata 
       if (event.total) onProgress?.(event.loaded / event.total);
     },
   });
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -107,7 +118,7 @@ export async function uploadFile(file, { onProgress, signal, filename, metadata 
 export async function pinMessage(messageId, scope) {
   if (isDevAuthBypass) return { id: messageId, pins: { room: null, mine: [scope] } };
   const { data } = await api.put(`/messages/${messageId}/pin`, { scope });
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -117,7 +128,7 @@ export async function pinMessage(messageId, scope) {
 export async function unpinMessage(messageId, scope) {
   if (isDevAuthBypass) return { id: messageId, pins: { room: null, mine: [] } };
   const { data } = await api.delete(`/messages/${messageId}/pin/${scope}`);
-  return data.data;
+  return decode(data.data);
 }
 
 /** Every room-wide pin in a room, oldest first. Personal bookmarks are not listed. */
@@ -128,10 +139,22 @@ export async function listPinnedMessages(roomId) {
       .map((message) => ({ ...message, room_id: roomId }));
   }
   const { data } = await api.get(`/messages/room/${roomId}/pinned`);
-  return data.data.messages;
+  return decryptMessages(data.data.messages);
 }
 
 export async function listRoomMedia(roomId, { kind = 'media', cursor, limit = 24, after, signal } = {}) {
+  if(!isDevAuthBypass){
+    const room=(await api.get(`/rooms/${roomId}`,{signal})).data.data;
+    if(room.encryption_mode==='e2ee-v1'){
+      const messages=await decryptMessages(await readRoomMessages(getSessionUserId(),roomId));
+      const files=messages.filter(m=>m._decrypted&&!m.is_deleted&&!m.deleted_at&&(!after||new Date(m.created_at)>new Date(after)))
+        .flatMap(m=>(m.attachments||[]).map(a=>({...a,message_id:m.id,created_at:m.created_at,sender_name:m.sender_name})))
+        .filter(a=>kind==='media'?/^(image|video)\//.test(a.mime_type||''):kind==='audio'?(a.mime_type||'').startsWith('audio/'):!/^(image|video|audio)\//.test(a.mime_type||''))
+        .sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+      const start=cursor?Number(cursor):0;
+      return {media:files.slice(start,start+limit),nextCursor:start+limit<files.length?String(start+limit):null,localOnly:true};
+    }
+  }
   if (isDevAuthBypass) {
     const rows = previewMessages.filter((message) => !message.is_deleted && !message.deleted_at && (!after || new Date(message.created_at) > new Date(after)))
       .flatMap((message) => (message.attachments || []).map((item, index) => ({ ...item,
@@ -144,7 +167,7 @@ export async function listRoomMedia(roomId, { kind = 'media', cursor, limit = 24
     return { media: rows.slice(start, start + limit), nextCursor: start + limit < rows.length ? String(start + limit) : null };
   }
   const { data } = await api.get(`/messages/room/${roomId}/media`, { params: { kind, cursor, limit, after }, signal, timeout: 20000 });
-  return data.data;
+  return decode(data.data);
 }
 
 export async function getMessageReceipts(messageId) {
@@ -152,13 +175,13 @@ export async function getMessageReceipts(messageId) {
     summary: { history_complete: false, recipient_count: 1, delivered_count: 0, read_count: 0 },
     recipients: [{ user_id: 'dev-victor', display_name: 'Victor', delivered: false, read: false, current_member: true }] };
   const { data } = await api.get(`/messages/${messageId}/receipts`);
-  return data.data;
+  return decode(data.data);
 }
 
 export async function getRoomReceiptSummaries(roomId, ids) {
   if (isDevAuthBypass) return { roomId, receipts: [] };
   const { data } = await api.get(`/messages/room/${roomId}/receipts`, { params: { ids: ids.join(',') } });
-  return data.data;
+  return decode(data.data);
 }
 
 export async function getMessageSnapshots(roomId, ids) {
@@ -166,5 +189,5 @@ export async function getMessageSnapshots(roomId, ids) {
     const messages=previewMessages.filter(m=>ids.includes(m.id)).map(m=>({...m,room_id:roomId}));
     return {messages,missingIds:ids.filter(id=>!messages.some(m=>m.id===id))};
   }
-  return (await api.get(`/messages/room/${roomId}`,{params:{ids:ids.join(',')}})).data.data;
+  return decode((await api.get(`/messages/room/${roomId}`,{params:{ids:ids.join(',')}})).data.data);
 }

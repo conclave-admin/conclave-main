@@ -16,6 +16,7 @@ async function requireSession(claims) {
     [claims.sid, claims.sub],
   );
   if (!result.rows.length) throw new ApiError(401, 'Session expired or revoked — please sign in again');
+  await query("UPDATE auth_sessions SET last_active_at=NOW() WHERE id=$1 AND last_active_at<NOW()-INTERVAL '5 minutes'",[claims.sid]);
   return result.rows[0];
 }
 

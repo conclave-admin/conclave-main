@@ -61,7 +61,7 @@ function validateAttachments(attachments) {
  *   without it the mentions simply are not pushed live.
  * @returns {object} The inserted message row enriched with sender info and attachments
  */
-async function createMessage({ roomId, senderId, clientId, content, replyToId, attachments, albumId, mentionedUserIds, forwardSource, inTransaction, io }) {
+async function createMessage({ roomId, senderId, clientId, content, replyToId, attachments, albumId, mentionedUserIds, forwardSource, inTransaction, encryptedPayload, io }) {
   if (clientId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientId)) {
     throw new ApiError(400, 'clientId must be a UUID');
   }
@@ -79,7 +79,7 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
 
   // A message may be file-only (BACKEND_TASKS.md Bug 8) — the dev fixtures
   // include one. It may not be empty in both senses.
-  if (!forwardSource && !hasContent && cleanAttachments.length === 0) {
+  if (!encryptedPayload && !forwardSource && !hasContent && cleanAttachments.length === 0) {
     throw new ApiError(
       400,
       'Message content is required unless there is at least one attachment'
@@ -88,7 +88,7 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
 
   // 1. Verify room exists and sender is a member (1 query)
   const membership = await query(
-    `SELECT r.id AS room_id, r.type AS room_type,
+    `SELECT r.id AS room_id, r.type AS room_type, r.encryption_mode,r.superseded_by,
             EXISTS (
               SELECT 1
                 FROM room_members peer
@@ -137,7 +137,7 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
     await client.query('BEGIN');
     // Serialize sends per room. A retry must check for an existing client id
     // after any in-flight copy has committed, before allocating a sequence.
-    await client.query('SELECT id FROM rooms WHERE id = $1 FOR UPDATE', [roomId]);
+    const lockedRoom=(await client.query('SELECT id,superseded_by FROM rooms WHERE id = $1 FOR UPDATE', [roomId])).rows[0];
 
     if (clientId) {
       const existing = await client.query(
@@ -158,13 +158,26 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
     }
 
     if (!isRetry) {
+      if(lockedRoom.superseded_by)throw new ApiError(409,'Continue in the new encrypted conversation');
+      let encrypted = null;
+      if (membership.rows[0].encryption_mode === 'e2ee-v1') {
+        if (hasContent || forwardSource || inTransaction) throw new ApiError(400,'This conversation accepts device-encrypted messages only');
+        encrypted = await require('./encryption.service').validateMessage(client,roomId,senderId,clientId,encryptedPayload);
+      } else if (encryptedPayload) throw new ApiError(400,'This conversation is not encrypted');
+      if (membership.rows[0].room_type === 'dm') {
+        const peer=(await client.query('SELECT user_id FROM room_members WHERE room_id=$1 AND user_id<>$2',[roomId,senderId])).rows[0]?.user_id;
+        if(peer){await client.query("SELECT pg_advisory_xact_lock(hashtextextended(LEAST($1::text,$2::text)||':'||GREATEST($1::text,$2::text),51))",[senderId,peer]);
+          if((await client.query('SELECT 1 FROM user_blocks WHERE (blocker_id=$1 AND blocked_id=$2) OR (blocker_id=$2 AND blocked_id=$1)',[senderId,peer])).rowCount)throw new ApiError(403,'Messaging is unavailable for this conversation');}
+        await require('./privacy.service').assertCanSendDm(client,roomId,senderId);
+      }
       let forwardedAttachments = [];
       if (forwardSource) {
-        const source = await client.query(`SELECT m.id, m.content FROM messages m
+        const source = await client.query(`SELECT m.id, m.content,m.encrypted_payload FROM messages m
           JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
           WHERE m.id = $1 AND m.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM polls p WHERE p.message_id = m.id)
           FOR SHARE OF m, rm`, [forwardSource.messageId, senderId]);
         if (!source.rows.length) throw new ApiError(404, 'Forwarding source is unavailable');
+        if(source.rows[0].encrypted_payload)throw new ApiError(409,'Encrypted messages cannot be forwarded through the server');
         const sourceFiles = await client.query('SELECT * FROM attachments WHERE message_id = $1 ORDER BY id', [forwardSource.messageId]);
         if (forwardSource.attachmentId) {
           forwardedAttachments = sourceFiles.rows.filter((item) => item.id === forwardSource.attachmentId);
@@ -197,11 +210,11 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
       );
 
       const result = await client.query(
-        `INSERT INTO messages (room_id, sender_id, client_id, room_sequence, content, reply_to_id, album_id, forwarded)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO messages (room_id, sender_id, client_id, room_sequence, content, reply_to_id, album_id, forwarded,encrypted_payload)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8,$9)
          RETURNING id, room_id, sender_id, client_id, room_sequence, content, reply_to_id,
                    album_id, forwarded, edited_at, deleted_at, created_at`,
-        [roomId, senderId, clientId || null, sequence.rows[0].message_sequence, hasContent ? content.trim() : null, replyToId || null, albumId || null, Boolean(forwardSource)],
+        [roomId, senderId, clientId || null, sequence.rows[0].message_sequence, encrypted ? '[Encrypted message]' : hasContent ? content.trim() : null, replyToId || null, albumId || null, Boolean(forwardSource),encrypted],
       );
       message = result.rows[0];
       for (const owned of forwardedAttachments) {
@@ -243,6 +256,8 @@ async function createMessage({ roomId, senderId, clientId, content, replyToId, a
           'Attachment is unavailable: it was never uploaded, was uploaded by another user, or is already attached to a message'
         );
       }
+
+      if ((membership.rows[0].encryption_mode === 'e2ee-v1') !== (claim.rows[0].mime_type === 'application/vnd.conclave.encrypted')) throw new ApiError(400,'The attachment encryption does not match this conversation');
 
       // filename/mime_type/size come from the upload record, never the request.
       // Otherwise a client could attach someone else's real URL while claiming
@@ -514,7 +529,7 @@ async function notifyRoomActivity({ message, senderId, mentionedIds = [], io }) 
  */
 async function loadMessageForAction({ messageId, userId, requireAdmin = false }) {
   const result = await query(
-    `SELECT m.id, m.room_id, m.sender_id, m.deleted_at,
+    `SELECT m.id, m.room_id, m.sender_id, m.deleted_at,m.client_id,m.encrypted_payload,
             (m.sender_id = $2) AS is_author,
             (rm.role = 'admin') AS is_room_admin
      FROM messages m
@@ -567,11 +582,11 @@ async function loadMessageForAction({ messageId, userId, requireAdmin = false })
  *
  * @returns {object} the updated message row
  */
-async function editMessage({ messageId, userId, content, io }) {
-  if (typeof content !== 'string') {
+async function editMessage({ messageId, userId, content, encryptedPayload, io }) {
+  if (!encryptedPayload && typeof content !== 'string') {
     throw new ApiError(400, 'content must be a string');
   }
-  const trimmed = content.trim();
+  const trimmed = typeof content==='string'?content.trim():'';
 
   const existing = await loadMessageForAction({ messageId, userId });
 
@@ -580,6 +595,22 @@ async function editMessage({ messageId, userId, content, io }) {
     // could be brought back to life with content nobody else can see.
     throw new ApiError(400, 'Cannot edit a deleted message');
   }
+
+  if (existing.encrypted_payload) {
+    if (trimmed || !encryptedPayload) throw new ApiError(400,'An encrypted edit is required');
+    const db=await pool.connect();
+    try {
+      await db.query('BEGIN');
+      await db.query('SELECT id FROM rooms WHERE id=$1 FOR SHARE',[existing.room_id]);
+      const row=(await db.query('SELECT encrypted_payload,deleted_at FROM messages WHERE id=$1 FOR UPDATE',[messageId])).rows[0];
+      if(!row||row.deleted_at)throw new ApiError(400,'Cannot edit a deleted message');
+      const encrypted=await require('./encryption.service').validateMessage(db,existing.room_id,userId,existing.client_id,encryptedPayload,row.encrypted_payload.revision+1);
+      await db.query("UPDATE messages SET encrypted_payload=$2,content='[Encrypted message]',edited_at=NOW() WHERE id=$1",[messageId,encrypted]);
+      await db.query('COMMIT');
+    }catch(error){await db.query('ROLLBACK');throw error;}finally{db.release();}
+    await emitChatUpdated(io,existing.room_id);return;
+  }
+  if(encryptedPayload)throw new ApiError(400,'This message is not encrypted');
 
   // Same rule as createMessage (Bug 8): a message may be file-only, so empty
   // content is only acceptable when there is an attachment carrying it.
@@ -641,7 +672,7 @@ async function deleteMessage({ messageId, userId, io }) {
 
   const result = await query(
     `UPDATE messages
-        SET deleted_at = NOW(), content = NULL
+        SET deleted_at = NOW(), content = NULL,encrypted_payload=NULL
       WHERE id = $1 AND deleted_at IS NULL
       RETURNING id, room_id, sender_id, content, reply_to_id, edited_at, deleted_at, created_at`,
     [messageId],

@@ -265,9 +265,12 @@ async function presentNotification(row, options) {
  * that object deliberately omits it, because in a list every row is already the
  * caller's own.
  */
-function emitNotification(io, recipientId, presented) {
+async function emitNotification(io, recipientId, presented) {
   if (!io || !recipientId || !presented) return false;
-  io.to(personalRoom(recipientId)).emit('notification', { notification: presented });
+  try{
+    const allowed=await pool.query(`SELECT ${require('./notificationPolicy.service').visibleSql()} AS allowed FROM notifications n WHERE n.id=$1 AND n.recipient_id=$2`,[presented.id,recipientId]);
+    if(allowed.rows[0]?.allowed)io.to(personalRoom(recipientId)).emit('notification',{notification:presented});
+  }catch(error){console.error('Notification delivery deferred',{message:error.message});}
   return true;
 }
 
@@ -298,7 +301,7 @@ function emitNotificationsSeen(io, recipientId, updated) {
 async function notifyAndEmit({ recipientId, type, referenceId, actorId, io, db }) {
   const row = await createNotification({ recipientId, type, referenceId, actorId, db });
   const presented = await presentNotification(row, { db });
-  emitNotification(io, recipientId, presented);
+  await emitNotification(io, recipientId, presented);
   return presented;
 }
 
@@ -405,7 +408,7 @@ async function emitChatUpdated(io, roomId) {
     for (const member of membersResult.rows) {
       io.to(personalRoom(member.user_id)).emit('chat:updated', {
         roomId,
-        lastMessage,
+        lastMessage: await require('./privacy.service').present(lastMessage,member.user_id),
         unreadCount: member.unread_count,
       });
     }

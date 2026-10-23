@@ -767,3 +767,71 @@ each destination independently. Public payloads include `forwarded: true`; inter
 source identifiers are not exposed to recipients. An idempotent retry of an already
 created destination message returns that message even if the source later disappears.
 Migration 031 adds the forwarded marker.
+
+## Phase 5 privacy, recovery, and devices
+
+See [privacy/encryption policy](PRIVACY_AND_ENCRYPTION.md) for scope and limits.
+`GET /users/me` and auth responses include `email_verified_at`. Profile/photo
+fields in authenticated responses are personalized; do not reuse one viewer's
+payload for another. Presence snapshots include only permitted online/last-seen
+information. DM receipt summaries include `reads_visible`; hidden reads are not
+an assertion that a recipient has not read the message.
+
+### Account security routes (`/security`)
+
+| Method/path | Access and payload |
+| --- | --- |
+| `POST /recovery` | Public, rate limited; `{email}`. Generic eligible/unknown response. |
+| `POST /reset` | Public, rate limited; `{token,password}`. Single use, 30-minute token; password 12+ characters, max 72 UTF-8 bytes. Revokes every session. |
+| `POST /verify` | Public, rate limited; `{token}`. Single use verification. |
+| `POST /verification` | Authenticated; requests verification for current account's email. |
+| `GET /privacy` | Current preference object. |
+| `PATCH /privacy` | Partial preferences: `online_visibility`, `last_seen_visibility`, `photo_visibility`, `about_visibility` (`everyone/connections/nobody`), `read_receipts` boolean, `dm_policy` (`everyone/requests/connections/nobody`). |
+| `GET /sessions` | `{sessions}`: current flag, device label, user agent, expiry, creation/last activity. |
+| `PATCH /session` | `{label}` (1–80 characters), renames current session. |
+| `DELETE /sessions/:sessionId` | `{password}`; UUID or `others`. Durable revocation and cluster eviction. |
+| `GET /requests` | `{requests}` pending incoming DM requests, maximum 100. |
+| `POST /requests/:roomId` | `{status: 'accepted' | 'declined'}` by recipient only. |
+
+Mail configuration missing returns 503. An eviction failure may return 503 after
+durable revocation; this never means the session was restored.
+
+### Device encryption routes (`/encryption`, authenticated)
+
+| Method/path | Contract |
+| --- | --- |
+| `GET /devices` | Account `identityKey` and public device records; no private keys. |
+| `POST /devices` | `{id,boxKey,signingKey,label,identityKey,signature?}`. Base64url public keys. Identity signature required for initial/approved enrollment; otherwise pending until linked. |
+| `POST /devices/:id/approve` | Root-signed certificate and sealed link payload from approved device; pending enrollment expires in 15 minutes. |
+| `GET /devices/:id/link` | Encrypted link payload, accessible only to target device's current session. |
+| `DELETE /devices/:id` | `{password}`; revokes device and its login session. |
+| `GET /rooms/:id` | Authorized roster of members, identities, and active approved devices. |
+| `POST /rooms/:id/upgrade` | Returns `{roomId}` for separate encrypted successor; legacy conversation stays server readable and becomes read only for new sends. |
+| `GET /backup` | `{payload,revision,updated_at}` encrypted key backup only. |
+| `PUT /backup` | Opaque encrypted backup payload; recovery key never sent. |
+| `DELETE /backup` | `{password}` confirmation. |
+| `POST /reset` | `{password,confirmation:'RESET ENCRYPTION',device}`; irreversibly replaces identity/backup and revokes other sessions. |
+
+Room payloads expose `encryption_mode` (`none` or `e2ee-v1`) and
+`superseded_by`. New `dm`/`private` conversations are encrypted; new
+`group`/`department`/`public` remain server readable. All migration-era rooms
+remain `none` until explicit move.
+
+Encrypted sends use the normal message route/socket with `roomId`, `clientId`,
+`encryptedPayload`, and uploaded attachment references. Plaintext content,
+mentions, filename, MIME, caption, preview, dimensions, and file keys must not
+be included in the wire message. `encryptedPayload` contains scheme, room/client/
+sender context, revision, device ID, nonce, ciphertext, sorted per-device sealed
+keys, and device signature. Server persists `[Encrypted message]` as `content`
+and returns `encrypted_payload` with signed sender-certificate metadata; only
+authorized clients decrypt it. Retries reuse the same client ID and sealed wire
+payload. Edits use `{encryptedPayload}` with the next revision. Recipient-roster
+changes may return 409, requiring a new encrypted envelope on manual retry.
+
+Encrypted uploads use `application/vnd.conclave.encrypted`, `encrypted.bin`,
+and the `CCEF1` authenticated container. Both server and direct upload paths
+normalize the filename; image metadata is absent from server upload records.
+The ciphertext upload cap is 50 MiB. Authorized download/Range endpoints remain
+the transport; the browser decrypts and caches plaintext separately. Server
+search/tasks/decisions/polls/forwarding that would process encrypted content are
+rejected; local search covers only decrypted cached history.

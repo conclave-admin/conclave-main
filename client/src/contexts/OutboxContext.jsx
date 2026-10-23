@@ -10,6 +10,7 @@ import { compressImage } from '../lib/media';
 import { uploadMedia, cancelMediaSession } from '../services/mediaUploads.service';
 import { rememberUploadedFile } from '../services/attachments.service';
 import { getSessionUserId } from '../lib/session';
+import {prepareEncryptedMedia,encryptOutgoing,decryptMessage} from '../lib/encryption';
 import { isDevAuthBypass } from '../config/devPreview';
 
 const OutboxContext = createContext(null);
@@ -69,10 +70,17 @@ function AccountOutbox({ user, socket, children }) {
       if (active) toastRef.current({ title: 'Could not restore unsent messages', description: error.message, tone: 'error' });
     };
     const instance = createOutbox({
-      userId: user.id, store, upload: uploadMedia, cancelUpload: cancelMediaSession, prepareMetadata: generateMediaMetadata,
+      userId: user.id, store, upload: uploadMedia, cancelUpload: cancelMediaSession, prepareMetadata: generateMediaMetadata, prepareEncryption:prepareEncryptedMedia,
       prepare: (blob, filename) => compressImage(new File([blob], filename, { type: blob.type })),
       remember: rememberUploadedFile,
-      send: (payload, signal) => socketSend(socketRef.current, payload, signal),
+      prepareSend:async(payload,media)=>{
+        try{return await encryptOutgoing(payload,media);}
+        catch(error){if(!error.response&&error.name!=='AbortError')error.permanent=true;throw error;}
+      },
+      send: async(payload,signal,item) => {
+        if(!active||!sessionMatches(user.id))throw new DOMException('Account changed','AbortError');
+        return decryptMessage(await socketSend(socketRef.current,payload,signal));
+      },
       canSend: () => active && sessionMatches(user.id) && socketRef.current?.connected && navigator.onLine !== false,
       onChange: setEntries,
       onError: report,

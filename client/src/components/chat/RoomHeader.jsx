@@ -54,7 +54,7 @@ export default function RoomHeader({ room, isConnected }) {
           />
         </div>
         <p className="mt-0.5 text-[11px] leading-4 text-muted md:text-xs">
-          {isDm ? labelFor(room.id, peer?.id) : `${room.members?.length || 0} members`}
+          {room.encryption_mode==='e2ee-v1'?'Encrypted · ':''}{isDm ? labelFor(room.id, peer?.id) : `${room.members?.length || 0} members`}
           <span className="md:hidden"> · {isConnected ? 'Live' : 'Reconnecting'}</span>
         </p>
       </div>

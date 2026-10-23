@@ -2,6 +2,10 @@ const ApiError = require('./ApiError');
 const { TextDecoder } = require('util');
 
 async function verifyFileSignature(bytes, declared, streamType) {
+  if (declared === 'application/vnd.conclave.encrypted') {
+    if (bytes.length < 45 || Buffer.from(bytes.subarray(0,5)).toString() !== 'CCEF1') throw new ApiError(415,'Invalid encrypted file container');
+    return;
+  }
   if (!bytes.length) throw new ApiError(415, 'Empty files are not supported');
   const { fileTypeFromBuffer } = await import('file-type');
   let detected = streamType;

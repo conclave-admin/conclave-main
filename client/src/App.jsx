@@ -7,6 +7,7 @@ import Spinner from './components/ui/Spinner';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { PushProvider } from './contexts/PushContext';
 import { SyncProvider } from './contexts/SyncContext';
+import EncryptionLifecycle from './components/settings/EncryptionLifecycle';
 import { RealtimeProvider } from './contexts/RealtimeContext';
 import { OutboxProvider } from './contexts/OutboxContext';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -23,6 +24,7 @@ const NewChat = lazy(() => import('./pages/NewChat'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const Profile = lazy(() => import('./pages/Profile'));
 const Register = lazy(() => import('./pages/Register'));
+const AccountRecovery = lazy(() => import('./pages/AccountRecovery'));
 const Room = lazy(() => import('./pages/Room'));
 const RoomInfo = lazy(() => import('./pages/RoomInfo'));
 const Settings = lazy(() => import('./pages/Settings'));
@@ -63,6 +65,7 @@ export default function App() {
     <ThemeProvider>
       <ToastProvider>
         <AuthProvider>
+          <EncryptionLifecycle />
           <RealtimeProvider>
             <SyncProvider>
             <PushProvider>
@@ -70,6 +73,7 @@ export default function App() {
             <Suspense fallback={<Spinner fullPage label="Loading" />}>
             <Routes>
               <Route path="/" element={<LandingRoute />} />
+              <Route path="/account/:kind" element={<AccountRecovery />} />
 
               <Route element={<PublicOnlyRoute />}>
                 <Route path="/login" element={<Login />} />

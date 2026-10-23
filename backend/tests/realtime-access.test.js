@@ -779,3 +779,173 @@ test('push renewal rotates its token, preserves pending jobs and logout revokes 
   assert.equal((await query('SELECT COUNT(*)::int AS n FROM push_subscriptions WHERE user_id=$1',[f.member.userId])).rows[0].n,0);
   await assert.rejects(push.renew(renewed.renewalToken,next),error=>error.status===401);
 }));
+
+test('privacy hides photos/about/activity and DM reads across API and realtime',async()=>{
+  const owner=await account(),member=await account();const id=await room(owner,member,'dm');
+  await query("UPDATE users SET avatar_url='https://example.test/private-photo.png',bio='Private about',last_active_at=NOW() WHERE id=$1",[owner.userId]);
+  const peer=await open(member.token,1);await ack(peer,'join-room',{roomId:id});
+  const changed=await request('/security/privacy',owner.token,'PATCH',{photo_visibility:'nobody',about_visibility:'nobody',online_visibility:'nobody',last_seen_visibility:'nobody',read_receipts:false});
+  assert.equal(changed.status,200);
+  const info=(await request(`/rooms/${id}`,member.token)).body.data;
+  assert.equal(info.members.find(u=>u.id===owner.userId).avatar_url,null);assert.equal(info.members.find(u=>u.id===owner.userId).bio,null);
+  const self=(await request(`/rooms/${id}`,owner.token)).body.data;assert.equal(self.members.find(u=>u.id===owner.userId).bio,'Private about');
+  const snapshot=event(peer,'room-presence');await presence.publishRoomPresence(servers[0].io,id);const roster=await snapshot;
+  assert.ok(roster.hiddenUserIds.includes(owner.userId));assert.ok(!roster.lastSeen[owner.userId]);
+  const sent=await request('/messages',member.token,'POST',{roomId:id,content:'Privacy read receipt'});assert.equal(sent.status,201);
+  await request(`/rooms/${id}/seen`,owner.token,'POST');
+  const receipt=(await request(`/messages/${sent.body.data.id}/receipts`,member.token)).body.data;
+  assert.equal(receipt.summary.reads_visible,false);assert.equal(receipt.summary.read_count,0);assert.equal(receipt.recipients[0].read_at,null);
+  assert.equal((await query('SELECT read FROM message_recipients WHERE message_id=$1 AND recipient_id=$2',[sent.body.data.id,owner.userId])).rows[0].read,true);
+  const delivered=event(peer,'message-delivered');
+  await require('../src/services/messageReceipt.service').acknowledge({roomId:id,userId:owner.userId,messageId:sent.body.data.id,read:false,io:servers[0].io});
+  const notice=await delivered;assert.equal(notice.lastSeenAt,undefined);assert.equal(notice.lastSeenSequence,undefined);
+});
+
+test('unknown senders get one request, only its recipient can accept, and blocks prevent subsequent sends',async()=>{
+  const owner=await account(),member=await account(),outsider=await account();const id=await room(owner,member,'dm');
+  await query('INSERT INTO dm_requests(room_id,sender_id,recipient_id) VALUES($1,$2,$3)',[id,owner.userId,member.userId]);
+  assert.equal((await request('/messages',owner.token,'POST',{roomId:id,content:'First request'})).status,201);
+  assert.equal((await request('/messages',owner.token,'POST',{roomId:id,content:'Second request'})).status,403);
+  assert.equal((await request(`/security/requests/${id}`,outsider.token,'POST',{status:'accepted'})).status,404);
+  assert.equal((await request(`/security/requests/${id}`,member.token,'POST',{status:'accepted'})).status,200);
+  assert.equal((await request('/messages',member.token,'POST',{roomId:id,content:'Accepted reply'})).status,201);
+  assert.equal((await request(`/users/${owner.userId}/block`,member.token,'POST')).status,200);
+  assert.equal((await request('/messages',owner.token,'POST',{roomId:id,content:'Blocked reply'})).status,403);
+  await request('/security/privacy',outsider.token,'PATCH',{dm_policy:'nobody'});
+  assert.equal((await request('/rooms',owner.token,'POST',{type:'dm',memberIds:[outsider.userId]})).status,403);
+});
+
+test('email links are single-use, password recovery revokes all devices and never returns tokens',async()=>{
+  const security=require('../src/services/accountSecurity.service');const account1=await account(),other=await session(account1.userId);
+  const email=(await query('SELECT email FROM users WHERE id=$1',[account1.userId])).rows[0].email;
+  const messages=[];const send=async mail=>{messages.push(mail);};
+  const known=await security.requestToken(email,'verify_email',{send}),unknown=await security.requestToken('missing@example.test','verify_email',{send});assert.deepEqual(known,unknown);
+  const token=()=>new URL(messages.at(-1).text.match(/https?:\/\/[^\s]+/)[0]).hash.slice(7);
+  const verify=token();await security.redeem(verify,'verify_email',null,servers[0].io);
+  assert.ok((await query('SELECT email_verified_at FROM users WHERE id=$1',[account1.userId])).rows[0].email_verified_at);
+  await assert.rejects(security.redeem(verify,'verify_email',null,servers[0].io),e=>e.status===400);
+  await security.requestToken(email,'reset_password',{send});const reset=token();const socket=await open(other.token,1);const revoked=event(socket,'session:revoked');
+  await security.redeem(reset,'reset_password','A new secure password 2026!',servers[0].io);await revoked;
+  assert.equal((await request('/users/me',account1.token)).status,401);assert.equal((await request('/users/me',other.token)).status,401);
+  await assert.rejects(security.redeem(reset,'reset_password','Another secure password!',servers[0].io),e=>e.status===400);
+  const stored=(await query('SELECT token_hash FROM account_tokens WHERE user_id=$1',[account1.userId])).rows;assert.ok(stored.every(row=>row.token_hash!==verify&&row.token_hash!==reset));
+});
+
+test('device management requires password confirmation and evicts the selected session on another instance',async()=>{
+  const a=await account(),other=await session(a.userId),stranger=await account();
+  await query('UPDATE users SET password_hash=$2 WHERE id=$1',[a.userId,await require('bcrypt').hash('Known secure password!',4)]);
+  const socket=await open(other.token,1);const list=await request('/security/sessions',a.token);assert.equal(list.status,200);assert.equal(list.body.data.sessions.filter(s=>s.current).length,1);
+  assert.equal((await request(`/security/sessions/${other.sessionId}`,a.token,'DELETE',{password:'wrong'})).status,403);
+  assert.equal((await request(`/security/sessions/${stranger.sessionId}`,a.token,'DELETE',{password:'Known secure password!'})).status,404);
+  const revoked=event(socket,'session:revoked');assert.equal((await request(`/security/sessions/${other.sessionId}`,a.token,'DELETE',{password:'Known secure password!'})).status,200);await revoked;
+  assert.equal((await request('/users/me',other.token)).status,401);assert.equal((await request('/users/me',a.token)).status,200);
+});
+
+async function cryptoFixture(){
+  const protocol=await import('../../client/src/lib/cryptoProtocol.js');await protocol.ready;
+  const a=await account(),b=await account();const av=protocol.createVault(a.userId),bv=protocol.createVault(b.userId);
+  assert.equal((await request('/encryption/devices',a.token,'POST',protocol.publicDevice(av))).status,201);
+  assert.equal((await request('/encryption/devices',b.token,'POST',protocol.publicDevice(bv))).status,201);
+  const created=await request('/rooms',a.token,'POST',{type:'dm',memberIds:[b.userId]});assert.equal(created.status,201);assert.equal(created.body.data.encryption_mode,'e2ee-v1');
+  const id=created.body.data.id;roomIds.push(id);assert.equal((await request(`/security/requests/${id}`,b.token,'POST',{status:'accepted'})).status,200);
+  return {protocol,a,b,av,bv,id,roster:(await request(`/encryption/rooms/${id}`,a.token)).body.data};
+}
+test('encrypted messages round-trip through SQL with only ciphertext, reject plaintext/tampering, and keep retry identity',async()=>{
+  const {protocol,a,b,av,bv,id,roster}=await cryptoFixture();const clientId=randomUUID(),content='Never server-readable caption';
+  const encryptedPayload=protocol.sealMessage(av,roster,{roomId:id,clientId,content});
+  assert.equal((await request('/messages',a.token,'POST',{roomId:id,content})).status,400);
+  const sent=await request('/messages',a.token,'POST',{roomId:id,clientId,encryptedPayload});assert.equal(sent.status,201);
+  const persisted=(await query('SELECT content,encrypted_payload FROM messages WHERE id=$1',[sent.body.data.id])).rows[0];assert.equal(persisted.content,'[Encrypted message]');assert.ok(!JSON.stringify(persisted).includes(content));
+  const fetched=(await request(`/messages/room/${id}?ids=${sent.body.data.id}`,b.token)).body.data.messages[0];assert.equal(protocol.openMessage(bv,fetched).content,content);
+  const retry=await request('/messages',a.token,'POST',{roomId:id,clientId,encryptedPayload});assert.equal(retry.body.data.id,sent.body.data.id);
+  const bad={...encryptedPayload,clientId:randomUUID(),signature:encryptedPayload.signature.slice(0,-4)+'AAAA'};assert.equal((await request('/messages',a.token,'POST',{roomId:id,clientId:bad.clientId,encryptedPayload:bad})).status,400);
+  const edit=protocol.sealMessage(av,roster,{roomId:id,clientId,content:'Private edit'},{revision:1});
+  const edited=await request(`/messages/${sent.body.data.id}`,a.token,'PATCH',{encryptedPayload:edit});assert.equal(edited.status,200);assert.equal(protocol.openMessage(bv,edited.body.data).content,'Private edit');
+  assert.equal((await request(`/messages/${sent.body.data.id}`,a.token,'PATCH',{content:'Plaintext edit'})).status,400);
+  assert.equal((await request('/tasks',a.token,'POST',{roomId:id,title:'Leaking task'})).status,409);
+  assert.equal((await request(`/messages/room/${id}/search?q=secret`,b.token)).status,409);
+});
+
+test('unapproved devices cannot receive new message keys, device links require signed approval, and backups stay encrypted',async()=>{
+  const {protocol,a,b,av,id}=await cryptoFixture();const pending=protocol.createVault(a.userId,false),newSession=await session(a.userId);
+  const registered=await request('/encryption/devices',newSession.token,'POST',protocol.publicDevice(pending));assert.equal(registered.status,201);assert.equal(registered.body.data.approved_at,null);
+  let roster=(await request(`/encryption/rooms/${id}`,b.token)).body.data;assert.ok(!roster.devices.some(d=>d.id===pending.device.id));
+  const pub=protocol.publicDevice(pending),approval=protocol.sealLink(av,{id:pub.id,box_key:pub.boxKey,signing_key:pub.signingKey});
+  assert.equal((await request(`/encryption/devices/${pending.device.id}/approve`,a.token,'POST',{...approval,signature:pub.boxKey})).status,400);
+  assert.equal((await request(`/encryption/devices/${pending.device.id}/approve`,a.token,'POST',approval)).status,200);
+  assert.equal((await request(`/encryption/devices/${pending.device.id}/link`,a.token)).status,404);
+  const linked=(await request(`/encryption/devices/${pending.device.id}/link`,newSession.token)).body.data;assert.equal(protocol.openLink(pending,linked.link_payload).identityKey,av.identityKey);
+  roster=(await request(`/encryption/rooms/${id}`,b.token)).body.data;assert.ok(roster.devices.some(d=>d.id===pending.device.id));
+  const backup=protocol.sealBackup(av);assert.equal((await request('/encryption/backup',a.token,'PUT',backup.payload)).status,200);
+  const stored=(await request('/encryption/backup',a.token)).body.data;assert.ok(!JSON.stringify(stored).includes(av.identitySecret));assert.equal(protocol.openBackup(a.userId,stored.payload,backup.recoveryKey).identityKey,av.identityKey);
+  await request('/auth/logout',null,'POST',{refreshToken:newSession.refreshToken});
+  roster=(await request(`/encryption/rooms/${id}`,b.token)).body.data;assert.ok(!roster.devices.some(d=>d.id===pending.device.id));
+});
+
+test('legacy migration starts a separate encrypted timeline and an identity reset revokes other devices',async()=>{
+  const {protocol,a,b,av,bv}=await cryptoFixture();const legacy=await room(a,b,'dm');
+  const old=(await request('/messages',a.token,'POST',{roomId:legacy,content:'Legacy history stays explicitly server-readable'})).body.data;
+  const upgrade=await request(`/encryption/rooms/${legacy}/upgrade`,a.token,'POST');assert.equal(upgrade.status,200);const target=upgrade.body.data.roomId;
+  assert.notEqual(target,legacy);assert.equal((await request(`/rooms/${target}`,b.token)).body.data.encryption_mode,'e2ee-v1');
+  assert.equal((await request('/messages',a.token,'POST',{roomId:legacy,content:'Must use new conversation'})).status,409);
+  assert.equal((await query('SELECT encrypted_payload FROM messages WHERE id=$1',[old.id])).rows[0].encrypted_payload,null);
+  await query('UPDATE users SET password_hash=$2 WHERE id=$1',[a.userId,await require('bcrypt').hash('Known secure reset password!',4)]);
+  const other=await session(a.userId);const socket=await open(other.token,1);const revoked=event(socket,'session:revoked');
+  const replacement=protocol.createVault(a.userId);
+  const reset=await request('/encryption/reset',a.token,'POST',{password:'Known secure reset password!',confirmation:'RESET ENCRYPTION',device:protocol.publicDevice(replacement)});assert.equal(reset.status,200);await revoked;
+  assert.equal((await request('/users/me',other.token)).status,401);
+  const roster=(await request(`/encryption/rooms/${target}`,b.token)).body.data;
+  bv.identities[a.userId]=av.identityKey;
+  assert.throws(()=>protocol.sealMessage(bv,roster,{roomId:target,clientId:randomUUID(),content:'Must reverify changed identity'}),/identity changed/);
+});
+
+test('account mail is queued encrypted, retries provider failure, and clears token-bearing payload after delivery',async()=>{
+  const service=require('../src/services/accountSecurity.service'),env=require('../src/config/env'),old=env.mail;
+  const user=await account(),email=(await query('SELECT email FROM users WHERE id=$1',[user.userId])).rows[0].email;
+  env.mail={...old,apiKey:'fixture-only',from:'Conclave <mail@example.test>',encryptionKey:randomBytes(32).toString('base64url')};
+  try{
+    const result=await service.requestToken(email,'reset_password');assert.ok(!JSON.stringify(result).includes(email));
+    const job=(await query('SELECT j.* FROM account_mail_jobs j JOIN account_tokens t ON t.id=j.token_id WHERE t.user_id=$1',[user.userId])).rows[0];assert.ok(!JSON.stringify(job.encrypted_payload).includes(email));
+    await service.dispatchMail(20,async()=>{throw Object.assign(new Error('Resend temporarily unavailable'),{code:'ETIMEDOUT'});});
+    assert.equal((await query('SELECT completed_at FROM account_mail_jobs WHERE id=$1',[job.id])).rows[0].completed_at,null);
+    await query('UPDATE account_mail_jobs SET next_attempt_at=NOW() WHERE id=$1',[job.id]);let mail;
+    await service.dispatchMail(20,async value=>{mail=value;});assert.equal(mail.to,email);assert.ok(mail.text.includes('#token='));
+    const done=(await query('SELECT encrypted_payload,outcome FROM account_mail_jobs WHERE id=$1',[job.id])).rows[0];assert.deepEqual(done.encrypted_payload,{});assert.equal(done.outcome,'accepted');
+  }finally{env.mail=old;}
+});
+
+test('a login checked before a concurrent password change cannot issue a session afterward',async()=>{
+  const bcrypt=require('bcrypt'),user=await account(),oldPassword='Previous secure password!',newPassword='Replacement secure password!';
+  await query('UPDATE users SET password_hash=$2 WHERE id=$1',[user.userId,await bcrypt.hash(oldPassword,4)]);
+  const email=(await query('SELECT email FROM users WHERE id=$1',[user.userId])).rows[0].email;
+  const count=Number((await query('SELECT COUNT(*) FROM auth_sessions WHERE user_id=$1',[user.userId])).rows[0].count);
+  const tx=await pool.connect();let login;
+  try{
+    await tx.query('BEGIN');await tx.query('SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE',[user.userId]);
+    await tx.query('UPDATE users SET password_hash=$2 WHERE id=$1',[user.userId,await bcrypt.hash(newPassword,4)]);
+    login=request('/auth/login',null,'POST',{email,password:oldPassword});
+    let waiting=false;
+    for(let i=0;i<200;i++){
+      waiting=Boolean((await query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%WITH authorized AS%' AND pid<>pg_backend_pid() LIMIT 1")).rowCount);
+      if(waiting)break;
+      await new Promise(resolve=>setTimeout(resolve,20));
+    }
+    assert.ok(waiting,'login must reach the locked atomic session issuance gate');await tx.query('COMMIT');
+    assert.equal((await login).status,401);
+    assert.equal(Number((await query('SELECT COUNT(*) FROM auth_sessions WHERE user_id=$1',[user.userId])).rows[0].count),count);
+  }finally{await tx.query('ROLLBACK');tx.release();if(login)await login;}
+});
+
+test('durable session invalidation retries a failed cluster eviction after revocation commits',async()=>{
+  const user=await account(),peer=await open(user.token,1),security=require('../src/services/accountSecurity.service'),sync=require('../src/services/sync.service');
+  await query('UPDATE users SET password_hash=$2 WHERE id=$1',[user.userId,await require('bcrypt').hash('Remote logout recovery password!',4)]);
+  const io=servers[0].io,original=io.serverSideEmitWithAck;
+  io.serverSideEmitWithAck=async()=>{throw new Error('Simulated peer outage');};
+  try{await assert.rejects(security.revoke(user.userId,user.sessionId,user.sessionId,'Remote logout recovery password!',io),error=>error.status===503);}
+  finally{io.serverSideEmitWithAck=original;}
+  assert.equal((await request('/users/me',user.token)).status,401);
+  assert.ok((await query("SELECT 1 FROM sync_changes WHERE kind='session' AND entity_id=$1 AND delivered_at IS NULL",[user.sessionId])).rowCount);
+  const revoked=event(peer,'session:revoked');await query('UPDATE sync_changes SET next_attempt_at=NOW() WHERE delivered_at IS NULL');
+  await sync.dispatchChanges(io,10000);await revoked;
+  assert.ok((await query("SELECT 1 FROM sync_changes WHERE kind='session' AND entity_id=$1 AND delivered_at IS NOT NULL",[user.sessionId])).rowCount);
+});

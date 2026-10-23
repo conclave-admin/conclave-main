@@ -5,17 +5,17 @@ const { withRoomMembership } = require('./realtimeAccess.service');
 
 async function attachReceiptSummaries(messages, db = { query }) {
   if (!messages.length) return messages;
-  const result = await db.query(`SELECT m.id, m.state_version, m.receipt_history_complete, m.receipt_version,
+  const result = await db.query(`SELECT m.id, m.state_version, m.receipt_history_complete, m.receipt_version, share_dm_reads(m.room_id) AS reads_visible,
     COUNT(r.recipient_id)::int AS recipient_count,
     COUNT(r.recipient_id) FILTER (WHERE r.delivered)::int AS delivered_count,
-    COUNT(r.recipient_id) FILTER (WHERE r.read)::int AS read_count
+    COUNT(r.recipient_id) FILTER (WHERE r.read AND share_dm_reads(m.room_id))::int AS read_count
     FROM messages m LEFT JOIN message_recipients r ON r.message_id = m.id
     WHERE m.id = ANY($1::uuid[]) GROUP BY m.id`, [messages.map(m => m.id)]);
   const versions = new Map(result.rows.map(row => [row.id, Number(row.state_version)]));
   const summaries = new Map(result.rows.map(row => [row.id, {
     recipient_count: row.recipient_count, delivered_count: row.delivered_count,
     read_count: row.read_count, history_complete: row.receipt_history_complete,
-    version: Number(row.receipt_version),
+    version: Number(row.receipt_version), reads_visible: row.reads_visible,
   }]));
   return messages.map(message => {const {state_version,...payload}=message;return {...payload,sync_version:state_version==null?versions.get(message.id):Number(state_version),receipt_summary:summaries.get(message.id)||null};});
 }
@@ -54,8 +54,9 @@ async function acknowledge({ roomId, userId, messageId, read = false, all = fals
   });
   if (io) {
     if (result.receipts.length) io.to(roomId).emit('message:receipts', { roomId, receipts: result.receipts });
-    io.to(roomId).emit(read ? 'message-read' : 'message-delivered', { roomId, messageId, userId,
-      lastSeenAt: result.last_seen_at, lastSeenSequence: result.last_seen_sequence,
+    const sharesRead=(await query('SELECT share_dm_reads($1) AS allowed',[roomId])).rows[0].allowed;
+    if (!read || sharesRead) io.to(roomId).emit(read ? 'message-read' : 'message-delivered', { roomId, messageId, userId,
+      ...(read&&sharesRead?{lastSeenAt:result.last_seen_at,lastSeenSequence:result.last_seen_sequence}:{}),
       lastDeliveredSequence: result.last_delivered_sequence });
     if (read) await require('./notification.service').emitChatUpdated(io, roomId);
   }
@@ -68,7 +69,7 @@ async function details(messageId, userId) {
   if (!owned.rows.length) throw new ApiError(404, 'Message information unavailable');
   const recipients = await query(`SELECT r.recipient_id AS user_id,
     CASE WHEN u.id IS NULL OR u.deleted_at IS NOT NULL THEN 'Deleted account' ELSE COALESCE(u.display_name,r.recipient_name) END AS display_name,
-    r.delivered, r.read, r.delivered_at, r.read_at, (rm.user_id IS NOT NULL) AS current_member
+    r.delivered, (r.read AND share_dm_reads(m.room_id)) AS read, r.delivered_at, CASE WHEN share_dm_reads(m.room_id) THEN r.read_at ELSE NULL END AS read_at, (rm.user_id IS NOT NULL) AS current_member
     FROM message_recipients r JOIN messages m ON m.id=r.message_id
     LEFT JOIN users u ON u.id=r.recipient_id
     LEFT JOIN room_members rm ON rm.room_id=m.room_id AND rm.user_id=r.recipient_id

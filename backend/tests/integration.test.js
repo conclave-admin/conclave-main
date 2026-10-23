@@ -1634,7 +1634,7 @@ dbTest('mention:seen carries a count, not a phantom notification row', async () 
   };
 
   const presented = await notif.presentNotification(target);
-  assert.equal(notif.emitNotification(fakeIo, me, presented), true);
+  assert.equal(await notif.emitNotification(fakeIo, me, presented), true);
   notif.emitNotificationsSeen(fakeIo, me, 1);
 
   const byEvent = Object.fromEntries(captured.map((c) => [c.event, c]));
@@ -2785,7 +2785,13 @@ async function createRoomVia(token, payload) {
   });
   const body = await res.text();
   assert.equal(res.status, 201, body);
-  return JSON.parse(body).data;
+  const room=JSON.parse(body).data;
+  // These existing collaboration/history regressions exercise pre-encryption
+  // rooms. New-conversation encryption and request policy have their own real
+  // API checks in realtime-access.test.js; keep this legacy fixture explicit.
+  await query("UPDATE rooms SET encryption_mode='none' WHERE id=$1",[room.id]);
+  await query('DELETE FROM dm_requests WHERE room_id=$1',[room.id]);
+  return room;
 }
 
 async function listRoomsVia(token) {

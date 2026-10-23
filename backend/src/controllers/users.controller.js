@@ -23,7 +23,7 @@ const getAvatarUrl = asyncHandler(async (req, res) => {
       WHERE f.file_url = $1 AND f.resource_type = 'r2'
         AND f.mime_type IN ('image/jpeg', 'image/png', 'image/gif', 'image/webp')
         AND (
-          EXISTS (SELECT 1 FROM users u WHERE u.avatar_url = f.file_url AND u.deleted_at IS NULL)
+          EXISTS (SELECT 1 FROM users u WHERE u.avatar_url = f.file_url AND u.deleted_at IS NULL AND privacy_allowed(u.id,$2,'photo'))
           OR EXISTS (
             SELECT 1 FROM rooms r
             INNER JOIN room_members rm ON rm.room_id = r.id
@@ -59,7 +59,7 @@ const FIELD_LIMITS = {
 // ---------- getMe ----------
 const getMe = asyncHandler(async (req, res) => {
   const result = await query(
-    'SELECT id, email, display_name, avatar_url, bio, created_at FROM users WHERE id = $1 AND deleted_at IS NULL',
+    'SELECT id, email, display_name, avatar_url, bio, created_at, email_verified_at FROM users WHERE id = $1 AND deleted_at IS NULL',
     [req.user.id]
   );
   if (result.rows.length === 0) {
@@ -240,7 +240,8 @@ const blockUser = asyncHandler(async (req, res) => {
   const target = await query('SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL', [userId]);
   if (!target.rows.length) throw new ApiError(404, 'User not found');
   await query(
-    `INSERT INTO user_blocks (blocker_id, blocked_id) VALUES ($1, $2)
+    `WITH locked AS MATERIALIZED(SELECT pg_advisory_xact_lock(hashtextextended(LEAST($1::text,$2::text)||':'||GREATEST($1::text,$2::text),51)))
+     INSERT INTO user_blocks (blocker_id, blocked_id) SELECT $1::uuid,$2::uuid FROM locked
      ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
     [req.user.id, userId],
   );
@@ -250,7 +251,7 @@ const blockUser = asyncHandler(async (req, res) => {
 
 const unblockUser = asyncHandler(async (req, res) => {
   const { userId } = req.params;
-  await query('DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [req.user.id, userId]);
+  await query("WITH locked AS MATERIALIZED(SELECT pg_advisory_xact_lock(hashtextextended(LEAST($1::text,$2::text)||':'||GREATEST($1::text,$2::text),51))) DELETE FROM user_blocks USING locked WHERE blocker_id=$1::uuid AND blocked_id=$2::uuid",[req.user.id,userId]);
   await presence.notifyPrivacyChanged(req.app.get('io'), req.user.id, userId);
   return ok(res, { userId, blocked: false });
 });
@@ -310,6 +311,9 @@ const deleteMe = asyncHandler(async (req, res) => {
 
     // 2. Kill all sessions (refresh tokens)
     await client.query('DELETE FROM refresh_tokens WHERE user_id = $1', [req.user.id]);
+    await client.query('DELETE FROM account_tokens WHERE user_id=$1',[req.user.id]);
+    await client.query('DELETE FROM encryption_backups WHERE user_id=$1',[req.user.id]);
+    await client.query('DELETE FROM privacy_preferences WHERE user_id=$1',[req.user.id]);
 
     // 3. Remove from all rooms
     await client.query('DELETE FROM room_members WHERE user_id = $1', [req.user.id]);

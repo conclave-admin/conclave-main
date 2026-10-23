@@ -1,4 +1,6 @@
 import {usePush} from '../contexts/PushContext';
+import PrivacySecuritySettings from '../components/settings/PrivacySecuritySettings';
+import EncryptionSettings from '../components/settings/EncryptionSettings';
 import { useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import useNetworkStatus from '@/hooks/useNetworkStatus';
@@ -117,6 +119,9 @@ export default function Settings() {
       <p className="mt-2 text-body leading-relaxed text-muted">
         How Conclave looks, and when it interrupts you.
       </p>
+
+      <PrivacySecuritySettings />
+      <EncryptionSettings />
 
       <section className="mt-8 rounded-xl border border-line bg-surface p-6">
         <h2 className="text-h2 text-ink">Appearance</h2>

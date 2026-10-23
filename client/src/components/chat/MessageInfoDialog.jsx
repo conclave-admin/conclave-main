@@ -27,12 +27,12 @@ export default function MessageInfoDialog({ message, onClose }) {
     {!details && !error && <p role="status" className="text-body text-muted">Loading receipt details…</p>}
     {details && <div className="space-y-4">
       <p className="text-body text-muted">Sent {time(details.sentAt)}</p>
-      <p className="text-body text-ink">Delivered to {details.summary.delivered_count} of {details.summary.recipient_count} · Read by {details.summary.read_count} of {details.summary.recipient_count}</p>
+      <p className="text-body text-ink">Delivered to {details.summary.delivered_count} of {details.summary.recipient_count}{details.summary.reads_visible===false?' · Read receipts are private':` · Read by ${details.summary.read_count} of ${details.summary.recipient_count}`}</p>
       {!details.summary.history_complete && <p className="text-metadata text-muted">Recipient history is incomplete for this older message. Only known recipients are shown; historical acknowledgement times may be unavailable.</p>}
       {!details.recipients.length && <p className="text-body text-muted">No other recipients when this message was sent.</p>}
       <ul className="divide-y divide-line">{details.recipients.map(recipient => <li key={recipient.user_id} className="min-w-0 py-3">
         <p className="break-words text-label text-ink">{recipient.display_name}{!recipient.current_member && <span className="ml-2 text-metadata text-muted">No longer in this conversation</span>}</p>
-        <p className="text-metadata text-muted">{recipient.read ? `Read · ${time(recipient.read_at)}` : 'Not read'}</p>
+        <p className="text-metadata text-muted">{details.summary.reads_visible===false?'Read receipt private':recipient.read ? `Read · ${time(recipient.read_at)}` : 'Not read'}</p>
         <p className="text-metadata text-muted">{recipient.delivered ? `Delivered · ${time(recipient.delivered_at)}` : 'Not delivered'}</p>
       </li>)}</ul>
     </div>}

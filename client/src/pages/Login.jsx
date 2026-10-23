@@ -77,6 +77,10 @@ export default function Login() {
         </Button>
 
         <Link
+          className="block text-label text-brand hover:underline"
+          to="/account/recovery"
+        >Forgot password?</Link>
+        <Link
           className="inline-block text-label text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
           to="/register"
         >

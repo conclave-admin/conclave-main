@@ -12,7 +12,9 @@ test('real private R2 sender/receiver media, downloads and deletion access',asyn
   test.skip(!info.project.name.startsWith('live-'),'requires explicit real-R2 configuration');
   const sender=await account(request,`${info.project.name}-sender`);const receiver=await account(request,`${info.project.name}-receiver`);const outsider=await account(request,`${info.project.name}-outsider`);
   const auth=token=>({authorization:`Bearer ${token}`});
-  const created=await request.post(`${API}/rooms`,{headers:auth(sender.accessToken),data:{type:'dm',memberIds:[receiver.user.id]}});
+  // This suite exercises R2 transforms and server upload validation. Device
+  // encryption has its own real-API suite and deliberately bypasses transforms.
+  const created=await request.post(`${API}/rooms`,{headers:auth(sender.accessToken),data:{type:'group',name:'Private R2 access fixture',memberIds:[receiver.user.id]}});
   expect(created.status()).toBe(201);const room=(await created.json()).data;
   await login(page,sender);await page.goto(`/chats/${room.id}`);await expect(page.getByRole('textbox',{name:'Message',exact:true})).toBeVisible();
   await page.getByRole('textbox',{name:'Message',exact:true}).click();

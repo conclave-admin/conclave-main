@@ -245,37 +245,42 @@ before marking this phase Complete.
 ## Phase 5 — Privacy, account security, devices, and encryption
 
 **Priority:** P1; establish architecture early  
-**Status:** Not started
+**Status:** Implemented; release acceptance pending (see below)
 
 ### Privacy and DMs
 
-- [ ] **5.1** Add last-seen and online visibility controls.
-- [ ] **5.2** Define profile/photo visibility and read-receipt privacy controls.
-- [ ] **5.3** Add message requests or controls for unknown users.
-- [ ] **5.4** Apply blocking consistently to DMs, typing, presence, profile visibility, and notifications according to a documented policy.
+- [x] **5.1** Add last-seen and online visibility controls.
+- [x] **5.2** Define profile/photo visibility and read-receipt privacy controls.
+- [x] **5.3** Add message requests or controls for unknown users.
+- [x] **5.4** Apply blocking consistently to DMs, typing, presence, profile visibility, and notifications according to a documented policy.
 
 ### Account and device security
 
-- [ ] **5.5** Implement account recovery and email verification.
-- [ ] **5.6** Provide device/session management and remote logout.
-- [ ] **5.7** Integrate those controls with the session enforcement in phase 1.
+- [x] **5.5** Implement account recovery and email verification.
+- [x] **5.6** Provide device/session management and remote logout.
+- [x] **5.7** Integrate those controls with the session enforcement in phase 1.
 
 ### End-to-end encryption
 
-Current messages are server-readable. Authenticated R2 access controls do not
-provide end-to-end encryption.
+New DMs and explicit private rooms now encrypt on devices. Legacy conversations,
+public rooms, groups, and departments remain server readable. Authenticated R2
+access alone is not encryption. See [privacy and encryption policy](docs/PRIVACY_AND_ENCRYPTION.md).
 
-- [ ] **5.8** Decide and document the encryption scope for DMs and rooms.
-- [ ] **5.9** Design device identity keys, verification, and secure device linking.
-- [ ] **5.10** Implement message and attachment encryption on the device within the chosen scope.
-- [ ] **5.11** Design and implement secure key recovery and encrypted backups.
-- [ ] **5.12** Decide how search, decisions, tasks, digests, and moderation work with encrypted content.
+- [x] **5.8** Decide and document the encryption scope for DMs and rooms.
+- [x] **5.9** Design device identity keys, verification, and secure device linking.
+- [x] **5.10** Implement message and attachment encryption on the device within the chosen scope.
+- [x] **5.11** Design and implement secure key recovery and encrypted backups.
+- [x] **5.12** Decide how search, decisions, tasks, digests, and moderation work with encrypted content.
 
 ### Acceptance checks
 
-- [ ] Privacy and blocking controls behave consistently across API, realtime, and background delivery.
-- [ ] Recovery and remote logout work across devices, including already-open sessions.
-- [ ] Encryption guarantees and recovery limitations are documented and verified before making product claims.
+- [x] Privacy and blocking controls behave consistently across API, realtime, and background delivery (automated checks).
+- [x] Recovery and remote logout work across devices, including already-open sessions (mocked email, real PostgreSQL/Redis).
+- [x] Encryption guarantees and recovery limitations are documented and covered by functional checks.
+- [ ] Complete independent protocol/security review before making audited-security claims. The custom protocol has no forward secrecy or post-compromise ratchet.
+- [ ] Verify Resend sending domain, add `RESEND_API_KEY` and verified `RESEND_FROM`, and exercise real verification/recovery email delivery.
+- [ ] Complete deployed HTTPS, real R2, and real-device/browser acceptance; browser security checks mock storage.
+- [ ] Review secure local key storage and a ratcheting/rotation design for stronger security claims. Browser vaults currently rely on IndexedDB and the trusted origin/OS.
 
 ## Phase 6 — Voice messages, information pages, rooms, and personal history
 
@@ -407,3 +412,7 @@ implemented or verified equivalent behaviour.
 | 2026-10-22 | 2.10–2.14 | Added foreground viewport-only reads, resume/reconnect rechecks, exact-message acknowledgements and contiguous unread pointers, immutable send-time recipients, all-recipient group ticks, sender-only Message info, first-ack timestamps, monotonic summary updates, and historical-view receipt recovery. Membership changes preserve the original audience; legacy history is explicitly incomplete. | Backend unit checks: 37 passed; client checks: 58 passed; PostgreSQL/Redis suite: 220 passed, 0 failed, 6 R2-dependent checks skipped; final two-server realtime suite: 22 passed; desktop/mobile fixture-based Playwright: 26 passed; production build and whitespace checks passed. Migration 033 applied locally. API contracts and rollout documentation updated. Phase 2 is complete; production rollout requires migration 033 before API/client deployment. No commits made. |
 
 | 2026-10-22 | 3.1–3.6, 4.1–4.5 | Added a transactional change journal with committed cursor allocation, durable delivery recovery, authorized versioned snapshots, reconnect/foreground/polling reconciliation, tombstone and pending-draft protection, session-bound browser push with scoped renewal, permission/opt-out controls, preference/block/presence enforcement, and authoritative notification counts. | Backend unit checks: 39 passed; client checks: 68 passed; PostgreSQL/Redis suite: 226 passed, 0 failed, 6 live R2 checks skipped; desktop/mobile Playwright: 36 passed; production build and whitespace checks passed. Migrations 034–035 applied locally and rerun safely. Fixed stale removal fixtures to reflect server membership. Push provider and closed-app delivery are mocked; real VAPID contact/key configuration and deployed device acceptance remain open for Phase 4. See docs/SYNC_AND_PUSH.md. No commits made. |
+
+| 2026-10-23 | 5.1–5.12 | Added per-viewer activity/profile privacy, reciprocal DM receipt controls, unknown-user requests, consistent blocking, verification/recovery with encrypted durable Resend SMTP jobs, session management and durable cluster eviction, device certificates/linking/safety codes, new DM/private-room message/file encryption, key backups and explicit lost-key reset, local encrypted search/media, and explicit legacy timeline migration/collaboration policy. Fixed opaque upload metadata, durable sealed outbox retries, lost device-registration responses, cross-tab key persistence, password-reset/login races, and private read-pointer leakage in delivery events. | Backend unit checks: 39 passed; client checks: 76 passed; PostgreSQL/Redis suite: 236 passed, 0 failed, 6 live R2 checks skipped; targeted privacy/mail/session race checks: 5 passed; desktop/mobile Playwright: 40 passed (36 recovery regressions + 4 real API encryption checks with mocked storage). Production build and whitespace checks passed. Migrations 036–037 applied locally and rerun safely. Resend SMTP defaults configured; API key, verified sender, real email/storage/device acceptance, and independent cryptographic review remain open. Custom protocol has no forward secrecy/ratchet or OS-protected local key store. See docs/PRIVACY_AND_ENCRYPTION.md. No commits made. |
+
+| 2026-10-23 | Phase 5 email provider | Replaced Nodemailer/SMTP with the official Resend HTTPS API SDK, migrated configuration to RESEND_API_KEY/RESEND_FROM, preserved encrypted queued mail and bounded retries, and added stable per-job idempotency keys and API error/timeout handling. Updated deployment docs and existing mock fixtures. | No live email sent; real Resend delivery still requires configured credentials and a verified sender. No commits made. |

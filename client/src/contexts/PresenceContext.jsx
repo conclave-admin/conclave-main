@@ -89,7 +89,10 @@ export function PresenceProvider({ children }) {
     return { typingByRoom, recordingByRoom };
   }, [roomPresence, getActivity]);
   const isOnlineIn = useCallback((roomId, userId) => ['online', 'viewing', 'typing', 'recording'].includes(getPresence(roomId, userId)), [getPresence]);
-  const labelFor = useCallback((roomId, userId) => presenceLabel(getPresence(roomId, userId)), [getPresence]);
+  const labelFor = useCallback((roomId,userId)=>{
+    const status=getPresence(roomId,userId),snapshot=roomPresence.get(roomId),last=snapshot?.lastSeen?.[userId];
+    return (status==='offline'||status==='unknown'&&snapshot?.available)&&last&&isConnected&&clock-snapshot.receivedAt<45000?`Last active ${new Date(last).toLocaleString()}`:presenceLabel(status);
+  },[getPresence,roomPresence,isConnected,clock]);
   const value = useMemo(() => ({ roomPresence, getPresence, isOnlineIn, labelFor, getActivity, ...activityByRoom }), [roomPresence, getPresence, isOnlineIn, labelFor, getActivity, activityByRoom]);
   return <PresenceContext.Provider value={value}>{children}</PresenceContext.Provider>;
 }

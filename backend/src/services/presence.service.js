@@ -253,6 +253,14 @@ async function publishRoomPresence(io, roomId, db = { query }, actorId = null) {
   }
   for (const [id, socketIds] of recipients) {
     const payload = filterPresence(snapshot, id, pairs.rows);
+    const privacy = await db.query(`SELECT u.id,privacy_allowed(u.id,$2,'online') AS online,
+      privacy_allowed(u.id,$2,'last_seen') AS last_seen,u.last_active_at
+      FROM users u WHERE u.id=ANY($1::uuid[])`, [[...members],id]);
+    const concealed = new Set(privacy.rows.filter(row=>!row.online).map(row=>row.id));
+    payload.onlineUserIds=payload.onlineUserIds.filter(user=>!concealed.has(user));
+    payload.viewingUserIds=payload.viewingUserIds.filter(user=>!concealed.has(user));
+    payload.hiddenUserIds=[...new Set([...payload.hiddenUserIds,...concealed])];
+    payload.lastSeen=Object.fromEntries(privacy.rows.filter(row=>row.last_seen&&row.last_active_at).map(row=>[row.id,row.last_active_at]));
     const target = io.to(socketIds);
     target.emit('room-presence', payload);
     target.emit('room-typing', payload);

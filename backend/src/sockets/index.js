@@ -256,7 +256,7 @@ function registerSocketHandlers(io) {
     // mentionedUserIds is how a client says who was mentioned. Optional for now:
     // omitting it falls back to matching display names in the text, which is
     // temporary — see resolveMentionIds in services/message.service.js.
-    onEvent('send-message', async ({ roomId, clientId, content, replyToId, attachments, albumId, mentionedUserIds, forwardSource, [ACTIVITY_ORDER]: order }) => {
+    onEvent('send-message', async ({ roomId, clientId, content, replyToId, attachments, albumId, mentionedUserIds, forwardSource, encryptedPayload, [ACTIVITY_ORDER]: order }) => {
       if (!rateLimit.consume(`socket:${userId}:messages`, { max: 30 })) throw new ApiError(429, 'Too many messages. Please try again shortly.');
       const message = await createMessage({
         roomId,
@@ -267,7 +267,7 @@ function registerSocketHandlers(io) {
         attachments,
         albumId,
         mentionedUserIds,
-        forwardSource,
+        forwardSource, encryptedPayload,
         io,
       });
 
@@ -275,7 +275,7 @@ function registerSocketHandlers(io) {
       await conversationActivity.clearDevice(roomId, userId, socket.id, order);
       await presence.publishRoomPresence(io, roomId, undefined, userId);
 
-      if (!message._idempotentRetry) io.to(roomId).emit('receive-message', { message });
+      if (!message._idempotentRetry) await require('../services/privacy.service').emitMessage(io,roomId,'receive-message',message);
       return message;
     });
 
@@ -343,6 +343,7 @@ function registerSocketHandlers(io) {
           }
         } else changed = await presence.renewSocket(userId, socket.id, activity);
         socket.data.activity = activity;
+        if (activity.foreground) await query("UPDATE users SET last_active_at=NOW() WHERE id=$1 AND (last_active_at IS NULL OR last_active_at<NOW()-INTERVAL '1 minute')",[userId]);
         if (previous.roomId && previous.roomId !== activity.roomId) {
           await conversationActivity.clearDevice(previous.roomId, userId, socket.id, payload[ACTIVITY_ORDER]);
           await presence.publishRoomPresence(io, previous.roomId, undefined, userId);

@@ -27,7 +27,7 @@ const MAX_PASSWORD_BYTES = 72;
 
 // One user shape for every auth response. register and login previously
 // returned different field sets (BACKEND_TASKS.md Bug 11).
-const USER_COLUMNS = 'id, email, display_name, avatar_url, bio, created_at';
+const USER_COLUMNS = 'id, email, display_name, avatar_url, bio, created_at, email_verified_at';
 
 function normalizeEmail(email) {
   return String(email).trim().toLowerCase();
@@ -66,19 +66,22 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-async function issueSession(user) {
+async function issueSession(user, req, expectedPasswordHash) {
   const sessionId = crypto.randomUUID();
   const accessToken = signAccessToken({ ...user, sessionId });
   const refreshToken = signRefreshToken({ id: user.id, sessionId });
   // One statement ensures a refresh token never exists without its session.
-  await query(
-    `WITH session AS (
-       INSERT INTO auth_sessions (id, user_id, expires_at)
-       VALUES ($1, $2, NOW() + $4::interval) RETURNING id
+  const issued=await query(
+    `WITH authorized AS MATERIALIZED (
+       SELECT id FROM users WHERE id=$2 AND password_hash=$7 AND deleted_at IS NULL FOR NO KEY UPDATE
+     ), session AS (
+       INSERT INTO auth_sessions (id, user_id, expires_at,device_label,user_agent)
+       SELECT $1,id,NOW()+$4::interval,$5,$6 FROM authorized RETURNING id
      ) INSERT INTO refresh_tokens (user_id, token_hash, expires_at, session_id)
        SELECT $2, $3, NOW() + $4::interval, id FROM session`,
-    [sessionId, user.id, hashToken(refreshToken), refreshExpiryInterval()],
+    [sessionId, user.id, hashToken(refreshToken), refreshExpiryInterval(), String(req?.body?.deviceLabel || 'Browser').trim().slice(0,80) || 'Browser', String(req?.headers?.['user-agent'] || '').slice(0,320),expectedPasswordHash],
   );
+  if(issued.rowCount===0)throw new ApiError(401,'Credentials changed. Please sign in again.');
   return { user, accessToken, refreshToken };
 }
 
@@ -107,7 +110,7 @@ const register = asyncHandler(async (req, res) => {
     [email, passwordHash, String(displayName).trim()],
   );
 
-  return ok(res, await issueSession(result.rows[0]), 201);
+  return ok(res, await issueSession(result.rows[0],req,passwordHash), 201);
 });
 
 const login = asyncHandler(async (req, res) => {
@@ -129,7 +132,7 @@ const login = asyncHandler(async (req, res) => {
 
   // The database row also contains the credential used above. Never serialize it.
   const { password_hash, ...publicUser } = user;
-  return ok(res, await issueSession(publicUser));
+  return ok(res, await issueSession(publicUser,req,user.password_hash));
 });
 
 const refresh = asyncHandler(async (req, res) => {

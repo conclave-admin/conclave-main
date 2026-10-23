@@ -6,6 +6,12 @@ module.exports = {
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
   databaseUrl: process.env.DATABASE_URL,
   redisUrl: process.env.REDIS_URL,
+  mail: {
+    encryptionKey: process.env.MAIL_ENCRYPTION_KEY,
+    apiKey: process.env.RESEND_API_KEY,
+    from: process.env.RESEND_FROM,
+    frontendUrl: process.env.APP_PUBLIC_URL || process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+  },
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET,
     refreshSecret: process.env.JWT_REFRESH_SECRET,

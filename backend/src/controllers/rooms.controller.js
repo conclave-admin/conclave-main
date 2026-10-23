@@ -57,7 +57,7 @@ async function findExistingDm(userA, userB) {
        FROM rooms r
        INNER JOIN room_members a ON a.room_id = r.id AND a.user_id = $1
        INNER JOIN room_members b ON b.room_id = r.id AND b.user_id = $2
-      WHERE r.type = 'dm'
+      WHERE r.type = 'dm' AND r.superseded_by IS NULL
         AND (SELECT COUNT(*) FROM room_members c WHERE c.room_id = r.id) = 2
       LIMIT 1`,
     [userA, userB],
@@ -115,6 +115,7 @@ const createRoom = asyncHandler(async (req, res) => {
   }
 
   const client = await pool.connect();
+  let requiresRequest = false;
   try {
     await client.query("BEGIN");
 
@@ -165,6 +166,8 @@ const createRoom = asyncHandler(async (req, res) => {
       }
     }
 
+    if (roomType === 'dm') requiresRequest = await require('../services/privacy.service').assertCanStartDm(client, req.user.id, requested[0]);
+
     // 3. A DM with no name takes the other person's. `display_name` is NOT NULL, so
     //    this resolves; the "Direct message" fallback only exists so a future
     //    caller cannot reach the slug allocation with nothing at all.
@@ -176,10 +179,10 @@ const createRoom = asyncHandler(async (req, res) => {
     //    the request, so it cannot be used to squat a handle.
     const slug = await allocateSlug(client, effectiveName);
     const roomResult = await client.query(
-      `INSERT INTO rooms (name, type, created_by, slug)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, type, created_by, slug, created_at`,
-      [effectiveName, roomType, req.user.id, slug],
+      `INSERT INTO rooms (name, type, created_by, slug,encryption_mode)
+       VALUES ($1, $2, $3, $4,$5)
+       RETURNING id, name, type, created_by, slug, created_at,encryption_mode`,
+      [effectiveName, roomType, req.user.id, slug, ['dm','private'].includes(roomType)?'e2ee-v1':'none'],
     );
     const room = roomResult.rows[0];
 
@@ -200,6 +203,8 @@ const createRoom = asyncHandler(async (req, res) => {
         [room.id, requested],
       );
     }
+
+    if (requiresRequest) await client.query('INSERT INTO dm_requests(room_id,sender_id,recipient_id) VALUES($1,$2,$3)', [room.id,req.user.id,requested[0]]);
 
     // 7. Read the real membership back. The response used to be built from the
     //    request body, so it could advertise members that ON CONFLICT skipped.
@@ -238,7 +243,7 @@ const listRooms = asyncHandler(async (req, res) => {
     `SELECT
        r.id,
        r.name,
-       r.type,
+       r.type, r.encryption_mode, r.superseded_by,
        r.slug,
        r.avatar_url,
        r.created_by,
@@ -268,7 +273,7 @@ const listRooms = asyncHandler(async (req, res) => {
 
        CASE
          WHEN r.type = 'dm' THEN (
-           SELECT u.avatar_url
+           SELECT CASE WHEN privacy_allowed(u.id,$1,'photo') THEN u.avatar_url ELSE NULL END
              FROM room_members o
              INNER JOIN users u ON u.id = o.user_id
             WHERE o.room_id = r.id AND o.user_id <> $1
@@ -455,7 +460,7 @@ const getRoom = asyncHandler(async (req, res) => {
        r.id,
        r.name,
        r.description,
-       r.type,
+       r.type, r.encryption_mode, r.superseded_by,
        r.slug,
        r.avatar_url,
        r.created_by,
@@ -491,8 +496,8 @@ const getRoom = asyncHandler(async (req, res) => {
                'account_created_at', u.created_at,
                'role', rm2.role,
                'joined_at', rm2.joined_at,
-               'last_seen_at', rm2.last_seen_at,
-               'last_seen_sequence', rm2.last_seen_sequence,
+               'last_seen_at', CASE WHEN u.id=$2 OR share_dm_reads(r.id) THEN rm2.last_seen_at ELSE NULL END,
+               'last_seen_sequence', CASE WHEN u.id=$2 OR share_dm_reads(r.id) THEN rm2.last_seen_sequence ELSE NULL END,
                'last_delivered_sequence', rm2.last_delivered_sequence
              )
              ORDER BY rm2.role = 'admin' DESC,
@@ -522,7 +527,8 @@ const getRoom = asyncHandler(async (req, res) => {
   }
 
   // 4. Return the room details and its member list.
-  return ok(res, { ...room, members });
+  const request = (await query('SELECT sender_id,recipient_id,status FROM dm_requests WHERE room_id=$1',[roomId])).rows[0] || null;
+  return ok(res, { ...room, members, message_request: request });
 });
 
 // ---------- addMember ----------
@@ -666,7 +672,7 @@ const markRoomSeen = asyncHandler(async (req, res) => {
     roomId, userId: req.user.id, read: true, all: true, io: req.app.get('io'),
   });
   const io = req.app.get('io');
-  if (io) io.to(roomId).emit('room-seen', { roomId, userId: req.user.id,
+  if (io && (await query('SELECT share_dm_reads($1) AS allowed',[roomId])).rows[0].allowed) io.to(roomId).emit('room-seen', { roomId, userId: req.user.id,
     lastSeenAt: result.last_seen_at, lastSeenSequence: result.last_seen_sequence });
   return ok(res, { roomId, lastSeenAt: result.last_seen_at });
 });

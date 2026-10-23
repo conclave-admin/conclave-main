@@ -6,7 +6,7 @@ import { isDevAuthBypass } from '../config/devPreview';
 
 export const attachmentAccount = () => getSessionUserId() || (isDevAuthBypass ? 'preview' : 'signed-out');
 export const attachmentCacheKey = (attachment, preview = false) =>
-  `media:${attachmentAccount()}:${preview ? 'preview-v1:' : ''}${attachment.url || attachment.id}`;
+  `media:${attachmentAccount()}:${preview ? 'preview-v1:' : ''}${attachment.encrypted?'decrypted-v1:':''}${attachment.url || attachment.id}`;
 
 async function readError(error) {
   const data = error.response?.data;
@@ -25,7 +25,8 @@ export async function getAttachmentBlob(attachment, { onProgress, signal } = {})
   if (cached) return cached;
   if (!attachment.id) throw new Error('This file is not available yet.');
   try {
-    return await downloadInChunks(attachment, { signal, onProgress }, {
+    const transferAttachment=attachment.encrypted?{...attachment,size:attachment.ciphertext_size,mime_type:'application/vnd.conclave.encrypted'}:attachment;
+    const result=await downloadInChunks(transferAttachment, { signal, onProgress }, {
       key: attachmentCacheKey, read: readLocalFile, save: saveLocalFile,
       clearParts: async (key, size) => {
         for (let start=0; start<size; start+=DOWNLOAD_CHUNK_SIZE) await removeLocalFile(`${key}:part:${start}`);
@@ -36,9 +37,11 @@ export async function getAttachmentBlob(attachment, { onProgress, signal } = {})
         responseType: 'blob', signal: requestSignal, headers,
         onDownloadProgress: (event) => { if (event.total) progress?.(event.loaded/event.total); },
       });
-      if (response.status === 206 && response.headers['content-range'] !== `bytes ${start}-${end}/${attachment.size}`) throw new Error('The file server returned an invalid range.');
+      if (response.status === 206 && response.headers['content-range'] !== `bytes ${start}-${end}/${transferAttachment.size}`) throw new Error('The file server returned an invalid range.');
       return { blob: response.data, etag: response.headers.etag, full: response.status === 200 };
     });
+    if(attachment.encrypted){const {openFile,ready}=await import('../lib/cryptoProtocol');await ready;return openFile(result,attachment.crypto,attachment.mime_type);}
+    return result;
   } catch (error) {
     if (signal?.aborted || error.code === 'ERR_CANCELED') throw new DOMException('Cancelled', 'AbortError');
     throw new Error((await readError(error)) || 'Could not load this file. Check your connection and retry.');
@@ -79,6 +82,7 @@ export async function getAttachmentPreviewBlob(attachment, { signal } = {}) {
     if (blob.size <= 12288 && account === attachmentAccount() && !signal?.aborted) await saveLocalFile(key, blob);
     return blob;
   }
+  if (attachment.encrypted) throw new Error('No encrypted preview is available. Open to download the original.');
   if (!attachment.id) throw new Error('Preview unavailable.');
   const preview = await getAttachmentPreviewUrl(attachment, { signal });
   if (!preview.url) throw new Error('No preview available. Open to download the original.');
@@ -90,8 +94,8 @@ export async function getAttachmentPreviewBlob(attachment, { signal } = {}) {
   return blob;
 }
 
-export function rememberUploadedFile(url, file) {
-  return cacheAttachmentBlob({ url, filename: file.name, mime_type: file.type }, file);
+export function rememberUploadedFile(url, file,options={}) {
+  return cacheAttachmentBlob({ url, filename: file.name, mime_type: file.type,encrypted:options.encrypted }, file);
 }
 
 export function saveAttachmentToDevice(attachment, blob) {

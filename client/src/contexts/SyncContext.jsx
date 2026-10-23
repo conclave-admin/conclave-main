@@ -21,7 +21,7 @@ export function SyncProvider({children}){
         await Promise.all([...listeners.values()].map(handler=>handler(batch)));
       },
     });runner.current=engine;
-    const request=()=>engine.request();const visible=()=>{if(document.visibilityState==='visible')request();};
+    const request=()=>engine.request();const keysReady=()=>engine.request(true);window.addEventListener('conclave:keys-ready',keysReady);const visible=()=>{if(document.visibilityState==='visible')request();};
     socket?.on('sync:changed',request);
     const stop=()=>engine.stop();window.addEventListener('conclave:sync-stop',stop);
     const worker=event=>{if(['SYNC_REQUEST','PUSH_SUBSCRIPTION_CHANGED'].includes(event.data?.type))request();};
@@ -29,7 +29,7 @@ export function SyncProvider({children}){
     for(const name of ['online','focus','pageshow'])window.addEventListener(name,request);
     document.addEventListener('visibilitychange',visible);
     const timer=setInterval(request,15000);request();
-    return()=>{window.removeEventListener('conclave:sync-stop',stop);engine.stop();if(runner.current===engine)runner.current=null;clearInterval(timer);socket?.off('sync:changed',request);navigator.serviceWorker?.removeEventListener('message',worker);for(const name of ['online','focus','pageshow'])window.removeEventListener(name,request);document.removeEventListener('visibilitychange',visible);};
+    return()=>{window.removeEventListener('conclave:keys-ready',keysReady);window.removeEventListener('conclave:sync-stop',stop);engine.stop();if(runner.current===engine)runner.current=null;clearInterval(timer);socket?.off('sync:changed',request);navigator.serviceWorker?.removeEventListener('message',worker);for(const name of ['online','focus','pageshow'])window.removeEventListener(name,request);document.removeEventListener('visibilitychange',visible);};
   },[user?.id,sessionId,isConnected,socket,listeners]);
   const value=useMemo(()=>({register,requestSync}),[register,requestSync]);
   return <Context.Provider value={value}>{children}</Context.Provider>;

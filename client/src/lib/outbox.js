@@ -20,12 +20,12 @@ export function draftMessage(item, senderName = "You") {
     attachments: item.media
       ? [
           {
+            ...attachment,
+            ...item.media.metadata,
             filename: item.media.filename,
             mime_type: item.media.blob.type,
             size: item.media.blob.size,
-            url: `local:${item.key}`,
-            ...attachment,
-            ...item.media.metadata,
+            url: attachment?.url || `local:${item.key}`,
             local_blob: item.media.blob,
           },
         ]
@@ -52,6 +52,8 @@ export function createOutbox({
   upload,
   prepare,
   prepareMetadata,
+  prepareEncryption,
+  prepareSend,
   cancelUpload,
   remember,
   send,
@@ -164,14 +166,15 @@ export function createOutbox({
           };
           await checkpoint(item);
         }
-        const attachment = await upload(item.media.blob, {
+        if(prepareEncryption&&!item.media.encrypted){item=await prepareEncryption(item);await checkpoint(item);}
+        const attachment = await upload(item.media.uploadBlob||item.media.blob, {
           roomId: item.roomId, clientId: item.clientId, session: item.media.session,
           onCheckpoint: async (session) => {
             item = { ...item, media: { ...item.media, session } };
             await checkpoint(item);
           },
-          metadata: item.media.metadata,
-          filename: item.media.filename,
+          metadata: item.media.encrypted?{}:item.media.metadata,
+          filename: item.media.encrypted?'encrypted.bin':item.media.filename,
           signal: controller.signal,
           onProgress: (progress) => {
             if (!stopped && !controller.signal.aborted)
@@ -191,10 +194,14 @@ export function createOutbox({
         await checkpoint(item);
       }
       if (item.media && item.payload.attachments?.[0]) {
-        await remember(item.payload.attachments[0].url, item.media.blob);
+        await remember(item.payload.attachments[0].url, item.media.blob,{encrypted:item.media.encrypted});
       }
       if (!canSend() || controller.signal.aborted || stopped)
         throw new DOMException("Offline", "AbortError");
+      if(prepareSend&&!item.wirePayload){
+        item={...item,wirePayload:await prepareSend(item.payload,item.media)};
+        await checkpoint(item);
+      }
       item = {
         ...item,
         state: "awaiting_ack",
@@ -203,7 +210,7 @@ export function createOutbox({
         retryAt: 0,
       };
       await checkpoint(item);
-      const message = await send(item.payload, controller.signal);
+      const message = await send(item.wirePayload||item.payload, controller.signal,item);
       if (stopped || controller.signal.aborted) return;
       await store.remove(item.key);
       unsaved.delete(item.key);
@@ -231,7 +238,8 @@ export function createOutbox({
       const status = error.response?.status || error.status;
       const retiredUpload = Boolean(item.media && item.payload.attachments?.length && status === 400
         && /Attachment is unavailable/.test(error.message || error.response?.data?.message || ''));
-      if (retiredUpload) item = { ...item, payload: { ...item.payload, attachments: [] }, sendAttempted: false };
+      if (retiredUpload) item = { ...item, wirePayload:undefined,payload: { ...item.payload, attachments: [] }, sendAttempted: false };
+      if(status===409&&error.definitive&&/Encryption recipients changed/.test(error.message||''))item={...item,wirePayload:undefined,sendAttempted:false};
       const retryable =
         !error.permanent &&
         (!status || status >= 500 || [408, 429].includes(status));

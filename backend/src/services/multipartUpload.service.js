@@ -37,7 +37,7 @@ function validateRequest(body) {
   const type = resolveMimetype(mime_type, filename);
   if (!type) throw new ApiError(415, 'Unsupported file type');
   if (!Number.isInteger(size) || size <= 0 || size > limitFor(type)) throw new ApiError(413, 'File size exceeds its upload limit');
-  return { filename, mime_type: type, size, clientId, roomId, metadata: validateMediaMetadata(metadata, type) };
+  return { filename:type==='application/vnd.conclave.encrypted'?'encrypted.bin':filename, mime_type: type, size, clientId, roomId, metadata: validateMediaMetadata(metadata, type) };
 }
 async function createSession(userId, body) {
   if (!env.r2.directUploads || !r2.isConfigured()) throw new ApiError(503, 'Direct uploads are not configured');

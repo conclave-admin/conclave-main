@@ -65,6 +65,7 @@ async function dispatchChanges(io, limit=100) {
       AND (lease_until IS NULL OR lease_until<NOW()) ORDER BY cursor LIMIT $1 FOR UPDATE SKIP LOCKED) RETURNING *`,[limit,token]);
   for(const c of claimed.rows) {
     try {
+      if(io&&c.kind==='session')await require('./realtimeAccess.service').revokeSessionAccess(io,c.entity_id);
       if(c.kind==='message' && c.operation==='INSERT') await recoverMessageNotifications(c.entity_id,io);
       if(io) {
         const adapter=io.of?.('/').adapter;

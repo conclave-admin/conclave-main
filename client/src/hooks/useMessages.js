@@ -1,3 +1,4 @@
+import {decryptMessage} from '../lib/encryption';
 import {useSyncReconciler} from '../contexts/SyncContext';
 import {mergeServerMessages} from '../lib/synchronization';
 import {getMessageSnapshots} from '../services/messages.service';
@@ -213,7 +214,8 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     const unsubscribe = subscribeToRoom(socket, roomId);
     const join = () => { fillGap(); };
 
-    const receive = ({ message }) => {
+    const receive = async({ message }) => {
+      message=await decryptMessage(message);if(!active)return;
       if (message.room_id !== roomId) return;
       if (message.sender_id !== viewerId && socket.connected) socket.emit('message-delivered', { roomId, messageId: message.id });
       if (!anchorId || messagesRef.current.some((row) => row.id === message.id)) setMessages((current) => mergeMessages(current, [message]));
@@ -374,7 +376,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   }, [nextCursor, isLoadingOlder, roomId]);
 
   const editMessage = useCallback(async (messageId, content) => {
-    const updated = await editMessageApi(messageId, content);
+    const updated = await editMessageApi(messageId, content,messagesRef.current.find(m=>m.id===messageId));
     setMessages((current) => current.map((m) => (m.id === messageId ? updated : m)));
     return updated;
   }, []);

@@ -13,6 +13,8 @@ const attachmentsRoutes = require('./attachments.routes');
 const pollsRoutes = require('./polls.routes');
 
 const router = Router();
+router.use('/security', require('./security.routes'));
+router.use('/encryption', require('./encryption.routes'));
 
 router.use('/push', require('./push.routes'));
 router.use('/sync', require('./sync.routes'));

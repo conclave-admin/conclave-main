@@ -33,6 +33,8 @@ const promoteToDecision = asyncHandler(async (req, res) => {
     throw new ApiError(403, 'You are not a member of this room');
   }
 
+  if((await query("SELECT 1 FROM rooms WHERE id=$1 AND encryption_mode='e2ee-v1'",[roomId])).rowCount)throw new ApiError(409,'Server-readable collaboration is unavailable in encrypted conversations');
+
   // One statement, so the 201 response carries the same joined shape the list
   // and search endpoints return. A bare RETURNING * would hand back eight raw
   // columns with no room_name, room_slug or author_name — the same shape drift

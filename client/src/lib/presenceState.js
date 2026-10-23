@@ -7,6 +7,7 @@ export function roomPresenceSnapshot(payload, now = Date.now()) {
     available: payload.available === true,
     activityVersion: payload.activityVersion,
     hidden: new Set(payload.hiddenUserIds || []),
+    lastSeen:payload.lastSeen||{},
     online: new Set(payload.onlineUserIds || []),
     viewing: new Set(payload.viewingUserIds || []),
     typing: activityExpiries(payload, 'typing', now),

@@ -179,6 +179,7 @@ const bubbleClass = [
               mine ? "items-end" : "items-start"
             }`}
           >
+            {message._cryptoError&&<p role="status" className="max-w-full break-words text-metadata text-muted">{message._cryptoError}</p>}
             {message.content &&
               (message.poll ? (
                 <PollCard

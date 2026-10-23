@@ -75,6 +75,8 @@ const createTask = asyncHandler(async (req, res) => {
     throw new ApiError(403, 'You are not a member of this room');
   }
 
+  if((await query("SELECT 1 FROM rooms WHERE id=$1 AND encryption_mode='e2ee-v1'",[roomId])).rowCount)throw new ApiError(409,'Server-readable collaboration is unavailable in encrypted conversations');
+
   // A source message has to be in the same room, or the task links across rooms
   // and the message view would render a task it has no permission context for.
   if (sourceMessageId) {

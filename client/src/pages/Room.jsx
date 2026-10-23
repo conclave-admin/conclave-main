@@ -1,3 +1,4 @@
+import {respondToRequest} from '../services/security.service';
 import { activeReadView } from '../lib/messageReads';
 import MessageInfoDialog from '../components/chat/MessageInfoDialog';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -48,7 +49,7 @@ export default function Room() {
   const viewerId = user?.id;
   const { toast } = useToast();
   const [browserOnline, setBrowserOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine !== false);
-  const { room, isLoading: roomLoading, error: roomError } = useRoom(roomId);
+  const { room, isLoading: roomLoading, error: roomError,reload:reloadRoom } = useRoom(roomId);
   const [messageInfo, setMessageInfo] = useState(null);
   const [replyTo, setReplyTo] = useState(null);
   const [editing, setEditing] = useState(null);
@@ -324,8 +325,8 @@ export default function Room() {
               setEditDraft(message.content || '');
             }}
             onDelete={setDeleting}
-            onPromote={setPromoting}
-            onFlagTask={setFlagging}
+            onPromote={room?.encryption_mode==='e2ee-v1'?undefined:setPromoting}
+            onFlagTask={room?.encryption_mode==='e2ee-v1'?undefined:setFlagging}
             onToggleReaction={handleToggleReaction}
             onPin={handlePin}
             onUnpin={handleUnpin}
@@ -334,14 +335,14 @@ export default function Room() {
             readsEnabled={isConnected && !messageInfo && !threadRoot && !editing && !deleting && !promoting && !flagging && !creatingPoll && !forwarding}
             onMessageInfo={setMessageInfo}
             onOpenThread={setThreadRoot}
-            onForward={setForwarding}
+            onForward={room?.encryption_mode==='e2ee-v1'?undefined:setForwarding}
             onJumpToMessage={jumpToMessage}
             highlightedId={highlightedId}
           />
         )}
       </div>
 
-      <MessageComposer
+      {room?.superseded_by?<div className="row-start-3 border-t border-line p-4"><Button onClick={()=>navigate(`/chats/${room.superseded_by}`)}>Continue in the encrypted conversation</Button><p className="mt-2 text-metadata text-muted">This legacy history remains server-readable.</p></div>:room?.message_request?.status==='declined' ? <p className="row-start-3 border-t border-line p-4 text-body text-muted">This message request was declined.</p> : room?.message_request?.status==='pending'&&(room.message_request.recipient_id===viewerId||messages.some(m=>m.sender_id===viewerId&&!m._optimistic)) ? <div className="row-start-3 space-y-3 border-t border-line p-4"><p className="text-body text-ink">{room.message_request.recipient_id===viewerId?'Message request: accept to reply, or decline. You can report or block this person from conversation details.':'Waiting for this person to accept your message request.'}</p>{room.message_request.recipient_id===viewerId&&<div className="flex gap-2">{['accepted','declined'].map(status=><Button key={status} variant="secondary" onClick={async()=>{try{await respondToRequest(roomId,status);await reloadRoom();}catch(e){toast({title:'Could not update request',description:e.response?.data?.message||e.message,tone:'error'});}}}>{status==='accepted'?'Accept request':'Decline request'}</Button>)}</div>}</div> : <MessageComposer
         className="row-start-3"
         onEditLast={() => {
           const last = [...messages].reverse().find((message) => message.sender_id === viewerId && !message.is_deleted && !message._optimistic);
@@ -350,9 +351,9 @@ export default function Room() {
         onSend={async (payload) => { await sendMessage(payload); if (anchorId) navigate(`/chats/${roomId}`, { replace: true }); }}
         onSendMedia={async (items) => { await sendMedia(items); if (anchorId) navigate(`/chats/${roomId}`, { replace: true }); }}
         isOnline={browserOnline && isConnected}
-        onCreatePoll={() => setCreatingPoll(true)}
-        onCreateDecision={() => setPromoting({ manual: true })}
-        onCreateTask={() => setFlagging({ manual: true })}
+        onCreatePoll={room?.encryption_mode==='e2ee-v1'?undefined:()=>setCreatingPoll(true)}
+        onCreateDecision={room?.encryption_mode==='e2ee-v1'?undefined:()=>setPromoting({manual:true})}
+        onCreateTask={room?.encryption_mode==='e2ee-v1'?undefined:()=>setFlagging({manual:true})}
         members={members}
         activityScope={roomId}
         onTyping={handleTyping}
@@ -361,7 +362,7 @@ export default function Room() {
         onStopRecording={() => { if (socket?.connected) socket.emit('stop-recording', { roomId }); }}
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(null)}
-      />
+      />}
 
       <MessageInfoDialog message={messageInfo} onClose={() => setMessageInfo(null)} />
 

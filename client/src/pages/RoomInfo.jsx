@@ -1,3 +1,5 @@
+import ConversationEncryption from '../components/chat/ConversationEncryption';
+import EncryptedSearch from '../components/chat/EncryptedSearch';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import IconMoreVertical from '@/assets/icons/more-vertical.svg?react';
@@ -279,6 +281,8 @@ export default function RoomInfo() {
 
   return (
       <Page width="content">
+      <ConversationEncryption room={room}/>
+      <EncryptedSearch room={room}/>
       <section className="rounded-2xl border border-line bg-surface p-5 shadow-card md:p-7" aria-label={isDm ? 'Conversation overview' : 'Room overview'}>
         <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
           <div className="flex shrink-0 flex-col items-center gap-2">
@@ -494,6 +498,7 @@ export default function RoomInfo() {
         <form onSubmit={submitReport} className="space-y-4">
           <label className="block text-label text-ink">Reason<select value={reportReason} onChange={(event) => setReportReason(event.target.value)} className="mt-1 min-h-11 w-full rounded-lg border border-line bg-surface px-3 text-body"><option value="harassment">Harassment</option><option value="spam">Spam</option><option value="inappropriate_content">Inappropriate content</option><option value="impersonation">Impersonation</option><option value="other">Other</option></select></label>
           <Textarea label="Details (optional)" value={reportDetails} onChange={(event) => setReportDetails(event.target.value)} maxLength={1000} />
+          {room?.encryption_mode==='e2ee-v1'&&<p className="text-metadata text-muted">Only the details you type here are shared with moderators. Encrypted message content is not included automatically.</p>}
           <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setReportTarget(null)}>Cancel</Button><Button type="submit">Submit report</Button></div>
         </form>
       </Modal>

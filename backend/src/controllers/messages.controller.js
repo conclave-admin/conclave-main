@@ -24,7 +24,7 @@ const PAGE_SIZE = 50;
 // write through message.service.createMessage so history stays consistent.
 const sendMessage = asyncHandler(async (req, res) => {
   const { roomId } = req.body;
-  const { content, replyToId, attachments, albumId, mentionedUserIds, clientId, forwardSource } = req.body;
+  const { content, replyToId, attachments, albumId, mentionedUserIds, clientId, forwardSource,encryptedPayload } = req.body;
 
   if (!roomId) {
     throw new ApiError(400, "roomId is required");
@@ -39,7 +39,7 @@ const sendMessage = asyncHandler(async (req, res) => {
     attachments,
     albumId,
     mentionedUserIds,
-    forwardSource,
+    forwardSource, encryptedPayload,
     io: req.app.get("io"),
   });
 
@@ -81,7 +81,7 @@ const listMessages = asyncHandler(async (req, res) => {
   let sql = `
     SELECT
       m.id,
-      m.state_version,
+      m.state_version, m.encrypted_payload,
       m.client_id,
       m.album_id,
       m.forwarded,
@@ -239,6 +239,8 @@ const searchMessages = asyncHandler(async (req, res) => {
     throw new ApiError(403, "You are not a member of this room");
   }
 
+  if((await query("SELECT 1 FROM rooms WHERE id=$1 AND encryption_mode='e2ee-v1'",[roomId])).rowCount)throw new ApiError(409,'Search encrypted messages on your device');
+
   // 2. Full-text search with ts_rank for relevance ordering.
   //    Deleted messages are excluded outright: a search should never be able
   //    to surface content the author has retracted. The attachments agg
@@ -256,7 +258,7 @@ const searchMessages = asyncHandler(async (req, res) => {
   const result = await query(
     `SELECT
        m.id,
-      m.state_version,
+      m.state_version, m.encrypted_payload,
        m.room_id,
        m.sender_id,
        m.client_id,
@@ -341,7 +343,7 @@ const editMessageHandler = asyncHandler(async (req, res) => {
 
   // `io` goes to the service first so the chat-list refresh happens at the
   // point of write. Re-read afterwards for the response.
-  await editMessage({ messageId, userId: req.user.id, content, io });
+  await editMessage({ messageId, userId: req.user.id, content, encryptedPayload:req.body.encryptedPayload, io });
 
   // Re-read the full row rather than trusting the UPDATE ... RETURNING, so the
   // response has exactly the shape listMessages returns — including sender
@@ -350,7 +352,7 @@ const editMessageHandler = asyncHandler(async (req, res) => {
   const message = await getMessagePayload(messageId, req.user.id);
 
   if (io) {
-    io.to(message.room_id).emit("message:updated", { message });
+    await require('../services/privacy.service').emitMessage(io,message.room_id,'message:updated',message);
   }
 
   return ok(res, message);
@@ -369,7 +371,7 @@ const deleteMessageHandler = asyncHandler(async (req, res) => {
   const payload = await getMessagePayload(message.room_id && message.id, req.user.id);
 
   if (io) {
-    io.to(payload.room_id).emit("message:deleted", { message: payload });
+    await require('../services/privacy.service').emitMessage(io,payload.room_id,'message:deleted',payload);
   }
 
   return ok(res, payload);
@@ -387,7 +389,7 @@ const addReactionHandler = asyncHandler(async (req, res) => {
 
   const io = req.app.get("io");
   if (io) {
-    io.to(message.room_id).emit("message:reaction", { message });
+    await require('../services/privacy.service').emitMessage(io,message.room_id,'message:reaction',message);
   }
 
   return ok(res, message);
@@ -408,7 +410,7 @@ const removeReactionHandler = asyncHandler(async (req, res) => {
 
   const io = req.app.get("io");
   if (io) {
-    io.to(message.room_id).emit("message:reaction", { message });
+    await require('../services/privacy.service').emitMessage(io,message.room_id,'message:reaction',message);
   }
 
   return ok(res, message);

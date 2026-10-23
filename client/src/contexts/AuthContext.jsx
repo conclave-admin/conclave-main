@@ -114,8 +114,11 @@ export function AuthProvider({ children }) {
     await deleteAccountRequest();
     window.dispatchEvent(new Event('conclave:sync-stop'));
     window.dispatchEvent(new Event('conclave:outbox-stop'));
-    await clearLocalData();
-    setUser(null);
+    try {
+      await (await import('../lib/encryption')).forgetLocalEncryption(user.id);
+    } finally {
+      try { await clearLocalData(); } finally { setUser(null); }
+    }
   }
   const value = useMemo(
     () => ({
