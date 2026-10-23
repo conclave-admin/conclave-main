@@ -1,10 +1,11 @@
-const { query } = require('../config/db');
-const ApiError = require('../utils/ApiError');
+const { query } = require("../config/db");
+const ApiError = require("../utils/ApiError");
 // Top-level rather than lazily: poll.service imports nothing from this module,
 // so unlike reaction.service there is no cycle to defer around.
-const { attachPolls } = require('./poll.service');
-const { attachReceiptSummaries } = require('./messageReceipt.service');
-const attachPollsAndReceipts = async rows => attachReceiptSummaries(await attachPolls(rows));
+const { attachPolls } = require("./poll.service");
+const { attachReceiptSummaries } = require("./messageReceipt.service");
+const attachPollsAndReceipts = async (rows) =>
+  attachReceiptSummaries(await attachPolls(rows));
 
 // Message pins — the same two scopes and the same rules as decisionPin.service,
 // applied to messages. Deliberately a near-copy rather than a shared abstraction:
@@ -26,7 +27,7 @@ const attachPollsAndReceipts = async rows => attachReceiptSummaries(await attach
 // `room` is shared truth and `mine` is per viewer, for the same reason as
 // decisions: a client knows what it pinned but cannot know anyone else's.
 
-const PIN_SCOPES = new Set(['user', 'room']);
+const PIN_SCOPES = new Set(["user", "room"]);
 
 function assertScope(scope) {
   if (!PIN_SCOPES.has(scope)) {
@@ -63,22 +64,24 @@ async function attachPins(messages, viewerId, { db } = {}) {
   const byMessage = new Map();
   for (const row of rows) {
     const entry = byMessage.get(row.message_id) || { room: null, mine: [] };
-    if (row.scope === 'room') {
+    if (row.scope === "room") {
       entry.room = {
         user_id: row.user_id,
         display_name: row.display_name,
         pinned_at: row.pinned_at,
       };
-      if (row.user_id === viewerId) entry.mine.push('room');
+      if (row.user_id === viewerId) entry.mine.push("room");
     } else if (row.user_id === viewerId) {
-      entry.mine.push('user');
+      entry.mine.push("user");
     }
     byMessage.set(row.message_id, entry);
   }
 
   for (const message of messages) {
     const entry = byMessage.get(message.id);
-    message.pins = entry ? { room: entry.room, mine: entry.mine } : { room: null, mine: [] };
+    message.pins = entry
+      ? { room: entry.room, mine: entry.mine }
+      : { room: null, mine: [] };
   }
 
   return messages;
@@ -103,10 +106,12 @@ async function getMessageWithPins(messageId, viewerId) {
   );
 
   if (result.rows.length === 0) {
-    throw new ApiError(404, 'Message not found');
+    throw new ApiError(404, "Message not found");
   }
 
-  const [message] = await attachPollsAndReceipts(await attachPins(result.rows, viewerId));
+  const [message] = await attachPollsAndReceipts(
+    await attachPins(result.rows, viewerId),
+  );
   return message;
 }
 
@@ -116,19 +121,21 @@ async function getMessageWithPins(messageId, viewerId) {
 async function pinMessage({ messageId, userId, scope, io }) {
   assertScope(scope);
 
-  const room = await query(`SELECT room_id FROM messages WHERE id = $1`, [messageId]);
+  const room = await query(`SELECT room_id FROM messages WHERE id = $1`, [
+    messageId,
+  ]);
   const roomId = room.rows[0]?.room_id;
-  if (!roomId) throw new ApiError(404, 'Message not found');
+  if (!roomId) throw new ApiError(404, "Message not found");
 
   const membership = await query(
     `SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2`,
     [roomId, userId],
   );
   if (membership.rows.length === 0) {
-    throw new ApiError(403, 'You are not a member of this room');
+    throw new ApiError(403, "You are not a member of this room");
   }
 
-  if (scope === 'room') {
+  if (scope === "room") {
     const existing = await query(
       `SELECT mp.user_id, u.display_name
          FROM message_pins mp
@@ -138,7 +145,10 @@ async function pinMessage({ messageId, userId, scope, io }) {
     );
     const held = existing.rows[0];
     if (held && held.user_id !== userId) {
-      throw new ApiError(409, `Already pinned to the room by ${held.display_name}`);
+      throw new ApiError(
+        409,
+        `Already pinned to the room by ${held.display_name}`,
+      );
     }
   }
 
@@ -151,7 +161,7 @@ async function pinMessage({ messageId, userId, scope, io }) {
   );
 
   const message = await getMessageWithPins(messageId, userId);
-  if (io) io.to(roomId).emit('message:pinned', { message, scope, userId });
+  if (io) io.to(roomId).emit("message:pinned", { message, scope, userId });
 
   return message;
 }
@@ -166,9 +176,11 @@ async function pinMessage({ messageId, userId, scope, io }) {
 async function unpinMessage({ messageId, userId, scope, io }) {
   assertScope(scope);
 
-  const room = await query(`SELECT room_id FROM messages WHERE id = $1`, [messageId]);
+  const room = await query(`SELECT room_id FROM messages WHERE id = $1`, [
+    messageId,
+  ]);
   const roomId = room.rows[0]?.room_id;
-  if (!roomId) throw new ApiError(404, 'Message not found');
+  if (!roomId) throw new ApiError(404, "Message not found");
 
   const existing = await query(
     `SELECT user_id FROM message_pins WHERE message_id = $1 AND scope = $2`,
@@ -177,17 +189,17 @@ async function unpinMessage({ messageId, userId, scope, io }) {
   const held = existing.rows[0];
   if (!held) return null;
 
-  if (scope === 'user') {
+  if (scope === "user") {
     if (held.user_id !== userId) {
-      throw new ApiError(403, 'That is not your bookmark');
+      throw new ApiError(403, "That is not your bookmark");
     }
   } else if (held.user_id !== userId) {
     const role = await query(
       `SELECT role FROM room_members WHERE room_id = $1 AND user_id = $2`,
       [roomId, userId],
     );
-    if (role.rows[0]?.role !== 'admin') {
-      throw new ApiError(403, 'Only the pinner or a room admin can unpin this');
+    if (role.rows[0]?.role !== "admin") {
+      throw new ApiError(403, "Only the pinner or a room admin can unpin this");
     }
   }
 
@@ -197,7 +209,7 @@ async function unpinMessage({ messageId, userId, scope, io }) {
   );
 
   const message = await getMessageWithPins(messageId, userId);
-  if (io) io.to(roomId).emit('message:unpinned', { message, scope, userId });
+  if (io) io.to(roomId).emit("message:unpinned", { message, scope, userId });
 
   return message;
 }
@@ -236,7 +248,7 @@ async function listRoomPins(roomId, viewerId) {
   // Reactions come along so a pinned message renders identically to one in the
   // timeline. The membership check is the caller's; this is called only from a
   // route that has already done it.
-  const { attachReactions } = require('./reaction.service');
+  const { attachReactions } = require("./reaction.service");
   const messages = await attachReactions(result.rows, viewerId);
 
   return attachPollsAndReceipts(await attachPins(messages, viewerId));

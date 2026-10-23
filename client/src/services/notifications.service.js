@@ -1,5 +1,5 @@
-import { api } from '../lib/api';
-import { isDevAuthBypass, previewNotifications } from '../config/devPreview';
+import { api } from "../lib/api";
+import { isDevAuthBypass, previewNotifications } from "../config/devPreview";
 
 /**
  * The caller's notifications, newest first.
@@ -26,8 +26,8 @@ export async function listNotifications({ before, unseenOnly } = {}) {
       nextCursor: null,
     };
   }
-  const { data } = await api.get('/notifications', {
-    params: { before, unseenOnly: unseenOnly ? 'true' : undefined },
+  const { data } = await api.get("/notifications", {
+    params: { before, unseenOnly: unseenOnly ? "true" : undefined },
   });
   return data.data;
 }
@@ -50,10 +50,16 @@ export async function markSeen({ notificationId, all } = {}) {
   if (isDevAuthBypass) {
     const count = all
       ? previewNotifications.filter((n) => !n.seen).length
-      : previewNotifications.filter((n) => n.id === notificationId && !n.seen).length;
-    previewNotifications.forEach(n=>{if(all||n.id===notificationId)n.seen=true;});
+      : previewNotifications.filter((n) => n.id === notificationId && !n.seen)
+          .length;
+    previewNotifications.forEach((n) => {
+      if (all || n.id === notificationId) n.seen = true;
+    });
     return { updated: count };
   }
-  const { data } = await api.patch('/notifications/seen', { notificationId, all });
+  const { data } = await api.patch("/notifications/seen", {
+    notificationId,
+    all,
+  });
   return data.data;
 }

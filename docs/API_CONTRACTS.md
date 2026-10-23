@@ -46,12 +46,12 @@ not an acknowledgement or message payload. Polling `/sync` recovers missed hints
 
 ## Browser push
 
-| Method | Route | Authorization / result |
-| --- | --- | --- |
-| GET | `/push/config` | Public; `{configured, publicKey}`; no private key |
-| POST | `/push/subscriptions` | Bearer session; `{subscription}`; 201 with binding below |
-| DELETE | `/push/subscriptions` | Bearer session; `{endpoint}`; removes caller's endpoint |
-| POST | `/push/renew` | `Authorization: PushRenew <renewalToken>`; `{subscription}`; rotates binding credential |
+| Method | Route                 | Authorization / result                                                                  |
+| ------ | --------------------- | --------------------------------------------------------------------------------------- |
+| GET    | `/push/config`        | Public; `{configured, publicKey}`; no private key                                       |
+| POST   | `/push/subscriptions` | Bearer session; `{subscription}`; 201 with binding below                                |
+| DELETE | `/push/subscriptions` | Bearer session; `{endpoint}`; removes caller's endpoint                                 |
+| POST   | `/push/renew`         | `Authorization: PushRenew <renewalToken>`; `{subscription}`; rotates binding credential |
 
 Registration/renewal returns `{subscriptionId, bindingId, renewalToken, publicKey,
 sessionExpiresAt}`. Store the scoped renewal credential only for the current
@@ -78,12 +78,12 @@ Registration is open to everyone. Invitations control private-room
 collaboration, not account creation. Public rooms can be discovered and joined
 by signed-in users; room reads still require membership.
 
-| Method | Path           | Body                               | Returns                               | Notes                                                                                                                                                            |
-| ------ | -------------- | ---------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | /auth/register | `{ email, password, displayName }` | `{ user, accessToken, refreshToken }` | Validates email format, password 8–72 bytes. Email is stored lowercased.                                                                                         |
-| POST   | /auth/login    | `{ email, password }`              | `{ user, accessToken, refreshToken }` | Case-insensitive on email. Same 401 for unknown, soft-deleted, and wrong password.                                                                               |
-| POST   | /auth/refresh  | `{ refreshToken }`                 | `{ accessToken, refreshToken }`       | ⚠️ **Rotates.** The old token is revoked and a new one issued. **You must persist the returned `refreshToken`** or the user is signed out on the _next_ refresh. |
-| POST   | /auth/logout   | `{ refreshToken }`                 | `{ message }`                         | Revokes the stable session and all rotated refresh tokens, disconnecting its sockets on every API instance. Unknown tokens also return success; cluster failures return 503.                                                                                          |
+| Method | Path           | Body                               | Returns                               | Notes                                                                                                                                                                        |
+| ------ | -------------- | ---------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | /auth/register | `{ email, password, displayName }` | `{ user, accessToken, refreshToken }` | Validates email format, password 8–72 bytes. Email is stored lowercased.                                                                                                     |
+| POST   | /auth/login    | `{ email, password }`              | `{ user, accessToken, refreshToken }` | Case-insensitive on email. Same 401 for unknown, soft-deleted, and wrong password.                                                                                           |
+| POST   | /auth/refresh  | `{ refreshToken }`                 | `{ accessToken, refreshToken }`       | ⚠️ **Rotates.** The old token is revoked and a new one issued. **You must persist the returned `refreshToken`** or the user is signed out on the _next_ refresh.             |
+| POST   | /auth/logout   | `{ refreshToken }`                 | `{ message }`                         | Revokes the stable session and all rotated refresh tokens, disconnecting its sockets on every API instance. Unknown tokens also return success; cluster failures return 503. |
 
 ⚠️ `user` is the same shape from register and login:
 `{ id, email, display_name, avatar_url, bio, created_at }`.
@@ -113,33 +113,33 @@ A failed acknowledgement rolls membership back and returns 503.
 
 ## Users
 
-| Method | Path      | Body                                       | Returns                              | Notes                                                                                                                                                          |
-| ------ | --------- | ------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | /users/me | —                                          | user                                 | 404 if soft-deleted.                                                                                                                                           |
-| PATCH  | /users/me | any of `display_name`, `avatar_url`, `bio` | user                                 | Whitelist-only. Per-field limits: 100 / 2048 / 1000 chars.                                                                                                     |
-| GET    | /users/avatar-url?url=<opaque R2 key> | — | `{ url, expiresAt }` | Authenticated. Signs an image only while it is an active user avatar or a room avatar visible to the caller. |
-| DELETE | /users/me | —                                          | `{ message }`                        | **Soft delete.** Anonymises the row, revokes all sessions, removes room memberships. Messages, decisions and tasks are preserved and render as "Deleted user". |
-| GET    | /users    | `?q=&page=`                                | `{ users, page, pageSize, hasMore }` | Authenticated directory; searches may match email, but responses never expose email addresses. Soft-deleted users are excluded. |
-| GET    | /users/:userId/shared-rooms | — | `{ rooms }` | Lists rooms shared by the caller and target, excluding DMs. Used by the DM info page's “Groups in common” section. |
-| GET    | /users/:userId/block | — | `{ blocked }` | Whether the caller has blocked the target. |
-| POST   | /users/:userId/block | — | `{ userId, blocked }` | Idempotent. Prevents new and existing direct messages between the pair. |
-| DELETE | /users/:userId/block | — | `{ userId, blocked: false }` | Removes the caller's block. |
-| POST   | /users/:userId/report | `{ reason, details?, roomId? }` | report | Records an open report. Reasons: `spam`, `harassment`, `inappropriate_content`, `impersonation`, `other`. When `roomId` is supplied, both users must belong to it. |
+| Method | Path                                  | Body                                       | Returns                              | Notes                                                                                                                                                              |
+| ------ | ------------------------------------- | ------------------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| GET    | /users/me                             | —                                          | user                                 | 404 if soft-deleted.                                                                                                                                               |
+| PATCH  | /users/me                             | any of `display_name`, `avatar_url`, `bio` | user                                 | Whitelist-only. Per-field limits: 100 / 2048 / 1000 chars.                                                                                                         |
+| GET    | /users/avatar-url?url=<opaque R2 key> | —                                          | `{ url, expiresAt }`                 | Authenticated. Signs an image only while it is an active user avatar or a room avatar visible to the caller.                                                       |
+| DELETE | /users/me                             | —                                          | `{ message }`                        | **Soft delete.** Anonymises the row, revokes all sessions, removes room memberships. Messages, decisions and tasks are preserved and render as "Deleted user".     |
+| GET    | /users                                | `?q=&page=`                                | `{ users, page, pageSize, hasMore }` | Authenticated directory; searches may match email, but responses never expose email addresses. Soft-deleted users are excluded.                                    |
+| GET    | /users/:userId/shared-rooms           | —                                          | `{ rooms }`                          | Lists rooms shared by the caller and target, excluding DMs. Used by the DM info page's “Groups in common” section.                                                 |
+| GET    | /users/:userId/block                  | —                                          | `{ blocked }`                        | Whether the caller has blocked the target.                                                                                                                         |
+| POST   | /users/:userId/block                  | —                                          | `{ userId, blocked }`                | Idempotent. Prevents new and existing direct messages between the pair.                                                                                            |
+| DELETE | /users/:userId/block                  | —                                          | `{ userId, blocked: false }`         | Removes the caller's block.                                                                                                                                        |
+| POST   | /users/:userId/report                 | `{ reason, details?, roomId? }`            | report                               | Records an open report. Reasons: `spam`, `harassment`, `inappropriate_content`, `impersonation`, `other`. When `roomId` is supplied, both users must belong to it. |
 
 ## Rooms
 
-| Method | Path                   | Body                          | Returns                                 | Notes                                                                                                                                                                                                                               |
-| ------ | ---------------------- | ----------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | /rooms                 | `{ name, type?, memberIds? }` | room + `members[]`                      | `type` ∈ `dm, group, public, private, department`. Caller becomes admin. A DM between the same pair is **not** duplicated — the existing one is returned with `existing: true`. Slug is derived server-side and cannot be supplied. |
-| GET    | /rooms                 | —                             | room[]                                  | Everything the sidebar needs in one round trip. Includes `slug`, `type`, `member_count`, `my_role`, `last_seen_at`, plus **`display_name`** and **`display_avatar`** (a DM returns the *other* member's identity, not the room title; groups return their room photo), **`has_message`**, **`last_message`** and **`unread_count`**. Ordered by last activity, then creation. |
-| GET    | /rooms/discover        | `?q=&page=`                   | `{ rooms, page, hasMore }`              | Authenticated directory of public rooms the caller has not joined. Search matches room name or description; page size is 25. |
-| POST   | /rooms/:roomId/join    | —                             | `{ roomId, joined, existing }`          | Joins a public room. Idempotent; private rooms return 403. Membership is required before reading messages. |
-| GET    | /rooms/:roomId         | —                             | room + `members[]`                      | Membership required. Member profiles include `bio` and `account_created_at` alongside room role, join time, and room-scoped last-seen/read pointers. Email addresses are never included. |
-| POST   | /rooms/:roomId/members | `{ userId }`                  | `{ roomId, userId, displayName, role }` | Admin only. 404 if the target is soft-deleted. Writes a `room_invite` notification row but does **not** emit it on the socket.                                                                                                      |
-| POST   | /rooms/:roomId/seen    | —                             | `{ roomId, lastSeenAt }`                | **Explicit mark-all-read action only.** Marks existing recipient receipts read and delivered, advances the room pointer, and emits receipt and room-seen updates. Automatic timeline reads use message-read; opening or leaving a room does not mark it all read.                                                            |
-| PATCH  | /rooms/:roomId         | `{ name?, description?, avatar_url? }` | room | Admin only; DMs cannot be edited as rooms. Group avatar uploads are selected from the room info page. |
-| DELETE | /rooms/:roomId/members/:userId | — | `{ roomId, userId, removed }` | Members may remove themselves to leave. Only admins may remove another member; a room must retain an admin. |
-| PATCH  | /rooms/:roomId/members/:userId | `{ role: "admin" | "member" }` | `{ roomId, userId, role }` | Admin only. DMs have no member roles. |
+| Method | Path                           | Body                                   | Returns                                 | Notes                                                                                                                                                                                                                                                                                                                                                                         |
+| ------ | ------------------------------ | -------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | /rooms                         | `{ name, type?, memberIds? }`          | room + `members[]`                      | `type` ∈ `dm, group, public, private, department`. Caller becomes admin. A DM between the same pair is **not** duplicated — the existing one is returned with `existing: true`. Slug is derived server-side and cannot be supplied.                                                                                                                                           |
+| GET    | /rooms                         | —                                      | room[]                                  | Everything the sidebar needs in one round trip. Includes `slug`, `type`, `member_count`, `my_role`, `last_seen_at`, plus **`display_name`** and **`display_avatar`** (a DM returns the _other_ member's identity, not the room title; groups return their room photo), **`has_message`**, **`last_message`** and **`unread_count`**. Ordered by last activity, then creation. |
+| GET    | /rooms/discover                | `?q=&page=`                            | `{ rooms, page, hasMore }`              | Authenticated directory of public rooms the caller has not joined. Search matches room name or description; page size is 25.                                                                                                                                                                                                                                                  |
+| POST   | /rooms/:roomId/join            | —                                      | `{ roomId, joined, existing }`          | Joins a public room. Idempotent; private rooms return 403. Membership is required before reading messages.                                                                                                                                                                                                                                                                    |
+| GET    | /rooms/:roomId                 | —                                      | room + `members[]`                      | Membership required. Member profiles include `bio` and `account_created_at` alongside room role, join time, and room-scoped last-seen/read pointers. Email addresses are never included.                                                                                                                                                                                      |
+| POST   | /rooms/:roomId/members         | `{ userId }`                           | `{ roomId, userId, displayName, role }` | Admin only. 404 if the target is soft-deleted. Writes a `room_invite` notification row but does **not** emit it on the socket.                                                                                                                                                                                                                                                |
+| POST   | /rooms/:roomId/seen            | —                                      | `{ roomId, lastSeenAt }`                | **Explicit mark-all-read action only.** Marks existing recipient receipts read and delivered, advances the room pointer, and emits receipt and room-seen updates. Automatic timeline reads use message-read; opening or leaving a room does not mark it all read.                                                                                                             |
+| PATCH  | /rooms/:roomId                 | `{ name?, description?, avatar_url? }` | room                                    | Admin only; DMs cannot be edited as rooms. Group avatar uploads are selected from the room info page.                                                                                                                                                                                                                                                                         |
+| DELETE | /rooms/:roomId/members/:userId | —                                      | `{ roomId, userId, removed }`           | Members may remove themselves to leave. Only admins may remove another member; a room must retain an admin.                                                                                                                                                                                                                                                                   |
+| PATCH  | /rooms/:roomId/members/:userId | `{ role: "admin"                       | "member" }`                             | `{ roomId, userId, role }`                                                                                                                                                                                                                                                                                                                                                    | Admin only. DMs have no member roles. |
 
 ### The chat-list row
 
@@ -172,16 +172,16 @@ badge can never disagree.
 
 ## Messages
 
-| Method | Path                          | Body                                             | Returns                    | Notes                                                                                                                                                                                                                                                                                                                |
-| ------ | ----------------------------- | ------------------------------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | /messages                     | `{ roomId, clientId?, content?, replyToId?, attachments?, albumId?, mentionedUserIds? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. Each message may attach at most one `{ url }` returned by `POST /upload`; a multi-item send creates one message per item and shares a UUID `albumId`. `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. `mentionedUserIds[]` is the ids of users the message mentions — see below. |
-| GET    | /messages/room/:roomId        | `before?, afterSeq?, around?`                               | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. The client uses it to load older history. `around` opens a bounded shared-message context; see below.                                                                                                                                                         |
-| GET    | /messages/room/:roomId/search | `?q=`                                            | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns the **same message shape** as `listMessages`, plus a `rank`.                                                                                                                                                                                          |
-| GET    | /messages/room/:roomId/media | `kind?, cursor?, limit?, after?` | `{ media, nextCursor }` | Membership required. Bounded shared-file pages; see below. |
-| PATCH  | /messages/:messageId          | `{ content }`                                   | message                    | Author only, no time limit. Sets `edited_at`. Empty content is a 400 unless the message has an attachment. Mentions and notifications are **not** affected.                                                                                                                                        |
-| DELETE | /messages/:messageId          | —                                                | message                    | Author **or room admin**. Soft delete: sets `deleted_at` and overwrites `content` to NULL. Returns the tombstone (`is_deleted: true`).                                                                                                                                                                   |
-| PUT    | /messages/:messageId/reactions | `{ emoji }`                                    | message                    | Idempotent — reacting twice does not stack. `emoji` ∈ `👍 👎 🎉 ✅`; anything else is a 400.                                                                                                                                                                          |
-| DELETE | /messages/:messageId/reactions/:emoji | —                                    | message                    | Removes your own reaction. `emoji` must be URL-encoded. Removing an absent reaction succeeds.                                                                                                                                                                          |
+| Method | Path                                  | Body                                                                                     | Returns                    | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------ | ------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | /messages                             | `{ roomId, clientId?, content?, replyToId?, attachments?, albumId?, mentionedUserIds? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. Each message may attach at most one `{ url }` returned by `POST /upload`; a multi-item send creates one message per item and shares a UUID `albumId`. `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. `mentionedUserIds[]` is the ids of users the message mentions — see below. |
+| GET    | /messages/room/:roomId                | `before?, afterSeq?, around?`                                                            | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. The client uses it to load older history. `around` opens a bounded shared-message context; see below.                                                                                                                                                                                                                                                          |
+| GET    | /messages/room/:roomId/search         | `?q=`                                                                                    | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns the **same message shape** as `listMessages`, plus a `rank`.                                                                                                                                                                                                                                                                                                                                   |
+| GET    | /messages/room/:roomId/media          | `kind?, cursor?, limit?, after?`                                                         | `{ media, nextCursor }`    | Membership required. Bounded shared-file pages; see below.                                                                                                                                                                                                                                                                                                                                                                                                |
+| PATCH  | /messages/:messageId                  | `{ content }`                                                                            | message                    | Author only, no time limit. Sets `edited_at`. Empty content is a 400 unless the message has an attachment. Mentions and notifications are **not** affected.                                                                                                                                                                                                                                                                                               |
+| DELETE | /messages/:messageId                  | —                                                                                        | message                    | Author **or room admin**. Soft delete: sets `deleted_at` and overwrites `content` to NULL. Returns the tombstone (`is_deleted: true`).                                                                                                                                                                                                                                                                                                                    |
+| PUT    | /messages/:messageId/reactions        | `{ emoji }`                                                                              | message                    | Idempotent — reacting twice does not stack. `emoji` ∈ `👍 👎 🎉 ✅`; anything else is a 400.                                                                                                                                                                                                                                                                                                                                                              |
+| DELETE | /messages/:messageId/reactions/:emoji | —                                                                                        | message                    | Removes your own reaction. `emoji` must be URL-encoded. Removing an absent reaction succeeds.                                                                                                                                                                                                                                                                                                                                                             |
 
 “Clear messages for me” is client-side and per signed-in user/device: it hides
 messages at or before the local clear time while leaving shared room history
@@ -309,8 +309,8 @@ rows, where a name may have changed since the message was sent.
 
 ## File upload
 
-| Method | Path    | Status | Body             | Returns                              |
-| ------ | ------- | ------ | ---------------- | ------------------------------------ |
+| Method | Path    | Status | Body             | Returns                                                          |
+| ------ | ------- | ------ | ---------------- | ---------------------------------------------------------------- |
 | POST   | /upload | 201    | multipart `file` | `{ filename, url, mime_type, size, width, height, preview_url }` |
 
 Auth required. 25MB maximum. The response is wrapped in the standard
@@ -580,7 +580,6 @@ These changes require no new migration or environment variables.
 message row on `receive-message`. Pass `mentionedUserIds` — see the warning above
 for what omitting it costs.
 
-
 ### Message receipts and send-time recipients
 
 Migration `033_message_receipts.sql` snapshots every message's recipients in the
@@ -639,10 +638,10 @@ Existing `message-read` and `message-delivered` events retain user and contiguou
 pointer fields. Per-recipient timestamps are first-ack times and do not change
 on duplicates or acknowledgements from another device.
 
-| Method | Path | Returns | Access |
-| --- | --- | --- | --- |
-| GET | /messages/:messageId/receipts | `{ messageId, sentAt, summary, recipients }` | Sender who is still a room member; otherwise 404. |
-| GET | /messages/room/:roomId/receipts?ids=uuid,uuid | `{ roomId, receipts }` | Current members; 1–200 valid IDs; other rooms' IDs return no data. |
+| Method | Path                                          | Returns                                      | Access                                                             |
+| ------ | --------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------ |
+| GET    | /messages/:messageId/receipts                 | `{ messageId, sentAt, summary, recipients }` | Sender who is still a room member; otherwise 404.                  |
+| GET    | /messages/room/:roomId/receipts?ids=uuid,uuid | `{ roomId, receipts }`                       | Current members; 1–200 valid IDs; other rooms' IDs return no data. |
 
 Each recipient detail includes `user_id`, `display_name`, `delivered`, `read`,
 `delivered_at`, `read_at`, and `current_member`. The sender's **Message info**
@@ -676,13 +675,11 @@ server/rate-limit failures from permanent validation or access failures. A lost
 acknowledgement is resolved by retrying the same client ID. A send with an unknown
 outcome must not be discarded as though the server had definitely rejected it.
 
-
 ### Media display metadata (migration 027)
 
 `POST /upload` accepts one `file` and an optional multipart text field
 `mediaMetadata`, a JSON object with optional `width`, `height`, `preview_url`
-and `duration`. Width/height must be paired positive integers no greater than
-32768. `preview_url` accepts only a JPEG data URL capped at 12 KiB decoded;
+and `duration`. Width/height must be paired positive integers no greater than 32768. `preview_url` accepts only a JPEG data URL capped at 12 KiB decoded;
 external URLs and SVG thumbnails are rejected. Duration is video-only, in seconds,
 greater than zero and no greater than 604800. These are device-supplied display
 hints, not authoritative file-signature or security metadata.
@@ -697,13 +694,12 @@ Original delivery continues through authenticated attachment endpoints. Browser
 caching is local and account-scoped; it does not make R2 objects public. Previously
 cached bytes can remain on a device independently of remote access changes.
 
-
 ### Resumable uploads and Range delivery (migrations 028–029)
 
 - `GET /upload/capabilities`: `{ multipart, partSize }`; authenticated and safe to
   cache for the current app session. `multipart` requires the deployment flag.
 - `POST /upload/sessions`: `{ roomId, clientId, filename, mime_type, size,
-  metadata?, restart? }` returns 201 with `{ id, partSize, parts, expiresAt? }` or
+metadata?, restart? }` returns 201 with `{ id, partSize, parts, expiresAt? }` or
   a completed `attachment`. Reusing an account/client ID is idempotent; changing
   its file identity is a 409. Membership and upload ownership are enforced.
 - `GET /upload/sessions/:sessionId`: resumes from actual R2 parts. Each part has
@@ -722,7 +718,6 @@ before storage access. Originals use private, no-store HTTP caching; local
 account-scoped chunks and originals support offline reopening.
 
 See [media operations](MEDIA_STORAGE.md) for rollout, retention, expiry and cleanup.
-
 
 ### Shared-file browsing
 
@@ -750,7 +745,6 @@ This bounded lookup avoids downloading every intervening page to follow a
 shared-file link. The client offers Return to latest, keeps the context window
 out of its latest-history cache, and resumes normal history when leaving it.
 
-
 ### Reference-based forwarding
 
 `POST /messages` and `send-message` accept optional
@@ -767,3 +761,71 @@ each destination independently. Public payloads include `forwarded: true`; inter
 source identifiers are not exposed to recipients. An idempotent retry of an already
 created destination message returns that message even if the source later disappears.
 Migration 031 adds the forwarded marker.
+
+## Phase 5 privacy, recovery, and devices
+
+See [privacy/encryption policy](PRIVACY_AND_ENCRYPTION.md) for scope and limits.
+`GET /users/me` and auth responses include `email_verified_at`. Profile/photo
+fields in authenticated responses are personalized; do not reuse one viewer's
+payload for another. Presence snapshots include only permitted online/last-seen
+information. DM receipt summaries include `reads_visible`; hidden reads are not
+an assertion that a recipient has not read the message.
+
+### Account security routes (`/security`)
+
+| Method/path                   | Access and payload                                                                                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /recovery`              | Public, rate limited; `{email}`. Generic eligible/unknown response.                                                                                                                                                      |
+| `POST /reset`                 | Public, rate limited; `{token,password}`. Single use, 30-minute token; password 12+ characters, max 72 UTF-8 bytes. Revokes every session.                                                                               |
+| `POST /verify`                | Public, rate limited; `{token}`. Single use verification.                                                                                                                                                                |
+| `POST /verification`          | Authenticated; requests verification for current account's email.                                                                                                                                                        |
+| `GET /privacy`                | Current preference object.                                                                                                                                                                                               |
+| `PATCH /privacy`              | Partial preferences: `online_visibility`, `last_seen_visibility`, `photo_visibility`, `about_visibility` (`everyone/connections/nobody`), `read_receipts` boolean, `dm_policy` (`everyone/requests/connections/nobody`). |
+| `GET /sessions`               | `{sessions}`: current flag, device label, user agent, expiry, creation/last activity.                                                                                                                                    |
+| `PATCH /session`              | `{label}` (1–80 characters), renames current session.                                                                                                                                                                    |
+| `DELETE /sessions/:sessionId` | `{password}`; UUID or `others`. Durable revocation and cluster eviction.                                                                                                                                                 |
+| `GET /requests`               | `{requests}` pending incoming DM requests, maximum 100.                                                                                                                                                                  |
+| `POST /requests/:roomId`      | `{status: 'accepted'                                                                                                                                                                                                     | 'declined'}` by recipient only. |
+
+Mail configuration missing returns 503. An eviction failure may return 503 after
+durable revocation; this never means the session was restored.
+
+### Device encryption routes (`/encryption`, authenticated)
+
+| Method/path                 | Contract                                                                                                                                                                   |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /devices`              | Account `identityKey` and public device records; no private keys.                                                                                                          |
+| `POST /devices`             | `{id,boxKey,signingKey,label,identityKey,signature?}`. Base64url public keys. Identity signature required for initial/approved enrollment; otherwise pending until linked. |
+| `POST /devices/:id/approve` | Root-signed certificate and sealed link payload from approved device; pending enrollment expires in 15 minutes.                                                            |
+| `GET /devices/:id/link`     | Encrypted link payload, accessible only to target device's current session.                                                                                                |
+| `DELETE /devices/:id`       | `{password}`; revokes device and its login session.                                                                                                                        |
+| `GET /rooms/:id`            | Authorized roster of members, identities, and active approved devices.                                                                                                     |
+| `POST /rooms/:id/upgrade`   | Returns `{roomId}` for separate encrypted successor; legacy conversation stays server readable and becomes read only for new sends.                                        |
+| `GET /backup`               | `{payload,revision,updated_at}` encrypted key backup only.                                                                                                                 |
+| `PUT /backup`               | Opaque encrypted backup payload; recovery key never sent.                                                                                                                  |
+| `DELETE /backup`            | `{password}` confirmation.                                                                                                                                                 |
+| `POST /reset`               | `{password,confirmation:'RESET ENCRYPTION',device}`; irreversibly replaces identity/backup and revokes other sessions.                                                     |
+
+Room payloads expose `encryption_mode` (`none` or `e2ee-v1`) and
+`superseded_by`. New `dm`/`private` conversations are encrypted; new
+`group`/`department`/`public` remain server readable. All migration-era rooms
+remain `none` until explicit move.
+
+Encrypted sends use the normal message route/socket with `roomId`, `clientId`,
+`encryptedPayload`, and uploaded attachment references. Plaintext content,
+mentions, filename, MIME, caption, preview, dimensions, and file keys must not
+be included in the wire message. `encryptedPayload` contains scheme, room/client/
+sender context, revision, device ID, nonce, ciphertext, sorted per-device sealed
+keys, and device signature. Server persists `[Encrypted message]` as `content`
+and returns `encrypted_payload` with signed sender-certificate metadata; only
+authorized clients decrypt it. Retries reuse the same client ID and sealed wire
+payload. Edits use `{encryptedPayload}` with the next revision. Recipient-roster
+changes may return 409, requiring a new encrypted envelope on manual retry.
+
+Encrypted uploads use `application/vnd.conclave.encrypted`, `encrypted.bin`,
+and the `CCEF1` authenticated container. Both server and direct upload paths
+normalize the filename; image metadata is absent from server upload records.
+The ciphertext upload cap is 50 MiB. Authorized download/Range endpoints remain
+the transport; the browser decrypts and caches plaintext separately. Server
+search/tasks/decisions/polls/forwarding that would process encrypted content are
+rejected; local search covers only decrypted cached history.

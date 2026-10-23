@@ -1,6 +1,6 @@
-import { Link } from 'react-router-dom';
-import GridLines from '@/components/landing/GridLines';
-import Logo from '@/components/landing/Logo';
+import { Link } from "react-router-dom";
+import GridLines from "@/components/landing/GridLines";
+import Logo from "@/components/landing/Logo";
 
 /**
  * The shared frame for sign in and sign up.
@@ -19,7 +19,14 @@ import Logo from '@/components/landing/Logo';
  * @param {string} [alternateLink]
  * @param {string} [alternateLabel]
  */
-export default function AuthLayout({ title, description, alternateText, alternateLink, alternateLabel, children }) {
+export default function AuthLayout({
+  title,
+  description,
+  alternateText,
+  alternateLink,
+  alternateLabel,
+  children,
+}) {
   return (
     <main className="relative grid min-h-dvh place-items-center bg-canvas px-5 py-16">
       <GridLines className="z-0" />
@@ -34,7 +41,9 @@ export default function AuthLayout({ title, description, alternateText, alternat
 
         <section className="rounded-xl border border-line bg-surface p-8 shadow-modal">
           <h1 className="font-display text-display-3 text-ink">{title}</h1>
-          <p className="mt-3 text-body leading-relaxed text-muted">{description}</p>
+          <p className="mt-3 text-body leading-relaxed text-muted">
+            {description}
+          </p>
 
           <div className="mt-8">{children}</div>
 
@@ -43,8 +52,11 @@ export default function AuthLayout({ title, description, alternateText, alternat
               <span>{alternateText}</span>
               {alternateLink && (
                 <>
-                  {' '}
-                  <Link className="font-semibold text-brand hover:underline" to={alternateLink}>
+                  {" "}
+                  <Link
+                    className="font-semibold text-brand hover:underline"
+                    to={alternateLink}
+                  >
                     {alternateLabel}
                   </Link>
                 </>

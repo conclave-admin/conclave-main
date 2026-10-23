@@ -302,7 +302,6 @@ deployed storage smoke checks** after bucket setup and Worker deployment.
 Update this checklist as work is completed. A passing build or backend suite
 alone does not prove the complete sender/receiver browser flow.
 
-
 ## Item 10 and follow-up implementation — 21 October 2026
 
 - Optional browser video compression preserves audio and per-file captions. It

@@ -148,7 +148,6 @@ Primary references: [multipart rules](https://developers.cloudflare.com/r2/objec
 [S3 compatibility](https://developers.cloudflare.com/r2/api/s3/api/),
 [file signature detection](https://github.com/sindresorhus/file-type).
 
-
 ## Local live-R2 smoke test
 
 Run from `client`:

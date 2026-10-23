@@ -1,6 +1,6 @@
-import { io } from 'socket.io-client';
-import { getValidAccessToken } from './api';
-import { clearSession, getRefreshToken, getSessionId } from './session';
+import { io } from "socket.io-client";
+import { getValidAccessToken } from "./api";
+import { clearSession, getRefreshToken, getSessionId } from "./session";
 
 // Singleton socket instance. Call connectSocket() after login,
 // disconnectSocket() on logout. getSocket() returns the current
@@ -28,10 +28,12 @@ export function connectSocket() {
     // Re-read (and if needed refresh) the token on every connection attempt.
     auth: (callback) => {
       authUnavailable = false;
-      getValidAccessToken().then((token) => callback({ token })).catch(() => {
-        authUnavailable = true;
-        callback({ token: null });
-      });
+      getValidAccessToken()
+        .then((token) => callback({ token }))
+        .catch(() => {
+          authUnavailable = true;
+          callback({ token: null });
+        });
     },
     // socket.io-client reconnection defaults:
     //   reconnection: true, reconnectionAttempts: Infinity,
@@ -45,32 +47,37 @@ export function connectSocket() {
   const retry = () => {
     clearTimeout(retryTimer);
     if (isCurrent() && getRefreshToken()) {
-      retryTimer = setTimeout(() => { if (isCurrent()) instance.connect(); }, 1000);
+      retryTimer = setTimeout(() => {
+        if (isCurrent()) instance.connect();
+      }, 1000);
     }
   };
-  instance.on('session:revoked', () => {
+  instance.on("session:revoked", () => {
     if (!isCurrent()) return;
     instance.disconnect();
     clearSession();
   });
   // A server disconnect does not trigger Socket.IO's built-in reconnection.
   // Reconnect with getValidAccessToken, which refreshes an expired access JWT.
-  instance.on('session:expired', retry);
+  instance.on("session:expired", retry);
 
   // Log connection lifecycle for debugging (remove in production)
-  socket.on('connect', () => {
+  socket.on("connect", () => {
     clearTimeout(retryTimer);
-    console.log('[socket] connected', socket.id);
+    console.log("[socket] connected", socket.id);
   });
 
-  socket.on('disconnect', (reason) => {
-    console.log('[socket] disconnected:', reason);
+  socket.on("disconnect", (reason) => {
+    console.log("[socket] disconnected:", reason);
   });
 
-  socket.on('connect_error', (err) => {
-    console.error('[socket] connection error:', err.message);
+  socket.on("connect_error", (err) => {
+    console.error("[socket] connection error:", err.message);
     if (!isCurrent()) return;
-    if (!authUnavailable && ['SESSION_REVOKED', 'AUTH_INVALID'].includes(err.data?.code)) {
+    if (
+      !authUnavailable &&
+      ["SESSION_REVOKED", "AUTH_INVALID"].includes(err.data?.code)
+    ) {
       instance.disconnect();
       clearSession();
       return;
@@ -79,7 +86,9 @@ export function connectSocket() {
     // retained session after a temporary API outage; logout cancels this timer.
     if (getRefreshToken()) {
       clearTimeout(retryTimer);
-      retryTimer = setTimeout(() => { if (isCurrent()) instance.connect(); }, 5000);
+      retryTimer = setTimeout(() => {
+        if (isCurrent()) instance.connect();
+      }, 5000);
     }
   });
 

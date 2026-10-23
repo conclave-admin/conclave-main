@@ -30,15 +30,24 @@ const MAX_BYTES = 250 * 1024 * 1024;
 // recently used then rewrites a few bytes of metadata, not the whole file.
 let dbPromise = null;
 let cacheEpoch = 0;
-const cacheChannel = typeof window !== 'undefined' && typeof BroadcastChannel === 'function'
-  ? new BroadcastChannel('conclave-media-cache') : null;
-cacheChannel?.addEventListener('message', (event) => {
+const cacheChannel =
+  typeof window !== "undefined" && typeof BroadcastChannel === "function"
+    ? new BroadcastChannel("conclave-media-cache")
+    : null;
+cacheChannel?.addEventListener("message", (event) => {
   if (event.data === null) cacheEpoch += 1;
-  window.dispatchEvent(new CustomEvent('conclave:media-cache-removed', { detail: { keys: event.data } }));
+  window.dispatchEvent(
+    new CustomEvent("conclave:media-cache-removed", {
+      detail: { keys: event.data },
+    }),
+  );
 });
 function cacheRemoved(keys = null) {
   cacheChannel?.postMessage(keys);
-  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('conclave:media-cache-removed', { detail: { keys } }));
+  if (typeof window !== "undefined")
+    window.dispatchEvent(
+      new CustomEvent("conclave:media-cache-removed", { detail: { keys } }),
+    );
 }
 
 function open() {
@@ -49,15 +58,23 @@ function open() {
       const request = indexedDB.open(DB_NAME, 3);
       request.onupgradeneeded = () => {
         const db = request.result;
-        if (!db.objectStoreNames.contains("files")) db.createObjectStore("files", { keyPath: "key" });
-        if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta", { keyPath: "key" });
-        if (!db.objectStoreNames.contains("roomMessages")) db.createObjectStore("roomMessages", { keyPath: "key" });
-        if (!db.objectStoreNames.contains("outbox")) db.createObjectStore("outbox", { keyPath: "key" });
-        if (!db.objectStoreNames.contains("roomMetadata")) db.createObjectStore("roomMetadata", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("files"))
+          db.createObjectStore("files", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("meta"))
+          db.createObjectStore("meta", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("roomMessages"))
+          db.createObjectStore("roomMessages", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("outbox"))
+          db.createObjectStore("outbox", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("roomMetadata"))
+          db.createObjectStore("roomMetadata", { keyPath: "key" });
       };
       request.onsuccess = () => {
         const db = request.result;
-        db.onversionchange = () => { db.close(); dbPromise = null; };
+        db.onversionchange = () => {
+          db.close();
+          dbPromise = null;
+        };
         resolve(db);
       };
       request.onerror = () => {
@@ -79,8 +96,9 @@ function transact(stores, mode, work) {
           resolve(out && "result" in out ? out.result : out);
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
-        try { out = work(transaction); }
-        catch (error) {
+        try {
+          out = work(transaction);
+        } catch (error) {
           // Synchronous failures must roll back earlier writes in the batch too.
           transaction.abort();
           reject(error);
@@ -197,74 +215,121 @@ export async function clearLocalFiles() {
 export async function clearLocalData() {
   cacheEpoch += 1;
   try {
-    await transact(["files", "meta", "roomMessages", "outbox", "roomMetadata"], "readwrite", (t) => {
-      t.objectStore("files").clear();
-      t.objectStore("meta").clear();
-      t.objectStore("roomMessages").clear();
-      t.objectStore("outbox").clear();
-      t.objectStore("roomMetadata").clear();
-    });
+    await transact(
+      ["files", "meta", "roomMessages", "outbox", "roomMetadata"],
+      "readwrite",
+      (t) => {
+        t.objectStore("files").clear();
+        t.objectStore("meta").clear();
+        t.objectStore("roomMessages").clear();
+        t.objectStore("outbox").clear();
+        t.objectStore("roomMetadata").clear();
+      },
+    );
     cacheRemoved();
-  } catch { /* local state is already unavailable */ }
+  } catch {
+    /* local state is already unavailable */
+  }
 }
 
 export async function readRoomMessages(userId, roomId) {
   if (!userId || !roomId) return [];
   try {
-    return (await transact(["roomMessages"], "readonly", (t) =>
-      t.objectStore("roomMessages").get(`${userId}:${roomId}`),
-    ))?.messages || [];
-  } catch { return []; }
+    return (
+      (
+        await transact(["roomMessages"], "readonly", (t) =>
+          t.objectStore("roomMessages").get(`${userId}:${roomId}`),
+        )
+      )?.messages || []
+    );
+  } catch {
+    return [];
+  }
 }
 
 export async function readRoomMetadata(userId, roomId) {
   if (!userId || !roomId) return null;
   try {
-    return (await transact(['roomMetadata'], 'readonly', (t) =>
-      t.objectStore('roomMetadata').get(`${userId}:${roomId}`)))?.room || null;
-  } catch { return null; }
+    return (
+      (
+        await transact(["roomMetadata"], "readonly", (t) =>
+          t.objectStore("roomMetadata").get(`${userId}:${roomId}`),
+        )
+      )?.room || null
+    );
+  } catch {
+    return null;
+  }
 }
 
 export async function readChatList(userId) {
   if (!userId) return [];
   try {
-    return (await transact(['roomMetadata'], 'readonly', (t) =>
-      t.objectStore('roomMetadata').get(`chats:${userId}`)))?.rooms || [];
-  } catch { return []; }
+    return (
+      (
+        await transact(["roomMetadata"], "readonly", (t) =>
+          t.objectStore("roomMetadata").get(`chats:${userId}`),
+        )
+      )?.rooms || []
+    );
+  } catch {
+    return [];
+  }
 }
 
 export async function saveChatList(userId, rooms) {
   if (!userId) return;
   try {
-    await transact(['roomMetadata'], 'readwrite', (t) =>
-      t.objectStore('roomMetadata').put({ key: `chats:${userId}`, rooms }));
-  } catch { /* The last-known chat list is a cache, independent of the outbox. */ }
+    await transact(["roomMetadata"], "readwrite", (t) =>
+      t.objectStore("roomMetadata").put({ key: `chats:${userId}`, rooms }),
+    );
+  } catch {
+    /* The last-known chat list is a cache, independent of the outbox. */
+  }
 }
 
 export async function saveRoomMetadata(userId, roomId, room) {
   if (!userId || !roomId) return;
   try {
-    await transact(['roomMetadata'], 'readwrite', (t) => room
-      ? t.objectStore('roomMetadata').put({ key: `${userId}:${roomId}`, room })
-      : t.objectStore('roomMetadata').delete(`${userId}:${roomId}`));
-  } catch { /* Room metadata is a cache; the outbox is stored separately. */ }
+    await transact(["roomMetadata"], "readwrite", (t) =>
+      room
+        ? t
+            .objectStore("roomMetadata")
+            .put({ key: `${userId}:${roomId}`, room })
+        : t.objectStore("roomMetadata").delete(`${userId}:${roomId}`),
+    );
+  } catch {
+    /* Room metadata is a cache; the outbox is stored separately. */
+  }
 }
 
 export async function saveRoomMessages(userId, roomId, messages) {
   if (!userId || !roomId) return;
   try {
-    await transact(["roomMessages"], "readwrite", (t) => t.objectStore("roomMessages").put({
-      // Pending files belong to the durable outbox, never the evictable history.
-      key: `${userId}:${roomId}`, messages: messages.filter((message) => !message._optimistic).slice(-200), savedAt: Date.now(),
-    }));
-  } catch { /* local history is a best-effort cache */ }
+    await transact(["roomMessages"], "readwrite", (t) =>
+      t.objectStore("roomMessages").put({
+        // Pending files belong to the durable outbox, never the evictable history.
+        key: `${userId}:${roomId}`,
+        messages: messages
+          .filter((message) => !message._optimistic)
+          .slice(-200),
+        savedAt: Date.now(),
+      }),
+    );
+  } catch {
+    /* local history is a best-effort cache */
+  }
 }
 
 export async function listOutbox(userId, roomId) {
   if (!userId) return [];
-  const rows = await transact(["outbox"], "readonly", (t) => t.objectStore("outbox").getAll());
+  const rows = await transact(["outbox"], "readonly", (t) =>
+    t.objectStore("outbox").getAll(),
+  );
   return rows
-    .filter((row) => row.userId === userId && (!roomId || row.roomId === roomId))
+    .filter(
+      (row) => row.userId === userId && (!roomId || row.roomId === roomId),
+    )
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 }
 
@@ -274,7 +339,8 @@ export async function putOutbox(item) {
 
 /** Commit the entire batch, including Blobs, before allowing any upload. */
 export async function putOutboxBatch(items) {
-  if (!items.length || items.some((item) => !item?.key || !item.userId)) throw new Error('Invalid message draft');
+  if (!items.length || items.some((item) => !item?.key || !item.userId))
+    throw new Error("Invalid message draft");
   await transact(["outbox"], "readwrite", (t) => {
     const store = t.objectStore("outbox");
     items.forEach((item) => store.add(item));
@@ -313,13 +379,20 @@ export async function cancelOutbox(key) {
 }
 
 export async function deleteOutbox(key) {
-  await transact(["outbox"], "readwrite", (t) => t.objectStore("outbox").delete(key));
+  await transact(["outbox"], "readwrite", (t) =>
+    t.objectStore("outbox").delete(key),
+  );
 }
 
 /** Partial originals use the same bounded, evictable byte cache as full media. */
 export async function removeLocalFile(key) {
   try {
-    await transact(['files','meta'], 'readwrite', (t) => { t.objectStore('files').delete(key); t.objectStore('meta').delete(key); });
+    await transact(["files", "meta"], "readwrite", (t) => {
+      t.objectStore("files").delete(key);
+      t.objectStore("meta").delete(key);
+    });
     cacheRemoved([key]);
-  } catch { /* Best effort. */ }
+  } catch {
+    /* Best effort. */
+  }
 }

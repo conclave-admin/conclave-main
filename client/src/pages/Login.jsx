@@ -1,9 +1,9 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import AuthLayout from '@/components/layout/AuthLayout';
-import Button from '@/components/ui/Button';
-import Input from '@/components/ui/Input';
-import { useAuth } from '@/contexts/AuthContext';
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import AuthLayout from "@/components/layout/AuthLayout";
+import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
+import { useAuth } from "@/contexts/AuthContext";
 
 /**
  * Sign in.
@@ -18,23 +18,23 @@ import { useAuth } from '@/contexts/AuthContext';
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [form, setForm] = useState({ email: '', password: '' });
-  const [error, setError] = useState('');
+  const [form, setForm] = useState({ email: "", password: "" });
+  const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function submit(event) {
     event.preventDefault();
     setSubmitting(true);
-    setError('');
+    setError("");
     try {
       await login(form);
       // Always the chat list, never the page you were bounced from. Resuming a
       // deep link sounds considerate until the session expires on /settings or
       // /profile, where signing in then dumping you back on that screen reads
       // as "the app ignored my login" rather than as "we remembered".
-      navigate('/chats', { replace: true });
+      navigate("/chats", { replace: true });
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not sign in.');
+      setError(err.response?.data?.message || "Could not sign in.");
     } finally {
       setSubmitting(false);
     }
@@ -63,19 +63,30 @@ export default function Login() {
           autoComplete="current-password"
           required
           value={form.password}
-          onChange={(event) => setForm({ ...form, password: event.target.value })}
+          onChange={(event) =>
+            setForm({ ...form, password: event.target.value })
+          }
         />
 
         {error && (
-          <p role="alert" className="rounded-lg bg-error/10 p-3 text-body text-error">
+          <p
+            role="alert"
+            className="rounded-lg bg-error/10 p-3 text-body text-error"
+          >
             {error}
           </p>
         )}
 
         <Button type="submit" className="w-full" disabled={submitting}>
-          {submitting ? 'Signing in…' : 'Sign in'}
+          {submitting ? "Signing in…" : "Sign in"}
         </Button>
 
+        <Link
+          className="block text-label text-brand hover:underline"
+          to="/account/recovery"
+        >
+          Forgot password?
+        </Link>
         <Link
           className="inline-block text-label text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
           to="/register"

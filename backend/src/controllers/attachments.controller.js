@@ -1,16 +1,16 @@
-const https = require('https');
-const { pipeline } = require('stream');
-const { parseByteRange } = require('../utils/byteRange');
-const crypto = require('crypto');
-const cloudinary = require('../config/cloudinary');
-const r2 = require('../config/r2');
-const { query } = require('../config/db');
-const asyncHandler = require('../utils/asyncHandler');
-const ApiError = require('../utils/ApiError');
-const { fail, ok } = require('../utils/apiResponse');
-const env = require('../config/env');
+const https = require("https");
+const { pipeline } = require("stream");
+const { parseByteRange } = require("../utils/byteRange");
+const crypto = require("crypto");
+const cloudinary = require("../config/cloudinary");
+const r2 = require("../config/r2");
+const { query } = require("../config/db");
+const asyncHandler = require("../utils/asyncHandler");
+const ApiError = require("../utils/ApiError");
+const { fail, ok } = require("../utils/apiResponse");
+const env = require("../config/env");
 
-const DELIVERY_HOST = 'res.cloudinary.com';
+const DELIVERY_HOST = "res.cloudinary.com";
 
 /**
  * A signed delivery URL for one asset.
@@ -41,9 +41,9 @@ function signedDeliveryUrl(publicId, resourceType) {
   // bare. Normalising once at write time means the signature here is always
   // simply sha1(publicId + secret), with no guesswork about which shape arrived.
   const signature = crypto
-    .createHash('sha1')
+    .createHash("sha1")
     .update(`${publicId}${env.cloudinary.apiSecret}`)
-    .digest('base64url')
+    .digest("base64url")
     .slice(0, 8);
 
   return `https://${DELIVERY_HOST}/${env.cloudinary.cloudName}/${resourceType}/upload/s--${signature}--/${publicId}`;
@@ -56,8 +56,8 @@ function openUpstream(url) {
       {
         host: target.hostname,
         path: target.pathname,
-        method: 'GET',
-        headers: { 'User-Agent': 'conclave-attachments' },
+        method: "GET",
+        headers: { "User-Agent": "conclave-attachments" },
       },
       (upstream) => {
         if (upstream.statusCode !== 200) {
@@ -70,7 +70,7 @@ function openUpstream(url) {
         resolve(upstream);
       },
     );
-    req.on('error', reject);
+    req.on("error", reject);
     req.end();
   });
 }
@@ -87,17 +87,17 @@ function openUpstream(url) {
  */
 function deriveFromUrl(fileUrl) {
   if (!fileUrl) return null;
-  const withoutOrigin = String(fileUrl).split('/upload/')[1];
+  const withoutOrigin = String(fileUrl).split("/upload/")[1];
   if (!withoutOrigin) return null;
-  const segments = withoutOrigin.split('/');
-  if (segments[0]?.startsWith('v')) segments.shift();
-  const publicId = segments.join('/');
+  const segments = withoutOrigin.split("/");
+  if (segments[0]?.startsWith("v")) segments.shift();
+  const publicId = segments.join("/");
   if (!publicId) return null;
 
   const url = String(fileUrl);
-  let resourceType = 'image';
-  if (url.includes('/raw/upload/')) resourceType = 'raw';
-  else if (url.includes('/video/upload/')) resourceType = 'video';
+  let resourceType = "image";
+  if (url.includes("/raw/upload/")) resourceType = "raw";
+  else if (url.includes("/video/upload/")) resourceType = "video";
   return { publicId, resourceType };
 }
 
@@ -132,18 +132,18 @@ const getAttachment = asyncHandler(async (req, res) => {
   // Both "no such attachment" and "not yours" come back empty from that join, so
   // one 404 covers them.
   if (result.rows.length === 0) {
-    throw new ApiError(404, 'Attachment not found');
+    throw new ApiError(404, "Attachment not found");
   }
 
   const row = result.rows[0];
-  if (row.resource_type === 'r2') return streamFromR2(row, req, res);
+  if (row.resource_type === "r2") return streamFromR2(row, req, res);
 
   const coords = row.public_id
-    ? { publicId: row.public_id, resourceType: row.resource_type || 'image' }
+    ? { publicId: row.public_id, resourceType: row.resource_type || "image" }
     : deriveFromUrl(row.file_url);
 
   if (!coords) {
-    throw new ApiError(502, 'Attachment storage is temporarily unavailable');
+    throw new ApiError(502, "Attachment storage is temporarily unavailable");
   }
 
   // No format is appended: this upload path already carries the extension
@@ -162,13 +162,19 @@ const getAttachment = asyncHandler(async (req, res) => {
       console.error(
         `Cloudinary delivery denied for resource_type="${coords.resourceType}" ` +
           `(${attachmentId}). Signed and unsigned requests are refused identically, ` +
-          'so this account has delivery ACLs that exclude non-image assets. ' +
-          'Enable raw/non-image delivery in the Cloudinary console (Settings → Delivery).',
+          "so this account has delivery ACLs that exclude non-image assets. " +
+          "Enable raw/non-image delivery in the Cloudinary console (Settings → Delivery).",
       );
-      throw new ApiError(502, 'This file type cannot be served by the current storage settings');
+      throw new ApiError(
+        502,
+        "This file type cannot be served by the current storage settings",
+      );
     }
-    console.error('Cloudinary fetch failed', { attachmentId, code: err.message });
-    throw new ApiError(502, 'Attachment storage is temporarily unavailable');
+    console.error("Cloudinary fetch failed", {
+      attachmentId,
+      code: err.message,
+    });
+    throw new ApiError(502, "Attachment storage is temporarily unavailable");
   }
 
   /*
@@ -185,13 +191,17 @@ const getAttachment = asyncHandler(async (req, res) => {
 
   upstream.pipe(res);
 
-  upstream.on('error', (err) => {
-    console.error('Cloudinary stream error', { attachmentId, message: err.message });
+  upstream.on("error", (err) => {
+    console.error("Cloudinary stream error", {
+      attachmentId,
+      message: err.message,
+    });
     // Not `throw`: this is a plain event listener, so asyncHandler never sees
     // the exception and it becomes an uncaught error that takes the process
     // with it. Answer the client instead, and fall back to destroying the
     // socket if the headers are already gone.
-    if (!res.headersSent) return fail(res, 'Attachment storage is temporarily unavailable', 502);
+    if (!res.headersSent)
+      return fail(res, "Attachment storage is temporarily unavailable", 502);
     res.destroy();
     return undefined;
   });
@@ -207,12 +217,13 @@ const getAttachmentUrl = asyncHandler(async (req, res) => {
       WHERE a.id = $1 AND m.deleted_at IS NULL`,
     [attachmentId, req.user.id],
   );
-  if (!result.rows.length) throw new ApiError(404, 'Attachment not found');
+  if (!result.rows.length) throw new ApiError(404, "Attachment not found");
   const row = result.rows[0];
-  if (row.resource_type === 'r2') {
-    if (!r2.isConfigured()) throw new ApiError(503, 'File storage is not configured');
-    const type = row.file_type || '';
-    const streamable = type.startsWith('video/') || type.startsWith('audio/');
+  if (row.resource_type === "r2") {
+    if (!r2.isConfigured())
+      throw new ApiError(503, "File storage is not configured");
+    const type = row.file_type || "";
+    const streamable = type.startsWith("video/") || type.startsWith("audio/");
     let url;
     try {
       url = await r2.signedGetUrl(row.public_id, {
@@ -221,22 +232,32 @@ const getAttachmentUrl = asyncHandler(async (req, res) => {
         inline: streamable,
       });
     } catch (err) {
-      console.error('R2 URL signing failed', { attachmentId, code: err.name });
-      throw new ApiError(502, 'Attachment storage is temporarily unavailable');
+      console.error("R2 URL signing failed", { attachmentId, code: err.name });
+      throw new ApiError(502, "Attachment storage is temporarily unavailable");
     }
     return ok(res, { url, expiresAt: Math.floor(Date.now() / 1000) + 60 });
   }
 
-  if (!cloudinary.isConfigured()) throw new ApiError(503, 'File storage is not configured');
-  const coords = row.public_id ? { publicId: row.public_id, resourceType: row.resource_type || 'image' } : deriveFromUrl(row.file_url);
-  if (!coords) throw new ApiError(502, 'Attachment storage is temporarily unavailable');
-  const url = cloudinary.url(coords.publicId, { resource_type: coords.resourceType, secure: true });
+  if (!cloudinary.isConfigured())
+    throw new ApiError(503, "File storage is not configured");
+  const coords = row.public_id
+    ? { publicId: row.public_id, resourceType: row.resource_type || "image" }
+    : deriveFromUrl(row.file_url);
+  if (!coords)
+    throw new ApiError(502, "Attachment storage is temporarily unavailable");
+  const url = cloudinary.url(coords.publicId, {
+    resource_type: coords.resourceType,
+    secure: true,
+  });
   const token = cloudinary.utils.generate_auth_token({
     duration: 3600,
     url: new URL(url).pathname,
     key: env.cloudinary.apiSecret,
   });
-  return ok(res, { url: `${url}?${token}`, expiresAt: Math.floor(Date.now() / 1000) + 3600 });
+  return ok(res, {
+    url: `${url}?${token}`,
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+  });
 });
 
 const getAttachmentPreviewUrl = asyncHandler(async (req, res) => {
@@ -249,34 +270,43 @@ const getAttachmentPreviewUrl = asyncHandler(async (req, res) => {
       WHERE a.id = $1 AND m.deleted_at IS NULL`,
     [attachmentId, req.user.id],
   );
-  if (!result.rows.length) throw new ApiError(404, 'Attachment not found');
+  if (!result.rows.length) throw new ApiError(404, "Attachment not found");
 
   const row = result.rows[0];
-  if (row.resource_type !== 'r2') return ok(res, { url: null, expiresAt: null });
-  if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(row.file_type)) {
+  if (row.resource_type !== "r2")
+    return ok(res, { url: null, expiresAt: null });
+  if (
+    !["image/jpeg", "image/png", "image/gif", "image/webp"].includes(
+      row.file_type,
+    )
+  ) {
     return ok(res, { url: null, expiresAt: null });
   }
 
   const workerBase = env.r2.previewWorkerUrl;
   const secret = env.r2.previewSigningSecret;
   if (!workerBase || !secret || secret.length < 32) {
-    throw new ApiError(503, 'Image previews are not configured');
+    throw new ApiError(503, "Image previews are not configured");
   }
 
   let workerOrigin;
   try {
     workerOrigin = new URL(workerBase);
   } catch {
-    throw new ApiError(503, 'Image previews are not configured');
+    throw new ApiError(503, "Image previews are not configured");
   }
-  if (workerOrigin.protocol !== 'https:') throw new ApiError(503, 'Image previews are not configured');
+  if (workerOrigin.protocol !== "https:")
+    throw new ApiError(503, "Image previews are not configured");
 
   const expiresAt = Math.floor(Date.now() / 1000) + 300;
   const canonical = `${row.public_id}\n${expiresAt}`;
-  const signature = crypto.createHmac('sha256', secret).update(canonical).digest('base64url');
+  const signature = crypto
+    .createHmac("sha256", secret)
+    .update(canonical)
+    .digest("base64url");
   const url = new URL(`/preview/${row.public_id}`, workerOrigin.origin);
-  url.searchParams.set('exp', String(expiresAt));
-  url.searchParams.set('sig', signature);
+  url.searchParams.set("exp", String(expiresAt));
+  url.searchParams.set("sig", signature);
   return ok(res, { url: url.toString(), expiresAt });
 });
 
@@ -284,44 +314,80 @@ function setDownloadHeaders(res, row) {
   const safe = sanitiseFilename(row.filename);
   // Keep a safe ASCII fallback and preserve the original UTF-8 filename for
   // clients that understand RFC 5987.
-  const encoded = encodeURIComponent(String(row.filename || safe)).replace(/['()*]/g, escape);
+  const encoded = encodeURIComponent(String(row.filename || safe)).replace(
+    /['()*]/g,
+    escape,
+  );
   res.setHeader(
-    'Content-Disposition',
+    "Content-Disposition",
     `attachment; filename="${safe}"; filename*=UTF-8''${encoded}`,
   );
-  res.setHeader('Content-Type', row.file_type || 'application/octet-stream');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'private, no-store');
-  if (row.size_bytes) res.setHeader('Content-Length', String(row.size_bytes));
+  res.setHeader("Content-Type", row.file_type || "application/octet-stream");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "private, no-store");
+  if (row.size_bytes) res.setHeader("Content-Length", String(row.size_bytes));
 }
 
 async function streamFromR2(row, req, res) {
-  if (!r2.isConfigured()) throw new ApiError(503, 'File storage is not configured');
+  if (!r2.isConfigured())
+    throw new ApiError(503, "File storage is not configured");
   let object;
   try {
     const head = await r2.headObject(row.public_id);
     const size = head.ContentLength;
-    res.setHeader('Accept-Ranges', 'bytes');
-    if (head.ETag) res.setHeader('ETag', head.ETag);
+    res.setHeader("Accept-Ranges", "bytes");
+    if (head.ETag) res.setHeader("ETag", head.ETag);
     let range;
-    try { range = parseByteRange(req.headers['if-range'] && req.headers['if-range'] !== head.ETag ? null : req.headers.range, size); }
-    catch (error) { res.setHeader('Content-Range', `bytes */${size}`); throw error; }
-    object = await r2.getObject(row.public_id, { range: range ? `bytes=${range.start}-${range.end}` : undefined, ifMatch: head.ETag });
-    setDownloadHeaders(res, { ...row, size_bytes: range ? range.length : size });
-    if (range) { res.status(206); res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`); }
-    if (req.method === 'HEAD') { object.Body.destroy(); return res.end(); }
+    try {
+      range = parseByteRange(
+        req.headers["if-range"] && req.headers["if-range"] !== head.ETag
+          ? null
+          : req.headers.range,
+        size,
+      );
+    } catch (error) {
+      res.setHeader("Content-Range", `bytes */${size}`);
+      throw error;
+    }
+    object = await r2.getObject(row.public_id, {
+      range: range ? `bytes=${range.start}-${range.end}` : undefined,
+      ifMatch: head.ETag,
+    });
+    setDownloadHeaders(res, {
+      ...row,
+      size_bytes: range ? range.length : size,
+    });
+    if (range) {
+      res.status(206);
+      res.setHeader(
+        "Content-Range",
+        `bytes ${range.start}-${range.end}/${size}`,
+      );
+    }
+    if (req.method === "HEAD") {
+      object.Body.destroy();
+      return res.end();
+    }
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    if (err.name === 'NoSuchKey' || err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) throw new ApiError(404, 'Attachment not found');
-    console.error('R2 fetch failed', { attachmentId: row.id, code: err.name });
-    throw new ApiError(502, 'Attachment storage is temporarily unavailable');
+    if (
+      err.name === "NoSuchKey" ||
+      err.name === "NotFound" ||
+      err.$metadata?.httpStatusCode === 404
+    )
+      throw new ApiError(404, "Attachment not found");
+    console.error("R2 fetch failed", { attachmentId: row.id, code: err.name });
+    throw new ApiError(502, "Attachment storage is temporarily unavailable");
   }
   // The browser may cancel while R2's HEAD/GET requests are still pending.
-  if (res.destroyed) { object.Body.destroy(); return; }
+  if (res.destroyed) {
+    object.Body.destroy();
+    return;
+  }
   const disconnected = () => object.Body.destroy();
-  res.on('close', disconnected);
+  res.on("close", disconnected);
   pipeline(object.Body, res, (error) => {
-    res.off('close', disconnected);
+    res.off("close", disconnected);
     if (error && !res.destroyed) res.destroy(error);
   });
 }
@@ -330,10 +396,19 @@ async function streamFromR2(row, req, res) {
 // header and cannot carry a newline. Quotes and separators go too: the value is
 // quoted in the header, so an embedded quote would end the token early.
 function sanitiseFilename(filename) {
-  return String(filename || 'download')
-    .replace(/[\r\n"]/g, '')
-    .replace(/[^\w.\- ]/g, '_')
-    .slice(0, 120) || 'download';
+  return (
+    String(filename || "download")
+      .replace(/[\r\n"]/g, "")
+      .replace(/[^\w.\- ]/g, "_")
+      .slice(0, 120) || "download"
+  );
 }
 
-module.exports = { getAttachment, getAttachmentUrl, getAttachmentPreviewUrl, deriveFromUrl, sanitiseFilename, signedDeliveryUrl };
+module.exports = {
+  getAttachment,
+  getAttachmentUrl,
+  getAttachmentPreviewUrl,
+  deriveFromUrl,
+  sanitiseFilename,
+  signedDeliveryUrl,
+};

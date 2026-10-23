@@ -1,11 +1,11 @@
-const crypto = require('crypto');
-const { verifyFileSignature } = require('../utils/fileSignature');
-const { validateMediaMetadata } = require('../utils/mediaMetadata');
-const r2 = require('../config/r2');
-const { query } = require('../config/db');
-const asyncHandler = require('../utils/asyncHandler');
-const ApiError = require('../utils/ApiError');
-const { ok } = require('../utils/apiResponse');
+const crypto = require("crypto");
+const { verifyFileSignature } = require("../utils/fileSignature");
+const { validateMediaMetadata } = require("../utils/mediaMetadata");
+const r2 = require("../config/r2");
+const { query } = require("../config/db");
+const asyncHandler = require("../utils/asyncHandler");
+const ApiError = require("../utils/ApiError");
+const { ok } = require("../utils/apiResponse");
 
 // BACKEND_TASKS.md item C: which uploads we accept.
 //
@@ -24,39 +24,39 @@ const { ok } = require('../utils/apiResponse');
 // be inaccurate. See the note in 010_add_file_uploads.sql.
 const ALLOWED_MIME_TYPES = new Set([
   // images
-  'image/svg+xml',
-  'image/jpeg',
-  'image/png',
-  'image/gif',
-  'image/webp',
+  "image/svg+xml",
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
   // video
-  'video/mp4',
-  'video/webm',
-  'video/quicktime',
-  'video/3gpp',
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/3gpp",
   // documents
-  'application/pdf',
-  'text/plain',
-  'text/markdown',
-  'text/csv',
+  "application/pdf",
+  "text/plain",
+  "text/markdown",
+  "text/csv",
   // office — word
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   // office — sheet
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   // office — presentation
-  'application/vnd.ms-powerpoint',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   // archives
-  'application/zip',
-  'application/gzip',
+  "application/zip",
+  "application/gzip",
   // audio
-  'audio/mpeg',
-  'audio/ogg',
-  'audio/wav',
-  'audio/webm',
-  'audio/mp4',
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+  "audio/webm",
+  "audio/mp4",
 ]);
 
 // The fallback for a declared type that means nothing. Several clients send
@@ -67,46 +67,52 @@ const ALLOWED_MIME_TYPES = new Set([
 // extension is no less trustworthy than the declared type, which the note above
 // already records is not sniffed either way.
 const UNKNOWN_MIME_TYPES = new Set([
-  '',
-  'application/octet-stream',
-  'binary/octet-stream',
-  'application/x-unknown-content-type',
-  'application/binary',
+  "",
+  "application/octet-stream",
+  "binary/octet-stream",
+  "application/x-unknown-content-type",
+  "application/binary",
 ]);
 
 // Only extensions for types already on the allowlist are mapped, so this can
 // never widen it. `.m4a` and `.weba` are the audio files audio/mp4 and
 // audio/webm were meant for; `.mp4` and `.webm` are video.
 const EXTENSION_MIME_TYPES = new Map([
-  ['svg', 'image/svg+xml'],
-  ['jpg', 'image/jpeg'],
-  ['jpeg', 'image/jpeg'],
-  ['png', 'image/png'],
-  ['gif', 'image/gif'],
-  ['webp', 'image/webp'],
-  ['mp4', 'video/mp4'],
-  ['m4v', 'video/mp4'],
-  ['mov', 'video/quicktime'],
-  ['webm', 'video/webm'],
-  ['3gp', 'video/3gpp'],
-  ['pdf', 'application/pdf'],
-  ['txt', 'text/plain'],
-  ['md', 'text/markdown'],
-  ['markdown', 'text/markdown'],
-  ['csv', 'text/csv'],
-  ['doc', 'application/msword'],
-  ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-  ['xls', 'application/vnd.ms-excel'],
-  ['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
-  ['ppt', 'application/vnd.ms-powerpoint'],
-  ['pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
-  ['zip', 'application/zip'],
-  ['gz', 'application/gzip'],
-  ['mp3', 'audio/mpeg'],
-  ['ogg', 'audio/ogg'],
-  ['wav', 'audio/wav'],
-  ['weba', 'audio/webm'],
-  ['m4a', 'audio/mp4'],
+  ["svg", "image/svg+xml"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["png", "image/png"],
+  ["gif", "image/gif"],
+  ["webp", "image/webp"],
+  ["mp4", "video/mp4"],
+  ["m4v", "video/mp4"],
+  ["mov", "video/quicktime"],
+  ["webm", "video/webm"],
+  ["3gp", "video/3gpp"],
+  ["pdf", "application/pdf"],
+  ["txt", "text/plain"],
+  ["md", "text/markdown"],
+  ["markdown", "text/markdown"],
+  ["csv", "text/csv"],
+  ["doc", "application/msword"],
+  [
+    "docx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ],
+  ["xls", "application/vnd.ms-excel"],
+  ["xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+  ["ppt", "application/vnd.ms-powerpoint"],
+  [
+    "pptx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ],
+  ["zip", "application/zip"],
+  ["gz", "application/gzip"],
+  ["mp3", "audio/mpeg"],
+  ["ogg", "audio/ogg"],
+  ["wav", "audio/wav"],
+  ["weba", "audio/webm"],
+  ["m4a", "audio/mp4"],
 ]);
 
 /**
@@ -123,12 +129,14 @@ const EXTENSION_MIME_TYPES = new Map([
  * @returns {string|null}
  */
 function resolveMimetype(mimetype, filename) {
-  const declared = typeof mimetype === 'string' ? mimetype.trim().toLowerCase() : '';
+  const declared =
+    typeof mimetype === "string" ? mimetype.trim().toLowerCase() : "";
+  if (declared === "application/vnd.conclave.encrypted") return declared;
   if (ALLOWED_MIME_TYPES.has(declared)) return declared;
   if (!UNKNOWN_MIME_TYPES.has(declared)) return null;
 
-  const name = typeof filename === 'string' ? filename : '';
-  const dot = name.lastIndexOf('.');
+  const name = typeof filename === "string" ? filename : "";
+  const dot = name.lastIndexOf(".");
   if (dot < 0 || dot === name.length - 1) return null;
   return EXTENSION_MIME_TYPES.get(name.slice(dot + 1).toLowerCase()) || null;
 }
@@ -140,11 +148,17 @@ const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 
 function limitFor(mimetype) {
-  return mimetype.startsWith('video/') ? MAX_VIDEO_BYTES : MAX_UPLOAD_BYTES;
+  return mimetype === "application/vnd.conclave.encrypted" ||
+    mimetype.startsWith("video/")
+    ? MAX_VIDEO_BYTES
+    : MAX_UPLOAD_BYTES;
 }
 
 function buildKey(filename) {
-  const safe = String(filename).replace(/[^\w.\-]/g, '_').slice(-80) || 'upload';
+  const safe =
+    String(filename)
+      .replace(/[^\w.\-]/g, "_")
+      .slice(-80) || "upload";
   return `conclave/attachments/${crypto.randomUUID()}-${safe}`;
 }
 
@@ -159,28 +173,37 @@ function buildKey(filename) {
  */
 const uploadFile = asyncHandler(async (req, res) => {
   if (!r2.isConfigured()) {
-    throw new ApiError(503, 'File uploads are not configured on this server');
+    throw new ApiError(503, "File uploads are not configured on this server");
   }
 
   if (!req.file) {
-    throw new ApiError(400, 'No file provided');
+    throw new ApiError(400, "No file provided");
   }
 
   const { buffer, mimetype: declaredType, originalname } = req.file;
 
-  const filename = (originalname || 'upload').trim() || 'upload';
+  const filename =
+    declaredType === "application/vnd.conclave.encrypted"
+      ? "encrypted.bin"
+      : (originalname || "upload").trim() || "upload";
 
   // Resolve before storing so extension-based MIME fallbacks are persisted
   // consistently in both R2 object metadata and the upload record.
   const mimetype = resolveMimetype(declaredType, filename);
 
   if (!mimetype) {
-    throw new ApiError(415, `Unsupported file type: ${declaredType || 'unknown'}`);
+    throw new ApiError(
+      415,
+      `Unsupported file type: ${declaredType || "unknown"}`,
+    );
   }
 
   const limit = limitFor(mimetype);
   if (buffer.length > limit) {
-    throw new ApiError(413, `File exceeds the ${limit / (1024 * 1024)}MB limit`);
+    throw new ApiError(
+      413,
+      `File exceeds the ${limit / (1024 * 1024)}MB limit`,
+    );
   }
 
   await verifyFileSignature(buffer, mimetype);
@@ -192,8 +215,8 @@ const uploadFile = asyncHandler(async (req, res) => {
   try {
     await r2.putObject({ key, body: buffer, contentType: mimetype });
   } catch (err) {
-    console.error('R2 upload failed', err);
-    throw new ApiError(502, 'File storage is temporarily unavailable');
+    console.error("R2 upload failed", err);
+    throw new ApiError(502, "File storage is temporarily unavailable");
   }
 
   const size = buffer.length;
@@ -203,32 +226,50 @@ const uploadFile = asyncHandler(async (req, res) => {
     await query(
       `INSERT INTO file_uploads (uploader_id, file_url, filename, mime_type, size_bytes, public_id, resource_type, width, height, preview_url, duration)
        VALUES ($1, $2, $3, $4, $5, $6, 'r2', $7, $8, $9, $10)`,
-      [req.user.id, fileUrl, filename, mimetype, size, key, metadata.width, metadata.height, metadata.preview_url, metadata.duration],
+      [
+        req.user.id,
+        fileUrl,
+        filename,
+        mimetype,
+        size,
+        key,
+        metadata.width,
+        metadata.height,
+        metadata.preview_url,
+        metadata.duration,
+      ],
     );
   } catch (err) {
     try {
       await r2.deleteObject(key);
     } catch (cleanupError) {
-      console.error('R2 orphan cleanup failed', { key, message: cleanupError.message });
+      console.error("R2 orphan cleanup failed", {
+        key,
+        message: cleanupError.message,
+      });
     }
-    if (err.code === '23505') {
-      throw new ApiError(409, 'That file has already been uploaded');
+    if (err.code === "23505") {
+      throw new ApiError(409, "That file has already been uploaded");
     }
     // 42P01 is undefined_table — the 010 migration has not been run.
-    if (err.code === '42P01') {
-      throw new ApiError(503, 'File uploads are not available on this server');
+    if (err.code === "42P01") {
+      throw new ApiError(503, "File uploads are not available on this server");
     }
     throw err;
   }
 
   // Wrapped in the standard { success, data } envelope every other route uses.
-  return ok(res, {
-    filename,
-    url: fileUrl,
-    mime_type: mimetype,
-    size,
-    ...metadata,
-  }, 201);
+  return ok(
+    res,
+    {
+      filename,
+      url: fileUrl,
+      mime_type: mimetype,
+      size,
+      ...metadata,
+    },
+    201,
+  );
 });
 
 module.exports = {

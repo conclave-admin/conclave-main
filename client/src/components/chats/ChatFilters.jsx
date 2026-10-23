@@ -1,6 +1,6 @@
-import { Link, useSearchParams } from 'react-router-dom';
-import IconCompose from '@/assets/icons/compose.svg?react';
-import IconSearch from '@/assets/icons/search.svg?react';
+import { Link, useSearchParams } from "react-router-dom";
+import IconCompose from "@/assets/icons/compose.svg?react";
+import IconSearch from "@/assets/icons/search.svg?react";
 
 /**
  * The four chips are navigation, not local state.
@@ -35,29 +35,29 @@ import IconSearch from '@/assets/icons/search.svg?react';
 export default function ChatFilters() {
   const [params, setParams] = useSearchParams();
 
-  const active = params.get('filter') || '';
-  const query = params.get('q') || '';
+  const active = params.get("filter") || "";
+  const query = params.get("q") || "";
 
   const setQuery = (value) => {
     const next = new URLSearchParams(params);
-    if (value) next.set('q', value);
-    else next.delete('q');
+    if (value) next.set("q", value);
+    else next.delete("q");
     setParams(next, { replace: true });
   };
 
   const selectFilter = (value) => {
     const next = new URLSearchParams(params);
-    if (value) next.set('filter', value);
-    else next.delete('filter');
+    if (value) next.set("filter", value);
+    else next.delete("filter");
     setParams(next, { replace: true });
   };
 
   const FILTERS = [
-    { value: '', label: 'All' },
-    { value: 'unread', label: 'Unread' },
-    { value: 'groups', label: 'Groups' },
-    { value: 'dms', label: 'DMs' },
-    { value: 'archived', label: 'Archived' },
+    { value: "", label: "All" },
+    { value: "unread", label: "Unread" },
+    { value: "groups", label: "Groups" },
+    { value: "dms", label: "DMs" },
+    { value: "archived", label: "Archived" },
   ];
 
   return (
@@ -93,12 +93,14 @@ export default function ChatFilters() {
           const selected = filter.value === active;
           return (
             <button
-              key={filter.value || 'all'}
+              key={filter.value || "all"}
               type="button"
               aria-pressed={selected}
               onClick={() => selectFilter(filter.value)}
               className={`min-h-8 shrink-0 rounded-full px-3 text-label transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
-                selected ? 'bg-brand font-semibold text-surface' : 'bg-canvas text-muted hover:text-ink'
+                selected
+                  ? "bg-brand font-semibold text-surface"
+                  : "bg-canvas text-muted hover:text-ink"
               }`}
             >
               {filter.label}

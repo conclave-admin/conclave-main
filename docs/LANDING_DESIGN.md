@@ -49,5 +49,5 @@ and listeners are reverted on unmount, so navigating between public/auth routes
 does not retain old ScrollTriggers. Text remains in the DOM and visible without
 animation initialization.
 
-Implementation references: [GSAP matchMedia](https://gsap.com/docs/v3/GSAP/gsap.matchMedia())
+Implementation references: [GSAP matchMedia](<https://gsap.com/docs/v3/GSAP/gsap.matchMedia()>)
 and [ScrollTrigger](https://gsap.com/docs/v3/Plugins/ScrollTrigger/).

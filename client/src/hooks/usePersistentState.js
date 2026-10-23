@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState } from "react";
 
 export default function usePersistentState(key, initial) {
   const [value, setValue] = useState(() => {
@@ -13,7 +13,7 @@ export default function usePersistentState(key, initial) {
   const update = useCallback(
     (next) => {
       setValue((current) => {
-        const resolved = typeof next === 'function' ? next(current) : next;
+        const resolved = typeof next === "function" ? next(current) : next;
         try {
           window.localStorage.setItem(key, JSON.stringify(resolved));
         } catch {

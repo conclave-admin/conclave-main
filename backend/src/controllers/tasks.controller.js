@@ -1,8 +1,13 @@
-const { query } = require('../config/db');
-const asyncHandler = require('../utils/asyncHandler');
-const { ok } = require('../utils/apiResponse');
-const ApiError = require('../utils/ApiError');
-const { createNotification, presentNotification, emitNotification, personalRoom } = require('../services/notification.service');
+const { query } = require("../config/db");
+const asyncHandler = require("../utils/asyncHandler");
+const { ok } = require("../utils/apiResponse");
+const ApiError = require("../utils/ApiError");
+const {
+  createNotification,
+  presentNotification,
+  emitNotification,
+  personalRoom,
+} = require("../services/notification.service");
 
 // In-chat Action Items — flag any message as a task, assign it, track
 // status in a per-room Tasks tab.
@@ -15,7 +20,7 @@ const { createNotification, presentNotification, emitNotification, personalRoom 
 // validated here. The controller check exists to return a useful 400; the
 // constraint is what makes the guarantee real for any future write path.
 
-const STATUSES = ['open', 'in_progress', 'done'];
+const STATUSES = ["open", "in_progress", "done"];
 
 // The notes a flag-as-task dialog collects. The column is unbounded so the
 // limit lives in one place with the other input validation rather than being
@@ -53,18 +58,25 @@ async function emitTaskUpdated(io, task) {
     [task.room_id],
   );
   const audience = new Set(
-    [task.assignee_id, task.created_by, ...admins.rows.map((row) => row.user_id)].filter(Boolean),
+    [
+      task.assignee_id,
+      task.created_by,
+      ...admins.rows.map((row) => row.user_id),
+    ].filter(Boolean),
   );
-  audience.forEach((id) => io.to(personalRoom(id)).emit('task:updated', { task }));
+  audience.forEach((id) =>
+    io.to(personalRoom(id)).emit("task:updated", { task }),
+  );
 }
 
 // ---------- createTask ----------
 // Flag a message as a task, optionally assigning it to a room member.
 const createTask = asyncHandler(async (req, res) => {
-  const { roomId, sourceMessageId, title, body, assigneeId, dueDate } = req.body;
+  const { roomId, sourceMessageId, title, body, assigneeId, dueDate } =
+    req.body;
 
-  if (!roomId || typeof title !== 'string' || !title.trim()) {
-    throw new ApiError(400, 'roomId and title are required');
+  if (!roomId || typeof title !== "string" || !title.trim()) {
+    throw new ApiError(400, "roomId and title are required");
   }
 
   const membership = await query(
@@ -72,8 +84,21 @@ const createTask = asyncHandler(async (req, res) => {
     [roomId, req.user.id],
   );
   if (membership.rows.length === 0) {
-    throw new ApiError(403, 'You are not a member of this room');
+    throw new ApiError(403, "You are not a member of this room");
   }
+
+  if (
+    (
+      await query(
+        "SELECT 1 FROM rooms WHERE id=$1 AND encryption_mode='e2ee-v1'",
+        [roomId],
+      )
+    ).rowCount
+  )
+    throw new ApiError(
+      409,
+      "Server-readable collaboration is unavailable in encrypted conversations",
+    );
 
   // A source message has to be in the same room, or the task links across rooms
   // and the message view would render a task it has no permission context for.
@@ -83,7 +108,7 @@ const createTask = asyncHandler(async (req, res) => {
       [sourceMessageId, roomId],
     );
     if (source.rows.length === 0) {
-      throw new ApiError(400, 'sourceMessageId is not a message in this room');
+      throw new ApiError(400, "sourceMessageId is not a message in this room");
     }
   }
 
@@ -96,12 +121,19 @@ const createTask = asyncHandler(async (req, res) => {
       [roomId, assigneeId],
     );
     if (assignee.rows.length === 0) {
-      throw new ApiError(400, 'assigneeId must be a member of this room');
+      throw new ApiError(400, "assigneeId must be a member of this room");
     }
   }
 
-  if (body !== undefined && body !== null && String(body).length > MAX_BODY_LENGTH) {
-    throw new ApiError(400, `body must be at most ${MAX_BODY_LENGTH} characters`);
+  if (
+    body !== undefined &&
+    body !== null &&
+    String(body).length > MAX_BODY_LENGTH
+  ) {
+    throw new ApiError(
+      400,
+      `body must be at most ${MAX_BODY_LENGTH} characters`,
+    );
   }
 
   // The CTE inserts, then selects through the shared column list, so the 201
@@ -118,7 +150,15 @@ const createTask = asyncHandler(async (req, res) => {
      FROM inserted t
      INNER JOIN rooms r ON r.id = t.room_id
      LEFT JOIN users a ON a.id = t.assignee_id`,
-    [roomId, sourceMessageId || null, title.trim(), body ? String(body).trim() : null, assigneeId || null, dueDate || null, req.user.id],
+    [
+      roomId,
+      sourceMessageId || null,
+      title.trim(),
+      body ? String(body).trim() : null,
+      assigneeId || null,
+      dueDate || null,
+      req.user.id,
+    ],
   );
 
   const task = result.rows[0];
@@ -128,7 +168,7 @@ const createTask = asyncHandler(async (req, res) => {
   // private task exists, which the list query above deliberately hides from
   // them. The caller still gets the task in the response, so the client that
   // made the change is never left showing stale state.
-  const io = req.app.get('io');
+  const io = req.app.get("io");
   await emitTaskUpdated(io, task);
 
   /*
@@ -152,14 +192,14 @@ const createTask = asyncHandler(async (req, res) => {
     try {
       notificationRow = await createNotification({
         recipientId: task.assignee_id,
-        type: 'task',
+        type: "task",
         referenceId: task.id,
         actorId: req.user.id,
       });
     } catch (err) {
       // The task itself is created and correct. A failed notification must not
       // undo that or fail the request — the assignee sees it on the board.
-      console.error('Could not write task notification', {
+      console.error("Could not write task notification", {
         taskId: task.id,
         assignee: task.assignee_id,
         message: err.message,
@@ -183,7 +223,7 @@ const listTasks = asyncHandler(async (req, res) => {
   const { roomId, status, assigneeId } = req.query;
 
   if (status && !STATUSES.includes(status)) {
-    throw new ApiError(400, `status must be one of: ${STATUSES.join(', ')}`);
+    throw new ApiError(400, `status must be one of: ${STATUSES.join(", ")}`);
   }
 
   // Visibility, not membership, is the scope. Three people may see a task: the
@@ -212,14 +252,16 @@ const listTasks = asyncHandler(async (req, res) => {
       [roomId, req.user.id],
     );
     if (membership.rows.length === 0) {
-      throw new ApiError(403, 'You are not a member of this room');
+      throw new ApiError(403, "You are not a member of this room");
     }
     params.push(roomId);
     filters.push(`t.room_id = $${params.length}`);
   } else {
     // A task in a room you are not in is not merely filtered from the list, it
     // should never have been selectable.
-    filters.push(`t.room_id IN (SELECT room_id FROM room_members WHERE user_id = $1)`);
+    filters.push(
+      `t.room_id IN (SELECT room_id FROM room_members WHERE user_id = $1)`,
+    );
   }
 
   if (status) {
@@ -238,7 +280,7 @@ const listTasks = asyncHandler(async (req, res) => {
   const result = await query(
     `SELECT ${TASK_COLUMNS}
      ${TASK_JOINS}
-     WHERE ${filters.join(' AND ')}
+     WHERE ${filters.join(" AND ")}
      ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC, t.id DESC`,
     params,
   );
@@ -253,7 +295,7 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
 
   if (!STATUSES.includes(status)) {
-    throw new ApiError(400, `status must be one of: ${STATUSES.join(', ')}`);
+    throw new ApiError(400, `status must be one of: ${STATUSES.join(", ")}`);
   }
 
   // The same three-way visibility rule as the list, read in the query that loads
@@ -269,7 +311,7 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
     [taskId, req.user.id],
   );
   if (existing.rows.length === 0) {
-    throw new ApiError(404, 'Task not found');
+    throw new ApiError(404, "Task not found");
   }
 
   // updated_at is set explicitly because nothing else maintains it, and the
@@ -291,7 +333,7 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
 
   const task = result.rows[0];
 
-  await emitTaskUpdated(req.app.get('io'), task);
+  await emitTaskUpdated(req.app.get("io"), task);
 
   return ok(res, task);
 });

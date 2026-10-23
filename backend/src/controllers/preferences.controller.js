@@ -1,20 +1,20 @@
-const { query } = require('../config/db');
-const asyncHandler = require('../utils/asyncHandler');
-const { ok } = require('../utils/apiResponse');
-const ApiError = require('../utils/ApiError');
-const { NOTIFICATION_TYPES } = require('../services/notification.service');
+const { query } = require("../config/db");
+const asyncHandler = require("../utils/asyncHandler");
+const { ok } = require("../utils/apiResponse");
+const ApiError = require("../utils/ApiError");
+const { NOTIFICATION_TYPES } = require("../services/notification.service");
 
 // What a caller may set. `activity_level` is constrained again by a CHECK in
 // migration 015 — this is the friendly version of the same rule, so the client
 // gets the list of allowed values instead of a database error message.
-const ACTIVITY_LEVELS = ['all', 'mentions', 'none'];
+const ACTIVITY_LEVELS = ["all", "mentions", "none"];
 
 // What a caller gets when they have never saved anything. Defined here rather
 // than read out of an absent row so that "no preferences" and "preferences all
 // set to their defaults" are literally the same object, and a client cannot tell
 // the difference between a new account and a deliberately-configured one.
 const DEFAULTS = {
-  activity_level: 'all',
+  activity_level: "all",
   muted: {},
   push_enabled: true,
 };
@@ -37,8 +37,8 @@ const UPSERT = `
 // ---------- getPreferences ----------
 const getPreferences = asyncHandler(async (req, res) => {
   const result = await query(
-    'SELECT activity_level, muted, push_enabled, updated_at FROM notification_preferences WHERE user_id = $1',
-    [req.user.id]
+    "SELECT activity_level, muted, push_enabled, updated_at FROM notification_preferences WHERE user_id = $1",
+    [req.user.id],
   );
 
   // No row is not an error and not a null response — it is the default set.
@@ -68,17 +68,23 @@ const updatePreferences = asyncHandler(async (req, res) => {
   if (level === undefined && muted === undefined && push === undefined) {
     throw new ApiError(
       400,
-      `No updatable fields provided. Allowed: activity_level, muted, push_enabled`
+      `No updatable fields provided. Allowed: activity_level, muted, push_enabled`,
     );
   }
 
   if (level !== undefined && !ACTIVITY_LEVELS.includes(level)) {
-    throw new ApiError(400, `activity_level must be one of: ${ACTIVITY_LEVELS.join(', ')}`);
+    throw new ApiError(
+      400,
+      `activity_level must be one of: ${ACTIVITY_LEVELS.join(", ")}`,
+    );
   }
 
   if (muted !== undefined) {
-    if (muted === null || typeof muted !== 'object' || Array.isArray(muted)) {
-      throw new ApiError(400, 'muted must be an object mapping notification type to a boolean');
+    if (muted === null || typeof muted !== "object" || Array.isArray(muted)) {
+      throw new ApiError(
+        400,
+        "muted must be an object mapping notification type to a boolean",
+      );
     }
     // Both checks live here rather than in the migration because Postgres
     // forbids subqueries in CHECK constraints, so the shape of the values could
@@ -89,7 +95,7 @@ const updatePreferences = asyncHandler(async (req, res) => {
       if (!NOTIFICATION_TYPES.includes(key)) {
         throw new ApiError(400, `Unknown notification type: ${key}`);
       }
-      if (typeof value !== 'boolean') {
+      if (typeof value !== "boolean") {
         throw new ApiError(400, `muted.${key} must be a boolean`);
       }
     }
@@ -104,8 +110,8 @@ const updatePreferences = asyncHandler(async (req, res) => {
   // never-saved row produce the same result as a GET on one: the row comes into
   // existence already holding the values a reader would have synthesised.
   const existing = await query(
-    'SELECT activity_level, muted, push_enabled FROM notification_preferences WHERE user_id = $1',
-    [req.user.id]
+    "SELECT activity_level, muted, push_enabled FROM notification_preferences WHERE user_id = $1",
+    [req.user.id],
   );
   const current = existing.rows.length > 0 ? existing.rows[0] : DEFAULTS;
 
@@ -125,4 +131,9 @@ const updatePreferences = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { getPreferences, updatePreferences, ACTIVITY_LEVELS, DEFAULTS };
+module.exports = {
+  getPreferences,
+  updatePreferences,
+  ACTIVITY_LEVELS,
+  DEFAULTS,
+};

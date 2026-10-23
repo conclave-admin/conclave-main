@@ -1,10 +1,14 @@
-import { useEffect } from 'react';
-import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
-import Button from '@/components/ui/Button';
-import EmptyState from '@/components/ui/EmptyState';
-import Spinner from '@/components/ui/Spinner';
-import { useNotifications } from '@/contexts/NotificationsContext';
-import Page from '@/components/layout/Page';
+import { useEffect } from "react";
+import {
+  useNavigate,
+  useOutletContext,
+  useSearchParams,
+} from "react-router-dom";
+import Button from "@/components/ui/Button";
+import EmptyState from "@/components/ui/EmptyState";
+import Spinner from "@/components/ui/Spinner";
+import { useNotifications } from "@/contexts/NotificationsContext";
+import Page from "@/components/layout/Page";
 
 // Type-to-display mapping lives here, not in the fixtures and not in the
 // service: the server sends a bare type, and display copy is presentation.
@@ -12,32 +16,35 @@ import Page from '@/components/layout/Page';
 // ROOM_TARGET_TYPES and TASK_TARGET_TYPES); an unknown one still renders rather
 // than throwing, because a new server-side type should not blank this page.
 const TYPES = {
-  mention: { label: 'Mention', dot: 'bg-brand' },
-  new_message: { label: 'New message', dot: 'bg-muted' },
-  file_uploaded: { label: 'File shared', dot: 'bg-brand' },
-  room_invite: { label: 'Room invite', dot: 'bg-success' },
-  member_joined: { label: 'Member joined', dot: 'bg-success' },
-  task: { label: 'Task assigned', dot: 'bg-warning' },
+  mention: { label: "Mention", dot: "bg-brand" },
+  new_message: { label: "New message", dot: "bg-muted" },
+  file_uploaded: { label: "File shared", dot: "bg-brand" },
+  room_invite: { label: "Room invite", dot: "bg-success" },
+  member_joined: { label: "Member joined", dot: "bg-success" },
+  task: { label: "Task assigned", dot: "bg-warning" },
 };
 
 const FILTERS = [
-  { key: 'all', label: 'All' },
-  { key: 'unread', label: 'Unread' },
+  { key: "all", label: "All" },
+  { key: "unread", label: "Unread" },
 ];
 
 function formatTime(value) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
+  if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
 function Row({ notification, onOpen }) {
-  const { label, dot } = TYPES[notification.type] || { label: 'Update', dot: 'bg-muted' };
+  const { label, dot } = TYPES[notification.type] || {
+    label: "Update",
+    dot: "bg-muted",
+  };
   const context = notification.context || {};
   const unread = !notification.seen;
 
@@ -46,17 +53,19 @@ function Row({ notification, onOpen }) {
       type="button"
       onClick={() => onOpen(notification)}
       className={`flex w-full items-start gap-3 border-b border-line px-4 py-3.5 text-left transition-colors last:border-b-0 hover:bg-canvas focus-visible:bg-canvas focus-visible:outline-none ${
-        unread ? 'bg-brand-soft/30' : ''
+        unread ? "bg-brand-soft/30" : ""
       }`}
     >
       <span
-        className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${unread ? 'bg-brand' : dot}`}
+        className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${unread ? "bg-brand" : dot}`}
         aria-hidden="true"
       />
 
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline justify-between gap-3">
-          <span className={`truncate text-label ${unread ? 'text-ink' : 'text-muted'}`}>
+          <span
+            className={`truncate text-label ${unread ? "text-ink" : "text-muted"}`}
+          >
             {label}
           </span>
           <span className="shrink-0 text-metadata text-muted">
@@ -71,7 +80,9 @@ function Row({ notification, onOpen }) {
             task_title is the assigned task's title: not a sentence anyone
             said, so it has its own field rather than borrowing the preview. */}
         <span className="mt-0.5 block truncate text-body text-ink">
-          {context.actor_name ? `${context.actor_name} in ${context.room_name || 'a room'}` : context.room_name || 'A room'}
+          {context.actor_name
+            ? `${context.actor_name} in ${context.room_name || "a room"}`
+            : context.room_name || "A room"}
         </span>
 
         {context.task_title && (
@@ -119,30 +130,38 @@ export default function Notifications() {
     loadMore,
   } = useNotifications();
 
-  const filter = params.get('filter') === 'unread' ? 'unread' : 'all';
+  const filter = params.get("filter") === "unread" ? "unread" : "all";
 
   useEffect(() => {
-    setRoomHeader(unreadCount > 0 ? `Notifications (${unreadCount})` : 'Notifications');
+    setRoomHeader(
+      unreadCount > 0 ? `Notifications (${unreadCount})` : "Notifications",
+    );
     return () => setRoomHeader(null);
   }, [setRoomHeader, unreadCount]);
 
   const setFilter = (key) => {
     const next = new URLSearchParams();
-    if (key !== 'all') next.set('filter', key);
+    if (key !== "all") next.set("filter", key);
     setParams(next);
   };
 
-  const visible = filter === 'unread' ? notifications.filter((n) => !n.seen) : notifications;
+  const visible =
+    filter === "unread" ? notifications.filter((n) => !n.seen) : notifications;
 
   const handleOpen = (notification) => {
     markOne(notification.id);
-    if (notification.context?.room_id) navigate(`/chats/${notification.context.room_id}`);
+    if (notification.context?.room_id)
+      navigate(`/chats/${notification.context.room_id}`);
   };
 
   return (
-      <Page width="content">
+    <Page width="content">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-1" role="group" aria-label="Filter notifications">
+        <div
+          className="flex items-center gap-1"
+          role="group"
+          aria-label="Filter notifications"
+        >
           {FILTERS.map(({ key, label }) => (
             <button
               key={key}
@@ -150,7 +169,9 @@ export default function Notifications() {
               onClick={() => setFilter(key)}
               aria-pressed={filter === key}
               className={`rounded-full px-3.5 py-1.5 text-label transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
-                filter === key ? 'bg-brand text-surface' : 'text-muted hover:bg-canvas hover:text-ink'
+                filter === key
+                  ? "bg-brand text-surface"
+                  : "text-muted hover:bg-canvas hover:text-ink"
               }`}
             >
               {label}
@@ -158,7 +179,11 @@ export default function Notifications() {
           ))}
         </div>
 
-        <Button variant="secondary" onClick={markAll} disabled={unreadCount === 0}>
+        <Button
+          variant="secondary"
+          onClick={markAll}
+          disabled={unreadCount === 0}
+        >
           Mark all as read
         </Button>
       </div>
@@ -167,7 +192,10 @@ export default function Notifications() {
         {isLoading && <Spinner label="Loading notifications" />}
 
         {error && (
-          <p role="alert" className="rounded-lg bg-error/10 p-4 text-body text-error">
+          <p
+            role="alert"
+            className="rounded-lg bg-error/10 p-4 text-body text-error"
+          >
             {error}
           </p>
         )}
@@ -175,11 +203,15 @@ export default function Notifications() {
         {!isLoading && !error && visible.length === 0 && (
           <div className="rounded-xl border border-dashed border-line">
             <EmptyState
-              title={filter === 'unread' ? 'You are all caught up' : 'No notifications yet'}
+              title={
+                filter === "unread"
+                  ? "You are all caught up"
+                  : "No notifications yet"
+              }
               description={
-                filter === 'unread'
-                  ? 'Nothing unread. Mentions, new messages and room invitations will appear here.'
-                  : 'Mentions, new messages and room invitations will appear here.'
+                filter === "unread"
+                  ? "Nothing unread. Mentions, new messages and room invitations will appear here."
+                  : "Mentions, new messages and room invitations will appear here."
               }
             />
           </div>
@@ -188,12 +220,16 @@ export default function Notifications() {
         {!isLoading && !error && visible.length > 0 && (
           <div className="overflow-hidden rounded-xl border border-line bg-surface">
             {visible.map((notification) => (
-              <Row key={notification.id} notification={notification} onOpen={handleOpen} />
+              <Row
+                key={notification.id}
+                notification={notification}
+                onOpen={handleOpen}
+              />
             ))}
           </div>
         )}
 
-        {nextCursor && filter === 'all' && !isLoading && (
+        {nextCursor && filter === "all" && !isLoading && (
           <div className="mt-5 flex justify-center">
             <Button variant="secondary" onClick={loadMore}>
               Load more
@@ -201,6 +237,6 @@ export default function Notifications() {
           </div>
         )}
       </div>
-      </Page>
+    </Page>
   );
 }

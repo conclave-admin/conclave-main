@@ -1,8 +1,8 @@
-import { api } from '../lib/api';
-import { isDevAuthBypass, previewTasks } from '../config/devPreview';
+import { api } from "../lib/api";
+import { isDevAuthBypass, previewTasks } from "../config/devPreview";
 
 /** Mirrors `STATUSES` in tasks.controller.js and the DB check constraint. */
-export const TASK_STATUSES = ['open', 'in_progress', 'done'];
+export const TASK_STATUSES = ["open", "in_progress", "done"];
 
 /**
  * Tasks across every room the caller is in.
@@ -26,7 +26,9 @@ export async function listTasks({ roomId, status, assigneeId } = {}) {
       ),
     };
   }
-  const { data } = await api.get('/tasks', { params: { roomId, status, assigneeId } });
+  const { data } = await api.get("/tasks", {
+    params: { roomId, status, assigneeId },
+  });
   return data.data;
 }
 
@@ -44,8 +46,15 @@ export async function listTasks({ roomId, status, assigneeId } = {}) {
  *
  * @param {{ roomId: string, sourceMessageId?: string, title: string, assigneeId?: string, dueDate?: string }} payload
  */
-export async function createTask({ roomId, sourceMessageId, title, body, assigneeId, dueDate }) {
-  const { data } = await api.post('/tasks', {
+export async function createTask({
+  roomId,
+  sourceMessageId,
+  title,
+  body,
+  assigneeId,
+  dueDate,
+}) {
+  const { data } = await api.post("/tasks", {
     roomId,
     sourceMessageId,
     title,

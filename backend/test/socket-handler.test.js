@@ -1,51 +1,74 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const socketHandler = require('../src/utils/socketHandler');
-const ApiError = require('../src/utils/ApiError');
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const socketHandler = require("../src/utils/socketHandler");
+const ApiError = require("../src/utils/ApiError");
 
 function fixture() {
   const events = [];
-  return { events, socket: { connected: true, emit: (...args) => events.push(args) } };
+  return {
+    events,
+    socket: { connected: true, emit: (...args) => events.push(args) },
+  };
 }
 
-test('missing and malformed payloads cannot escape the event handler', async () => {
+test("missing and malformed payloads cannot escape the event handler", async () => {
   const { events, socket } = fixture();
-  const handle = socketHandler(socket, () => assert.fail('invalid payload reached business logic'));
-  for (const payload of [undefined, null, 'bad', 5, []]) await handle(payload);
+  const handle = socketHandler(socket, () =>
+    assert.fail("invalid payload reached business logic"),
+  );
+  for (const payload of [undefined, null, "bad", 5, []]) await handle(payload);
   assert.equal(events.length, 5);
-  assert.ok(events.every(([name]) => name === 'error:message'));
+  assert.ok(events.every(([name]) => name === "error:message"));
 });
 
-test('async failures are contained and internal details are withheld', async (t) => {
-  t.mock.method(console, 'error', () => {});
+test("async failures are contained and internal details are withheld", async (t) => {
+  t.mock.method(console, "error", () => {});
   const { events, socket } = fixture();
-  await socketHandler(socket, async () => { throw new Error('private database error'); })({});
+  await socketHandler(socket, async () => {
+    throw new Error("private database error");
+  })({});
   assert.equal(events.length, 1);
   assert.doesNotMatch(events[0][1].message, /private database/);
 });
 
-test('expected validation messages are returned to the caller', async () => {
+test("expected validation messages are returned to the caller", async () => {
   const { events, socket } = fixture();
-  await socketHandler(socket, async () => { throw new ApiError(403, 'Not a room member'); })({});
-  assert.equal(events[0][1].message, 'Not a room member');
+  await socketHandler(socket, async () => {
+    throw new ApiError(403, "Not a room member");
+  })({});
+  assert.equal(events[0][1].message, "Not a room member");
 });
 
-test('heartbeat and disconnect can omit an object payload', async () => {
+test("heartbeat and disconnect can omit an object payload", async () => {
   const { events, socket } = fixture();
   let calls = 0;
-  const handle = socketHandler(socket, async () => { calls++; }, { payload: false });
+  const handle = socketHandler(
+    socket,
+    async () => {
+      calls++;
+    },
+    { payload: false },
+  );
   await handle();
-  await handle('transport close');
+  await handle("transport close");
   assert.equal(calls, 2);
   assert.deepEqual(events, []);
 });
 
-test('send acknowledgements distinguish retryable server errors from rejected requests', async (t) => {
-  t.mock.method(console, 'error', () => {});
+test("send acknowledgements distinguish retryable server errors from rejected requests", async (t) => {
+  t.mock.method(console, "error", () => {});
   const { socket } = fixture();
-  for (const [error, status] of [[new ApiError(429, 'Slow down'), 429], [new ApiError(403, 'Not a member'), 403], [new Error('private'), 500]]) {
+  for (const [error, status] of [
+    [new ApiError(429, "Slow down"), 429],
+    [new ApiError(403, "Not a member"), 403],
+    [new Error("private"), 500],
+  ]) {
     let reply;
-    await socketHandler(socket, async () => { throw error; })({}, (value) => { reply = value; });
+    await socketHandler(socket, async () => {
+      throw error;
+    })({}, (value) => {
+      reply = value;
+    });
     assert.equal(reply.ok, false);
     assert.equal(reply.status, status);
     assert.doesNotMatch(reply.error, /private/);

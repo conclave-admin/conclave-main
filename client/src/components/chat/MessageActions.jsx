@@ -1,20 +1,20 @@
-import { useRef, useState } from 'react';
+import { useRef, useState } from "react";
 // compose.svg, not an "edit" icon: the set has no pencil glyph, and compose and
 // edit are the same gesture — a pen writing on a surface. Inventing one asset
 // for a single row would break the set's 90-icon style contract for no gain.
-import IconCompose from '@/assets/icons/compose.svg?react';
-import IconCopy from '@/assets/icons/copy.svg?react';
-import IconDecisions from '@/assets/icons/decisions.svg?react';
-import IconDelete from '@/assets/icons/delete.svg?react';
-import IconMore from '@/assets/icons/more.svg?react';
-import IconPin from '@/assets/icons/pin.svg?react';
-import IconForward from '@/assets/icons/forward.svg?react';
-import IconReply from '@/assets/icons/reply.svg?react';
-import IconStar from '@/assets/icons/star.svg?react';
-import IconTasks from '@/assets/icons/tasks.svg?react';
-import IconInfo from '@/assets/icons/info.svg?react';
-import IconThread from '@/assets/icons/thread.svg?react';
-import PopoverMenu from '@/components/ui/PopoverMenu';
+import IconCompose from "@/assets/icons/compose.svg?react";
+import IconCopy from "@/assets/icons/copy.svg?react";
+import IconDecisions from "@/assets/icons/decisions.svg?react";
+import IconDelete from "@/assets/icons/delete.svg?react";
+import IconMore from "@/assets/icons/more.svg?react";
+import IconPin from "@/assets/icons/pin.svg?react";
+import IconForward from "@/assets/icons/forward.svg?react";
+import IconReply from "@/assets/icons/reply.svg?react";
+import IconStar from "@/assets/icons/star.svg?react";
+import IconTasks from "@/assets/icons/tasks.svg?react";
+import IconInfo from "@/assets/icons/info.svg?react";
+import IconThread from "@/assets/icons/thread.svg?react";
+import PopoverMenu from "@/components/ui/PopoverMenu";
 import { REACTION_EMOJI } from "@/lib/messageMeta";
 
 /**
@@ -105,10 +105,27 @@ export default function MessageActions({
   const mayUnpinRoom = holdsRoomPin || isAdmin;
 
   const items = [
-    isMine && onMessageInfo && { key: "info", label: "Message info", Icon: IconInfo, onClick: onMessageInfo },
-    { key: "thread", label: "Open thread", Icon: IconThread, onClick: onOpenThread },
+    isMine &&
+      onMessageInfo && {
+        key: "info",
+        label: "Message info",
+        Icon: IconInfo,
+        onClick: onMessageInfo,
+      },
+    {
+      key: "thread",
+      label: "Open thread",
+      Icon: IconThread,
+      onClick: onOpenThread,
+    },
     { key: "reply", label: "Reply", Icon: IconReply, onClick: onReply },
-    onForward && !message.poll && { key: "forward", label: "Forward", Icon: IconForward, onClick: onForward },
+    onForward &&
+      !message.poll && {
+        key: "forward",
+        label: "Forward",
+        Icon: IconForward,
+        onClick: onForward,
+      },
     message.content && {
       key: "copy",
       label: "Copy text",
@@ -227,7 +244,7 @@ export default function MessageActions({
             );
           })}
         </div>
-        
+
         {items.map(({ key, label, Icon, onClick, danger }) => (
           <button
             key={key}

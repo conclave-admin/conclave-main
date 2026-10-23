@@ -1,33 +1,36 @@
-import { api } from '../lib/api';
+import { api } from "../lib/api";
 import {
   isDevAuthBypass,
   previewRoom,
   previewRooms,
   previewUser,
-} from '../config/devPreview';
+} from "../config/devPreview";
 
 export async function listRooms() {
   if (isDevAuthBypass) return previewRooms;
-  const { data } = await api.get('/rooms');
+  const { data } = await api.get("/rooms");
   return data.data;
 }
 
-export async function discoverRooms({ q = '', page = 1 } = {}) {
+export async function discoverRooms({ q = "", page = 1 } = {}) {
   if (isDevAuthBypass) {
     const room = {
-      id: 'preview-public-room',
-      name: 'Conclave Community',
-      description: 'Open announcements and product feedback for the preview workspace.',
-      slug: 'conclave-community',
+      id: "preview-public-room",
+      name: "Conclave Community",
+      description:
+        "Open announcements and product feedback for the preview workspace.",
+      slug: "conclave-community",
       member_count: 24,
     };
     const term = q.trim().toLowerCase();
     const rooms = previewRooms.some((item) => item.id === room.id)
       ? []
-      : (!term || `${room.name} ${room.description}`.toLowerCase().includes(term) ? [room] : []);
+      : !term || `${room.name} ${room.description}`.toLowerCase().includes(term)
+        ? [room]
+        : [];
     return { rooms: page === 1 ? rooms : [], page, hasMore: false };
   }
-  const { data } = await api.get('/rooms/discover', { params: { q, page } });
+  const { data } = await api.get("/rooms/discover", { params: { q, page } });
   return data.data;
 }
 
@@ -36,16 +39,23 @@ export async function joinPublicRoom(roomId) {
     if (!previewRooms.some((room) => room.id === roomId)) {
       previewRooms.push({
         id: roomId,
-        name: 'Conclave Community',
-        display_name: 'Conclave Community',
-        description: 'Open announcements and product feedback for the preview workspace.',
-        slug: 'conclave-community',
-        type: 'public',
+        name: "Conclave Community",
+        display_name: "Conclave Community",
+        description:
+          "Open announcements and product feedback for the preview workspace.",
+        slug: "conclave-community",
+        type: "public",
         member_count: 1,
-        my_role: 'member',
+        my_role: "member",
         has_message: false,
         unread_count: 0,
-        members: [{ ...previewUser, role: 'member', joined_at: new Date().toISOString() }],
+        members: [
+          {
+            ...previewUser,
+            role: "member",
+            joined_at: new Date().toISOString(),
+          },
+        ],
       });
     }
     return { roomId, joined: true, existing: false };
@@ -63,7 +73,18 @@ export async function updateRoomPreferences(roomId, updates) {
 export async function getRoom(roomId) {
   if (isDevAuthBypass) {
     const found = previewRooms.find((room) => room.id === roomId);
-    if (!found) throw Object.assign(new Error('You no longer have access to this conversation.'), { response: { status: 403, data: { message: 'You no longer have access to this conversation.' } } });
+    if (!found)
+      throw Object.assign(
+        new Error("You no longer have access to this conversation."),
+        {
+          response: {
+            status: 403,
+            data: {
+              message: "You no longer have access to this conversation.",
+            },
+          },
+        },
+      );
     return { ...found, id: roomId };
   }
   const { data } = await api.get(`/rooms/${roomId}`);
@@ -76,12 +97,13 @@ export async function getRoom(roomId) {
  * the room that already exists, rather than 201 and a duplicate. Callers must
  * handle both — the room to open is the same either way, which is the point.
  */
-export async function createRoom({ name, type = 'group', memberIds = [] }) {
+export async function createRoom({ name, type = "group", memberIds = [] }) {
   if (isDevAuthBypass) {
     const other = memberIds[0];
-    if (type === 'dm' && memberIds.length === 1) {
+    if (type === "dm" && memberIds.length === 1) {
       const existing = previewRooms.find(
-        (room) => room.type === 'dm' && room.members.some((m) => m.id === other),
+        (room) =>
+          room.type === "dm" && room.members.some((m) => m.id === other),
       );
       if (existing) return { ...existing, existing: true };
     }
@@ -89,26 +111,26 @@ export async function createRoom({ name, type = 'group', memberIds = [] }) {
     // and so does this. `name.toLowerCase()` used to run unconditionally here
     // and threw on undefined, so bypass mode failed differently from the real
     // API rather than agreeing with it.
-    const label = name?.trim() || other || 'Direct message';
+    const label = name?.trim() || other || "Direct message";
     const created = {
       id: `dev-room-${previewRooms.length + 1}`,
       name: label,
-      slug: label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      slug: label.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       type,
       member_count: memberIds.length + 1,
-      my_role: 'admin',
-      display_name: type === 'dm' ? other : label,
+      my_role: "admin",
+      display_name: type === "dm" ? other : label,
       display_avatar: null,
       has_message: false,
       unread_count: 0,
       last_message: null,
       members: [
-        { ...previewUser, role: 'admin', joined_at: new Date().toISOString() },
+        { ...previewUser, role: "admin", joined_at: new Date().toISOString() },
         ...memberIds.map((id, i) => ({
           id,
           display_name: id,
           avatar_url: null,
-          role: 'member',
+          role: "member",
           joined_at: new Date().toISOString(),
           last_seen_at: null,
         })),
@@ -117,7 +139,7 @@ export async function createRoom({ name, type = 'group', memberIds = [] }) {
     previewRooms.push(created);
     return created;
   }
-  const { data } = await api.post('/rooms', { name, type, memberIds });
+  const { data } = await api.post("/rooms", { name, type, memberIds });
   return data.data;
 }
 
@@ -134,14 +156,18 @@ export async function updateRoom(roomId, updates) {
   if (isDevAuthBypass) {
     const room = previewRooms.find((r) => r.id === roomId);
     if (room) {
-      if (typeof updates.name === 'string' && updates.name.trim()) {
+      if (typeof updates.name === "string" && updates.name.trim()) {
         room.name = updates.name.trim();
         // display_name mirrors name for a group, so both move together or the
         // rail and the header would disagree after a rename.
-        if (room.type !== 'dm') room.display_name = room.name;
+        if (room.type !== "dm") room.display_name = room.name;
       }
-      if (typeof updates.description === 'string') room.description = updates.description;
-      if (typeof updates.avatar_url === 'string' || updates.avatar_url === null) {
+      if (typeof updates.description === "string")
+        room.description = updates.description;
+      if (
+        typeof updates.avatar_url === "string" ||
+        updates.avatar_url === null
+      ) {
         room.avatar_url = updates.avatar_url;
         room.display_avatar = updates.avatar_url;
       }
@@ -160,13 +186,13 @@ export async function addMember(roomId, userId) {
         id: userId,
         display_name: userId,
         avatar_url: null,
-        role: 'member',
+        role: "member",
         joined_at: new Date().toISOString(),
         last_seen_at: null,
       });
       room.member_count = room.members.length;
     }
-    return { roomId, userId, role: 'member' };
+    return { roomId, userId, role: "member" };
   }
   const { data } = await api.post(`/rooms/${roomId}/members`, { userId });
   return data.data;
@@ -184,10 +210,10 @@ export async function removeMember(roomId, userId) {
   if (isDevAuthBypass) {
     const room = previewRooms.find((r) => r.id === roomId);
     if (room) {
-      const admins = room.members.filter((m) => m.role === 'admin');
+      const admins = room.members.filter((m) => m.role === "admin");
       const target = room.members.find((m) => m.id === userId);
-      if (target?.role === 'admin' && admins.length <= 1) {
-        throw new Error('A room must keep at least one admin');
+      if (target?.role === "admin" && admins.length <= 1) {
+        throw new Error("A room must keep at least one admin");
       }
       room.members = room.members.filter((m) => m.id !== userId);
       room.member_count = room.members.length;
@@ -203,15 +229,17 @@ export async function setMemberRole(roomId, userId, role) {
     const room = previewRooms.find((r) => r.id === roomId);
     const target = room?.members.find((m) => m.id === userId);
     if (target) {
-      const admins = room.members.filter((m) => m.role === 'admin');
-      if (target.role === 'admin' && role === 'member' && admins.length <= 1) {
-        throw new Error('A room must keep at least one admin');
+      const admins = room.members.filter((m) => m.role === "admin");
+      if (target.role === "admin" && role === "member" && admins.length <= 1) {
+        throw new Error("A room must keep at least one admin");
       }
       target.role = role;
     }
     return { roomId, userId, role };
   }
-  const { data } = await api.patch(`/rooms/${roomId}/members/${userId}`, { role });
+  const { data } = await api.patch(`/rooms/${roomId}/members/${userId}`, {
+    role,
+  });
   return data.data;
 }
 

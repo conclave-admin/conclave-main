@@ -1,13 +1,13 @@
-const { query } = require('../config/db');
-const asyncHandler = require('../utils/asyncHandler');
-const { ok } = require('../utils/apiResponse');
-const ApiError = require('../utils/ApiError');
+const { query } = require("../config/db");
+const asyncHandler = require("../utils/asyncHandler");
+const { ok } = require("../utils/apiResponse");
+const ApiError = require("../utils/ApiError");
 const {
   attachPins,
   getDecisionPayload,
   pinDecision,
   unpinDecision,
-} = require('../services/decisionPin.service');
+} = require("../services/decisionPin.service");
 
 // The Decisions Layer — promote any message to a tagged, searchable
 // Decision stored outside the chat timeline. This is one of the three
@@ -21,7 +21,7 @@ const promoteToDecision = asyncHandler(async (req, res) => {
   const { roomId, sourceMessageId, title, body, tags } = req.body;
 
   if (!roomId || !title || !body) {
-    throw new ApiError(400, 'roomId, title, and body are required');
+    throw new ApiError(400, "roomId, title, and body are required");
   }
 
   // Verify the caller is a member of the room
@@ -30,8 +30,21 @@ const promoteToDecision = asyncHandler(async (req, res) => {
     [roomId, req.user.id],
   );
   if (membership.rows.length === 0) {
-    throw new ApiError(403, 'You are not a member of this room');
+    throw new ApiError(403, "You are not a member of this room");
   }
+
+  if (
+    (
+      await query(
+        "SELECT 1 FROM rooms WHERE id=$1 AND encryption_mode='e2ee-v1'",
+        [roomId],
+      )
+    ).rowCount
+  )
+    throw new ApiError(
+      409,
+      "Server-readable collaboration is unavailable in encrypted conversations",
+    );
 
   // One statement, so the 201 response carries the same joined shape the list
   // and search endpoints return. A bare RETURNING * would hand back eight raw
@@ -83,7 +96,7 @@ const listDecisions = asyncHandler(async (req, res) => {
       [roomId, req.user.id],
     );
     if (membership.rows.length === 0) {
-      throw new ApiError(403, 'You are not a member of this room');
+      throw new ApiError(403, "You are not a member of this room");
     }
     params = [roomId];
     scope = `d.room_id = $1`;
@@ -99,14 +112,13 @@ const listDecisions = asyncHandler(async (req, res) => {
     // The id breaks the tie, and the ORDER BY below matches the comparison so
     // the walk is stable. A cursor without the separator is still accepted, so
     // this stays backward compatible with clients holding an older one.
-    const sep = before.indexOf('|');
+    const sep = before.indexOf("|");
     if (sep === -1) {
       params.push(before);
       scope += ` AND d.created_at < $${params.length}`;
     } else {
       params.push(before.slice(0, sep), before.slice(sep + 1));
-      scope +=
-        ` AND (d.created_at, d.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+      scope += ` AND (d.created_at, d.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
     }
   }
 
@@ -159,7 +171,7 @@ const searchDecisions = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
 
   if (!q || !q.trim()) {
-    throw new ApiError(400, 'Search query (q) is required');
+    throw new ApiError(400, "Search query (q) is required");
   }
 
   // Same parameter-numbering rule as listDecisions above: $1 is the room or
@@ -173,7 +185,7 @@ const searchDecisions = asyncHandler(async (req, res) => {
       [roomId, req.user.id],
     );
     if (membership.rows.length === 0) {
-      throw new ApiError(403, 'You are not a member of this room');
+      throw new ApiError(403, "You are not a member of this room");
     }
     params = [roomId];
     scope = `d.room_id = $1`;
@@ -200,7 +212,7 @@ const searchDecisions = asyncHandler(async (req, res) => {
            -- to backslash, but the term above is only correct under that exact
            -- setting; stating it makes the escaping independent of the
            -- database's standard_conforming_strings configuration.
-           WHERE tag ILIKE '%' || ${ILIKE_ESCAPED_TERM.replace('$TERM', termParam)} || '%' ESCAPE '\\'
+           WHERE tag ILIKE '%' || ${ILIKE_ESCAPED_TERM.replace("$TERM", termParam)} || '%' ESCAPE '\\'
          )
        )
      ORDER BY rank DESC, d.created_at DESC
@@ -238,7 +250,7 @@ const getDecision = asyncHandler(async (req, res) => {
   // membership subquery returns no row either way, and distinguishing them
   // would confirm a UUID exists to someone who cannot see it.
   if (membership.rows.length === 0) {
-    throw new ApiError(403, 'You are not a member of this room');
+    throw new ApiError(403, "You are not a member of this room");
   }
 
   const decision = await getDecisionPayload(decisionId, req.user.id);
@@ -259,7 +271,7 @@ const pinDecisionHandler = asyncHandler(async (req, res) => {
     decisionId,
     userId: req.user.id,
     scope,
-    io: req.app.get('io'),
+    io: req.app.get("io"),
   });
 
   return ok(res, decision);
@@ -277,7 +289,7 @@ const unpinDecisionHandler = asyncHandler(async (req, res) => {
     decisionId,
     userId: req.user.id,
     scope,
-    io: req.app.get('io'),
+    io: req.app.get("io"),
   });
 
   // Removing an absent pin succeeds with no pin to report, matching

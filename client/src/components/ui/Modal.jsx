@@ -1,11 +1,11 @@
-import { useEffect, useId, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import IconClose from '@/assets/icons/close.svg?react';
+import { useEffect, useId, useRef } from "react";
+import { createPortal } from "react-dom";
+import IconClose from "@/assets/icons/close.svg?react";
 
 const SIZES = {
-  sm: 'max-w-sm',
-  md: 'max-w-md',
-  lg: 'max-w-xl',
+  sm: "max-w-sm",
+  md: "max-w-md",
+  lg: "max-w-xl",
 };
 
 /**
@@ -44,8 +44,8 @@ export default function Modal({
   title,
   children,
   footer,
-  size = 'md',
-  className = '',
+  size = "md",
+  className = "",
   fullscreen = false,
   closeDisabled = false,
 }) {
@@ -67,15 +67,15 @@ export default function Modal({
     if (!open) return undefined;
 
     const onKeyDown = (event) => {
-      if (event.key === 'Escape' && !closeDisabled) onClose?.();
+      if (event.key === "Escape" && !closeDisabled) onClose?.();
     };
-    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener("keydown", onKeyDown);
 
     const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    document.body.style.overflow = "hidden";
 
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
     };
   }, [open, onClose, closeDisabled]);
@@ -85,7 +85,7 @@ export default function Modal({
   return createPortal(
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center bg-ink/40 motion-safe:animate-fade-in ${
-        fullscreen ? 'p-0' : 'p-4'
+        fullscreen ? "p-0" : "p-4"
       }`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && canClose) onClose?.();
@@ -99,13 +99,13 @@ export default function Modal({
         tabIndex={-1}
         className={`bg-surface shadow-modal outline-none ${
           fullscreen
-            ? 'flex h-full w-full flex-col'
+            ? "flex h-full w-full flex-col"
             : `w-full ${SIZES[size] ?? SIZES.md} max-h-[90vh] overflow-y-auto rounded-xl`
         } ${className}`}
       >
         <div
           className={`flex items-start justify-between gap-4 border-b border-line px-6 py-5 ${
-            fullscreen ? 'shrink-0' : ''
+            fullscreen ? "shrink-0" : ""
           }`}
         >
           <h2 id={titleId} className="text-h2 text-ink">
@@ -127,8 +127,8 @@ export default function Modal({
         <div
           className={
             fullscreen
-              ? 'min-h-0 flex-1 overflow-hidden text-body text-ink'
-              : 'px-6 py-5 text-body text-ink'
+              ? "min-h-0 flex-1 overflow-hidden text-body text-ink"
+              : "px-6 py-5 text-body text-ink"
           }
         >
           {children}
@@ -137,7 +137,7 @@ export default function Modal({
         {footer && (
           <div
             className={`flex justify-end gap-3 border-t border-line px-6 py-4 ${
-              fullscreen ? 'shrink-0' : ''
+              fullscreen ? "shrink-0" : ""
             }`}
           >
             {footer}

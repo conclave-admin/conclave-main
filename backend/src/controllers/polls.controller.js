@@ -1,14 +1,14 @@
-const asyncHandler = require('../utils/asyncHandler');
-const ApiError = require('../utils/ApiError');
-const { ok } = require('../utils/apiResponse');
-const { createMessage } = require('../services/message.service');
+const asyncHandler = require("../utils/asyncHandler");
+const ApiError = require("../utils/ApiError");
+const { ok } = require("../utils/apiResponse");
+const { createMessage } = require("../services/message.service");
 const {
   validatePollInput,
   insertPoll,
   getPoll,
   castVote,
   closePoll,
-} = require('../services/poll.service');
+} = require("../services/poll.service");
 
 // POST /polls  { roomId, question, options: string[], allowMultiple? }
 //
@@ -20,10 +20,10 @@ const {
 // emits receive-message), so this emits it itself.
 const createPoll = asyncHandler(async (req, res) => {
   const { roomId } = req.body;
-  if (!roomId) throw new ApiError(400, 'roomId is required');
+  if (!roomId) throw new ApiError(400, "roomId is required");
 
   const draft = validatePollInput(req.body);
-  const io = req.app.get('io');
+  const io = req.app.get("io");
 
   const message = await createMessage({
     roomId,
@@ -41,7 +41,7 @@ const createPoll = asyncHandler(async (req, res) => {
       }),
   });
 
-  if (io) io.to(roomId).emit('receive-message', { message });
+  if (io) io.to(roomId).emit("receive-message", { message });
 
   return ok(res, message, 201);
 });
@@ -51,8 +51,8 @@ const createPoll = asyncHandler(async (req, res) => {
 // message wholesale would overwrite those on everyone else's screen.
 async function publishPoll(req, { messageId, roomId }) {
   const poll = await getPoll(messageId);
-  const io = req.app.get('io');
-  if (io) io.to(roomId).emit('poll:updated', { messageId, roomId, poll });
+  const io = req.app.get("io");
+  if (io) io.to(roomId).emit("poll:updated", { messageId, roomId, poll });
   return poll;
 }
 
@@ -69,7 +69,10 @@ const voteOnPoll = asyncHandler(async (req, res) => {
 
 // POST /polls/:pollId/close
 const closePollHandler = asyncHandler(async (req, res) => {
-  const target = await closePoll({ pollId: req.params.pollId, userId: req.user.id });
+  const target = await closePoll({
+    pollId: req.params.pollId,
+    userId: req.user.id,
+  });
   const poll = await publishPoll(req, target);
   return ok(res, { message_id: target.messageId, poll });
 });

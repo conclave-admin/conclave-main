@@ -75,6 +75,7 @@ everything emitted from it are yours.
    when that hook starts sending them.** The digest has no such fallback on
    purpose: re-deriving mentions from text there would reintroduce the rename bug
    on historical rows.
+
 5. **Item I — Message edit, delete, reactions.** DONE. `PATCH /messages/:id`,
    `DELETE /messages/:id`, and `PUT`/`DELETE /messages/:id/reactions`, each
    emitting the whole updated message so open clients need no refetch.
@@ -86,6 +87,7 @@ everything emitted from it are yours.
    That completes items C, A, B, H and I — the differentiator layer. Remaining in
    this lane: global search (item E) below, and the temporary mention fallback
    under item H.
+
 6. **Global search (Item E)** — or decide the navbar icon opens per-room search only.
 
 **Watch out for:**

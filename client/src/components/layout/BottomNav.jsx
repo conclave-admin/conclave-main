@@ -1,15 +1,15 @@
-import { NavLink } from 'react-router-dom';
-import { useChats } from '@/contexts/ChatsContext';
-import IconDecisions from '@/assets/icons/decisions.svg?react';
-import IconHome from '@/assets/icons/home.svg?react';
-import IconMember from '@/assets/icons/member.svg?react';
-import IconTasks from '@/assets/icons/tasks.svg?react';
+import { NavLink } from "react-router-dom";
+import { useChats } from "@/contexts/ChatsContext";
+import IconDecisions from "@/assets/icons/decisions.svg?react";
+import IconHome from "@/assets/icons/home.svg?react";
+import IconMember from "@/assets/icons/member.svg?react";
+import IconTasks from "@/assets/icons/tasks.svg?react";
 
 const tabs = [
-  { to: '/chats', label: 'Chats', Icon: IconHome, end: true },
-  { to: '/tasks', label: 'Tasks', Icon: IconTasks },
-  { to: '/decisions', label: 'Decisions', Icon: IconDecisions },
-  { to: '/profile', label: 'Me', Icon: IconMember },
+  { to: "/chats", label: "Chats", Icon: IconHome, end: true },
+  { to: "/tasks", label: "Tasks", Icon: IconTasks },
+  { to: "/decisions", label: "Decisions", Icon: IconDecisions },
+  { to: "/profile", label: "Me", Icon: IconMember },
 ];
 
 /**
@@ -40,15 +40,15 @@ export default function BottomNav() {
           to={to}
           className={({ isActive }) =>
             `flex min-h-14 flex-col items-center justify-center gap-1 px-1 transition-colors ${
-              isActive ? 'text-brand' : 'text-muted'
+              isActive ? "text-brand" : "text-muted"
             }`
           }
         >
           <span className="relative">
             <Icon className="h-5 w-5" aria-hidden="true" />
-            {to === '/chats' && unreadTotal > 0 && (
+            {to === "/chats" && unreadTotal > 0 && (
               <span className="absolute -right-2 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-metadata font-semibold text-surface">
-                {unreadTotal > 99 ? '99+' : unreadTotal}
+                {unreadTotal > 99 ? "99+" : unreadTotal}
               </span>
             )}
           </span>

@@ -1,35 +1,37 @@
-import { lazy, Suspense } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
-import AppShell from './components/layout/AppShell';
-import ProtectedRoute from './components/routing/ProtectedRoute';
-import PublicOnlyRoute from './components/routing/PublicOnlyRoute';
-import Spinner from './components/ui/Spinner';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { PushProvider } from './contexts/PushContext';
-import { SyncProvider } from './contexts/SyncContext';
-import { RealtimeProvider } from './contexts/RealtimeContext';
-import { OutboxProvider } from './contexts/OutboxContext';
-import { ThemeProvider } from './contexts/ThemeContext';
-import { ToastProvider } from './contexts/ToastContext';
-import StaticPage from './pages/StaticPage';
+import { lazy, Suspense } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
+import AppShell from "./components/layout/AppShell";
+import ProtectedRoute from "./components/routing/ProtectedRoute";
+import PublicOnlyRoute from "./components/routing/PublicOnlyRoute";
+import Spinner from "./components/ui/Spinner";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { PushProvider } from "./contexts/PushContext";
+import { SyncProvider } from "./contexts/SyncContext";
+import EncryptionLifecycle from "./components/settings/EncryptionLifecycle";
+import { RealtimeProvider } from "./contexts/RealtimeContext";
+import { OutboxProvider } from "./contexts/OutboxContext";
+import { ThemeProvider } from "./contexts/ThemeContext";
+import { ToastProvider } from "./contexts/ToastContext";
+import StaticPage from "./pages/StaticPage";
 
-const CatchUpDigestPage = lazy(() => import('./pages/CatchUpDigestPage'));
-const Chats = lazy(() => import('./pages/Chats'));
-const Decisions = lazy(() => import('./pages/Decisions'));
-const DiscoverRooms = lazy(() => import('./pages/DiscoverRooms'));
-const DecisionDetail = lazy(() => import('./pages/DecisionDetail'));
-const Login = lazy(() => import('./pages/Login'));
-const NewChat = lazy(() => import('./pages/NewChat'));
-const Notifications = lazy(() => import('./pages/Notifications'));
-const Profile = lazy(() => import('./pages/Profile'));
-const Register = lazy(() => import('./pages/Register'));
-const Room = lazy(() => import('./pages/Room'));
-const RoomInfo = lazy(() => import('./pages/RoomInfo'));
-const Settings = lazy(() => import('./pages/Settings'));
-const Tasks = lazy(() => import('./pages/Tasks'));
+const CatchUpDigestPage = lazy(() => import("./pages/CatchUpDigestPage"));
+const Chats = lazy(() => import("./pages/Chats"));
+const Decisions = lazy(() => import("./pages/Decisions"));
+const DiscoverRooms = lazy(() => import("./pages/DiscoverRooms"));
+const DecisionDetail = lazy(() => import("./pages/DecisionDetail"));
+const Login = lazy(() => import("./pages/Login"));
+const NewChat = lazy(() => import("./pages/NewChat"));
+const Notifications = lazy(() => import("./pages/Notifications"));
+const Profile = lazy(() => import("./pages/Profile"));
+const Register = lazy(() => import("./pages/Register"));
+const AccountRecovery = lazy(() => import("./pages/AccountRecovery"));
+const Room = lazy(() => import("./pages/Room"));
+const RoomInfo = lazy(() => import("./pages/RoomInfo"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Tasks = lazy(() => import("./pages/Tasks"));
 
 // Keep public-page illustrations and content outside the signed-in app bundle.
-const Landing = lazy(() => import('./pages/Landing'));
+const Landing = lazy(() => import("./pages/Landing"));
 
 /**
  * `/` is the public landing page.
@@ -63,64 +65,92 @@ export default function App() {
     <ThemeProvider>
       <ToastProvider>
         <AuthProvider>
+          <EncryptionLifecycle />
           <RealtimeProvider>
             <SyncProvider>
-            <PushProvider>
-            <OutboxProvider>
-            <Suspense fallback={<Spinner fullPage label="Loading" />}>
-            <Routes>
-              <Route path="/" element={<LandingRoute />} />
+              <PushProvider>
+                <OutboxProvider>
+                  <Suspense fallback={<Spinner fullPage label="Loading" />}>
+                    <Routes>
+                      <Route path="/" element={<LandingRoute />} />
+                      <Route
+                        path="/account/:kind"
+                        element={<AccountRecovery />}
+                      />
 
-              <Route element={<PublicOnlyRoute />}>
-                <Route path="/login" element={<Login />} />
-                <Route path="/register" element={<Register />} />
-              </Route>
+                      <Route element={<PublicOnlyRoute />}>
+                        <Route path="/login" element={<Login />} />
+                        <Route path="/register" element={<Register />} />
+                      </Route>
 
-              {/* Placeholders behind the landing footer. They render an honest
+                      {/* Placeholders behind the landing footer. They render an honest
                   empty state rather than invented pricing or legal copy. */}
-              <Route path="/pricing" element={<StaticPage title="Pricing" />} />
-              <Route path="/privacy" element={<StaticPage title="Privacy" />} />
-              <Route path="/terms" element={<StaticPage title="Terms" />} />
+                      <Route
+                        path="/pricing"
+                        element={<StaticPage title="Pricing" />}
+                      />
+                      <Route
+                        path="/privacy"
+                        element={<StaticPage title="Privacy" />}
+                      />
+                      <Route
+                        path="/terms"
+                        element={<StaticPage title="Terms" />}
+                      />
 
-              <Route element={<ProtectedRoute />}>
-                <Route element={<AppShell />}>
-                  {/* Target of the post-auth redirect. Two panes: the list,
+                      <Route element={<ProtectedRoute />}>
+                        <Route element={<AppShell />}>
+                          {/* Target of the post-auth redirect. Two panes: the list,
                       and the open conversation — both keyed off this URL so a
                       filtered or deep-linked view survives a reload. */}
-                  <Route path="/chats" element={<Chats />}>
-                    <Route path=":roomId" element={<Room />} />
-                    <Route path=":roomId/info" element={<RoomInfo />} />
-                  </Route>
+                          <Route path="/chats" element={<Chats />}>
+                            <Route path=":roomId" element={<Room />} />
+                            <Route path=":roomId/info" element={<RoomInfo />} />
+                          </Route>
 
-                  {/* The sidebar has always linked to /dms. Rather than
+                          {/* The sidebar has always linked to /dms. Rather than
                       maintain a second list component, it resolves into the
                       same one with the DMs chip selected — one implementation,
                       and the chip and the route cannot disagree. */}
-                  <Route path="/dms" element={<Navigate to="/chats?filter=dms" replace />} />
+                          <Route
+                            path="/dms"
+                            element={
+                              <Navigate to="/chats?filter=dms" replace />
+                            }
+                          />
 
-                  {/* Stub behind the sidebar's "Invite members" and the mobile
+                          {/* Stub behind the sidebar's "Invite members" and the mobile
                       compose button. */}
-                  <Route path="/new" element={<NewChat />} />
-                  <Route path="/discover" element={<DiscoverRooms />} />
+                          <Route path="/new" element={<NewChat />} />
+                          <Route path="/discover" element={<DiscoverRooms />} />
 
-                  <Route path="/profile" element={<Profile />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="/notifications" element={<Notifications />} />
-                  <Route path="/decisions" element={<Decisions />} />
-                  {/* Registered as a sibling, not a child of /decisions: the
+                          <Route path="/profile" element={<Profile />} />
+                          <Route path="/settings" element={<Settings />} />
+                          <Route
+                            path="/notifications"
+                            element={<Notifications />}
+                          />
+                          <Route path="/decisions" element={<Decisions />} />
+                          {/* Registered as a sibling, not a child of /decisions: the
                       board is a list page and the detail page is a different
                       layout, not a nested view of it. */}
-                  <Route path="/decisions/:decisionId" element={<DecisionDetail />} />
-                  <Route path="/digest" element={<CatchUpDigestPage />} />
-                  <Route path="/tasks" element={<Tasks />} />
-                </Route>
-              </Route>
+                          <Route
+                            path="/decisions/:decisionId"
+                            element={<DecisionDetail />}
+                          />
+                          <Route
+                            path="/digest"
+                            element={<CatchUpDigestPage />}
+                          />
+                          <Route path="/tasks" element={<Tasks />} />
+                        </Route>
+                      </Route>
 
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-            </Suspense>
-            </OutboxProvider>
-            </PushProvider>
+                      <Route path="*" element={<Navigate to="/" replace />} />
+                    </Routes>
+                  </Suspense>
+                </OutboxProvider>
+              </PushProvider>
             </SyncProvider>
           </RealtimeProvider>
         </AuthProvider>

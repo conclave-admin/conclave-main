@@ -110,7 +110,6 @@ Configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and a real public contact in
 See [synchronization and push setup](docs/SYNC_AND_PUSH.md) for key generation,
 privacy policy, subscription lifecycle, and the required live acceptance checks.
 
-
 Import the root `render.yaml` as a Render Blueprint. It explicitly selects the
 free web-service plan and creates only the API service, with these settings:
 
@@ -176,7 +175,6 @@ Cloudinary-backed upload round trips still require configured credentials.
 Exercise discovery/join, private-room denial, message history, and socket events
 with two real accounts before making the service public.
 
-
 ## Albums and resumable media
 
 Apply backend migrations 028 and 029. Review [private media operations](docs/MEDIA_STORAGE.md)
@@ -206,7 +204,6 @@ two Socket.IO servers with a real Redis adapter, multiple devices, join/removal
 races, refresh rotation, logout, and idle expiry. For client removal checks run
 `cd client && npx playwright test --config=playwright.realtime-access.config.js`.
 
-
 ### Phase 2 receipt rollout
 
 Run `cd backend && npm run migrate` before deploying the updated API and client.
@@ -216,3 +213,32 @@ messages are marked as having incomplete recipient history; departed recipients
 and historical acknowledgement times cannot be reconstructed. No new environment
 variables or services are required. Deploy the API and client together so ticks
 use send-time summaries and automatic reads use foreground viewport checks.
+
+## Phase 5 privacy and encryption rollout
+
+1. Apply migrations `036_privacy_and_account_security.sql` and
+   `037_device_encryption.sql` with `cd backend && npm run migrate` before
+   starting the updated API. Existing rooms retain server-readable history.
+2. Deploy API instances and client together. Redis adapter and durable sync
+   dispatcher must run on each instance for session/device invalidations.
+3. Configure the Resend API with `RESEND_API_KEY`, `RESEND_FROM` (a sender
+   on a verified domain),
+   `APP_PUBLIC_URL`, and stable `MAIL_ENCRYPTION_KEY` (32 random bytes in
+   base64url). Use backend `.env.example`; never expose secrets through Vite.
+   Mail jobs are encrypted in PostgreSQL and dispatched by the API every five
+   seconds. Keep the queue key identical across instances. No extra mail daemon
+   is required. Test actual Resend inbox delivery before enabling recovery to users.
+4. Serve HTTPS and support Web Locks, IndexedDB, and WebAssembly. Back up the
+   database and mail queue key securely; those backups cannot decrypt message
+   content without device keys. Users must save their separate recovery keys.
+5. Read [PRIVACY_AND_ENCRYPTION.md](docs/PRIVACY_AND_ENCRYPTION.md) before product
+   claims. The custom protocol has no forward secrecy/ratchet or independent
+   audit; schedule independent security review and real-device testing before
+   broad rollout. `group` and `department` remain server-readable collaboration
+   even if membership is restricted; explicit `private` rooms and DMs encrypt.
+
+Verification: run `npm test && npm run test:db` from `backend`, then `npm test`,
+`npx playwright test --config playwright.security.config.js`, and
+`npx playwright test --config playwright.recovery.config.js` from `client`. Browser security tests use a disposable real API/database
+and mocked R2 (no actual bucket or email delivery). Live storage/mail and deployed
+HTTPS checks remain separate release requirements.

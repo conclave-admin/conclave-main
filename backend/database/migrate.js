@@ -32,7 +32,7 @@ async function migrate() {
     // Use the same session for the lock and migrations. Rolling deploys may
     // briefly start two runners; only one may inspect/apply the ledger at once.
     await client.query("SET lock_timeout = '60s'");
-    await client.query('SELECT pg_advisory_lock(1835102825, 1)');
+    await client.query("SELECT pg_advisory_lock(1835102825, 1)");
     locked = true;
     // Bootstrap the tracking table. CREATE TABLE IF NOT EXISTS makes this
     // safe on a database that has never been migrated and on one that has.
@@ -61,7 +61,9 @@ async function migrate() {
       console.log(
         `Baselining ${missing.length} file(s) as already applied: ${missing.join(", ")}`,
       );
-      console.log("These were NOT executed. Apply any that are genuinely missing by hand.");
+      console.log(
+        "These were NOT executed. Apply any that are genuinely missing by hand.",
+      );
       for (const file of missing) {
         await client.query(
           "INSERT INTO schema_migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING",
@@ -101,7 +103,8 @@ async function migrate() {
     console.log("All migrations complete.");
   } finally {
     try {
-      if (locked) await client.query('SELECT pg_advisory_unlock(1835102825, 1)');
+      if (locked)
+        await client.query("SELECT pg_advisory_unlock(1835102825, 1)");
     } finally {
       client.release();
       await pool.end();

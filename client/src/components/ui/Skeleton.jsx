@@ -12,10 +12,10 @@
  * @param {string} [className] - dimensions, e.g. `h-4 w-40`
  * @param {boolean} [circle]   - for avatars
  */
-export default function Skeleton({ className = '', circle = false }) {
+export default function Skeleton({ className = "", circle = false }) {
   return (
     <div
-      className={`animate-pulse bg-line/70 ${circle ? 'rounded-full' : 'rounded-lg'} ${className}`}
+      className={`animate-pulse bg-line/70 ${circle ? "rounded-full" : "rounded-lg"} ${className}`}
       aria-hidden="true"
     />
   );
