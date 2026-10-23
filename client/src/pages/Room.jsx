@@ -333,7 +333,7 @@ export default function Room() {
   }
 
   return (
-    <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-surface">
+    <section className="grid h-full min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)_auto] conversation-canvas">
       {/*
         Rows are addressed explicitly rather than by source order.
         PinnedDecisionStrip returns null for any room with no pins, and a null
@@ -491,7 +491,7 @@ export default function Room() {
           )}
         </div>
       ) : (
-        <div className="row-start-3">
+        <div className="chat-composer row-start-3">
           {room.member_can_send === false && room.my_role !== "admin" && (
             <p role="status" className="px-4 text-body text-muted">
               Only admins can send messages in this room.

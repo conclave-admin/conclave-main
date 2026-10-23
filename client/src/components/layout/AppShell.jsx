@@ -147,13 +147,13 @@ export default function AppShell() {
         <ChatsProvider>
           <div
             style={{ "--rail-w": expanded ? "240px" : "72px" }}
-            className="grid h-dvh min-h-0 grid-cols-1 bg-canvas text-ink md:grid-cols-[var(--rail-w)_1fr] motion-safe:md:transition-[grid-template-columns] motion-safe:md:duration-200"
+            className="app-shell grid h-dvh min-h-0 grid-cols-1 bg-canvas text-ink md:grid-cols-[var(--rail-w)_1fr] motion-safe:md:transition-[grid-template-columns] motion-safe:md:duration-200"
           >
             <QuickSwitcher
               open={switcherOpen}
               onClose={() => setSwitcherOpen(false)}
             />
-            <aside className="hidden min-h-0 border-r border-line bg-surface md:block">
+            <aside className="app-rail hidden min-h-0 border-r border-line bg-surface md:block">
               <NavRail collapsed={!expanded} />
             </aside>
 
@@ -165,7 +165,7 @@ export default function AppShell() {
                 onMenuClick={toggleSidebar}
                 menuLabel={sidebarLabel}
               />
-              <main className="min-h-0 min-w-0 overflow-hidden bg-surface">
+              <main className="min-h-0 min-w-0 overflow-hidden bg-canvas">
                 <Outlet context={{ setRoomHeader }} />
               </main>
               <BottomNav />

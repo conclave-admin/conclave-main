@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
+import Modal from "./Modal";
 import { resolveAvatarUrl } from "@/services/users.service";
 
 const SIZES = {
   // Sized against the existing primitives: sm is a chat-list row, md is a
   // message or a member row, lg is a profile header.
-  sm: "h-8 w-8 text-metadata",
-  md: "h-10 w-10 text-label",
-  lg: "h-16 w-16 text-h2",
+  sm: "h-9 w-9 text-metadata",
+  md: "h-12 w-12 text-label",
+  lg: "h-20 w-20 text-h2",
 };
 
 export function initialsOf(name = "") {
@@ -36,6 +37,7 @@ export default function Avatar({
   presence,
   className = "",
 }) {
+  const [expanded, setExpanded] = useState(false);
   const box = `${SIZES[size] ?? SIZES.md} shrink-0 rounded-full ${className}`;
   const [imageSrc, setImageSrc] = useState(null);
   const [imageFailed, setImageFailed] = useState(false);
@@ -70,13 +72,44 @@ export default function Avatar({
   }, [src]);
 
   const face =
-    imageSrc && !imageFailed ? (
+    imageSrc && !imageFailed && size !== "lg" ? (
       <img
         src={imageSrc}
         alt=""
         onError={() => setImageFailed(true)}
         className={`${box} object-cover`}
       />
+    ) : imageSrc && !imageFailed ? (
+      <>
+        <button
+          type="button"
+          aria-label={`View ${name || "profile"} photo`}
+          className="shrink-0 rounded-full"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setExpanded(true);
+          }}
+        >
+          <img
+            src={imageSrc}
+            alt=""
+            onError={() => setImageFailed(true)}
+            className={`${box} object-cover`}
+          />
+        </button>
+        <Modal
+          open={expanded}
+          title={`${name || "Profile"} photo`}
+          onClose={() => setExpanded(false)}
+        >
+          <img
+            src={imageSrc}
+            alt={`${name || "Profile"} photo`}
+            className="max-h-[75dvh] w-full object-contain"
+          />
+        </Modal>
+      </>
     ) : (
       // initials rather than a grey circle: the message list currently draws an
       // unlabelled placeholder, which says nothing about who is talking.
@@ -88,7 +121,7 @@ export default function Avatar({
       </span>
     );
 
-  if (!presence) return face;
+  if (presence !== "online") return face;
 
   return (
     <span className="relative inline-flex shrink-0">

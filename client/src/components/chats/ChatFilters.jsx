@@ -56,12 +56,12 @@ export default function ChatFilters() {
     { value: "", label: "All" },
     { value: "unread", label: "Unread" },
     { value: "groups", label: "Groups" },
-    { value: "dms", label: "DMs" },
+    { value: "dms", label: "Direct" },
     { value: "archived", label: "Archived" },
   ];
 
   return (
-    <div className="sticky top-0 z-10 border-b border-line bg-surface px-3 pb-3 pt-3">
+    <div className="sticky top-0 z-10 border-b border-line/60 bg-surface px-4 pb-4 pt-4">
       <div className="flex items-center gap-2">
         <label className="relative block min-w-0 flex-1">
           <span className="sr-only">Search chats</span>
@@ -74,7 +74,7 @@ export default function ChatFilters() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search chats"
-            className="min-h-10 w-full rounded-lg border border-line bg-canvas pl-9 pr-3 text-body text-ink outline-none transition-shadow placeholder:text-muted/70 focus:border-brand focus:ring-2 focus:ring-brand/15"
+            className="min-h-10 w-full rounded-xl border border-transparent bg-canvas pl-9 pr-3 text-body text-ink outline-none transition-shadow placeholder:text-muted/70 focus:border-brand focus:ring-2 focus:ring-brand/15"
           />
         </label>
 
@@ -82,7 +82,7 @@ export default function ChatFilters() {
           to="/new"
           aria-label="New chat"
           title="New chat"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-brand text-surface transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand text-white transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
         >
           <IconCompose className="h-5 w-5" aria-hidden="true" />
         </Link>
@@ -97,7 +97,7 @@ export default function ChatFilters() {
               type="button"
               aria-pressed={selected}
               onClick={() => selectFilter(filter.value)}
-              className={`min-h-8 shrink-0 rounded-full px-3 text-label transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
+              className={`min-h-10 shrink-0 rounded-full px-3 text-label transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
                 selected
                   ? "bg-brand font-semibold text-surface"
                   : "bg-canvas text-muted hover:text-ink"

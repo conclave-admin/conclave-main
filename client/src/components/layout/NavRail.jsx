@@ -21,7 +21,7 @@ const primaryNav = [
 ];
 
 const itemBase =
-  "mx-3 flex h-10 shrink-0 items-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30";
+  "mx-3 flex h-12 shrink-0 items-center rounded-2xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30";
 
 function RailItem({ to, end, label, Icon, badge = 0, collapsed, onNavigate }) {
   return (
@@ -84,13 +84,7 @@ export default function NavRail({ collapsed = false, onNavigate }) {
         aria-label="Conclave, home"
         className={`mb-6 flex shrink-0 items-center ${collapsed ? "justify-center" : "px-6"}`}
       >
-        {collapsed ? (
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand text-h2 text-surface">
-            C
-          </span>
-        ) : (
-          <Logo />
-        )}
+        {collapsed ? <Logo withWordmark={false} /> : <Logo />}
       </NavLink>
 
       <nav aria-label="Workspace" className="flex flex-col gap-1.5">
@@ -122,7 +116,7 @@ export default function NavRail({ collapsed = false, onNavigate }) {
           title={collapsed ? displayName : undefined}
           aria-label={collapsed ? `Profile, ${displayName}` : undefined}
           className={({ isActive }) =>
-            `mx-3 mt-1.5 flex h-12 shrink-0 items-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
+            `mx-3 mt-1.5 flex h-12 shrink-0 items-center rounded-2xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
               collapsed ? "justify-center" : "gap-3 px-3"
             } ${isActive ? "bg-brand-soft" : "hover:bg-canvas"}`
           }

@@ -65,21 +65,19 @@ export default function RoomHeader({ room, isConnected }) {
           <h1 className="truncate text-sm font-bold leading-5 text-ink md:text-base">
             {title}
           </h1>
-          <span
-            className={`h-2 w-2 shrink-0 rounded-full md:hidden ${
-              isConnected ? "bg-success" : "bg-line"
-            }`}
-            aria-hidden="true"
-          />
         </div>
         <p className="mt-0.5 text-[11px] leading-4 text-muted md:text-xs">
-          {room.encryption_mode === "e2ee-v1" ? "Encrypted · " : ""}
           {isDm
             ? labelFor(room.id, peer?.id)
             : `${room.members?.length || 0} members`}
-          <span>
+          <span hidden={isOnline && isConnected}>
             {" "}
-            · {!isOnline ? "Offline · messages queued" : isConnected ? "Live" : "Connecting…"}
+            ·{" "}
+            {!isOnline
+              ? "Offline · messages queued"
+              : isConnected
+                ? ""
+                : "Connecting…"}
           </span>
         </p>
       </div>

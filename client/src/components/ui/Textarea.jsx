@@ -55,7 +55,7 @@ export default function Textarea({
         id={id}
         rows={rows}
         value={value}
-        className={`block w-full resize-none overflow-y-auto rounded-lg border bg-surface px-3.5 py-2.5 text-sm text-ink outline-none transition-shadow placeholder:text-muted/70 focus:border-brand focus:ring-2 focus:ring-brand/15 ${error ? "border-error" : "border-line"} ${className}`}
+        className={`block w-full resize-none overflow-y-auto rounded-xl border bg-canvas/60 px-3.5 py-2.5 text-sm text-ink outline-none transition-shadow placeholder:text-muted/70 focus:border-brand focus:ring-2 focus:ring-brand/15 ${error ? "border-error" : "border-line"} ${className}`}
         {...props}
       />
       {error && (

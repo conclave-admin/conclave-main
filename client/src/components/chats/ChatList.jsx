@@ -55,12 +55,12 @@ export default function ChatList() {
   const filtered = Boolean(filter || query.trim());
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="chat-inbox flex h-full min-h-0 flex-col">
       <ChatFilters />
 
       <CatchUpCard />
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-4">
         {isLoading && !rooms.length && <Spinner label="Loading chats" />}
 
         {error && (
@@ -84,7 +84,7 @@ export default function ChatList() {
         )}
 
         {!isLoading && visibleRooms.length > 0 && (
-          <ul className="flex flex-col gap-1">
+          <ul className="flex flex-col gap-0.5">
             {visibleRooms.map((room) => (
               <ChatRow key={room.id} room={room} />
             ))}

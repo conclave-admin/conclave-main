@@ -128,10 +128,10 @@ export default function Message({
   const showAvatar = !albumTile && !mine && !message._consecutive;
 
   const bubbleClass = [
-    "px-3 py-2 text-body [overflow-wrap:anywhere]",
+    "message-bubble px-3.5 py-2.5 text-body [overflow-wrap:anywhere]",
     albumTile ? "pr-9" : "",
     "rounded-2xl",
-    mine ? "bg-brand text-surface" : "bg-canvas text-ink",
+    mine ? "message-bubble-out" : "message-bubble-in text-ink",
     message._endsGroup ? (mine ? "rounded-br-md" : "rounded-bl-md") : "",
     message.is_deleted ? "italic" : "",
     "[-webkit-touch-callout:none] [@media(hover:none)]:select-none",
@@ -160,7 +160,7 @@ export default function Message({
         // Keeps a run of messages aligned under the first one's text rather
         // than sliding left into the avatar column.
         !albumTile &&
-        !mine && <span className="h-10 w-10 shrink-0" aria-hidden="true" />
+        !mine && <span className="h-12 w-12 shrink-0" aria-hidden="true" />
       )}
 
       <div

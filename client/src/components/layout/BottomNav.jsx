@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { useMatch, NavLink } from "react-router-dom";
 import { useChats } from "@/contexts/ChatsContext";
 import IconDecisions from "@/assets/icons/decisions.svg?react";
 import IconHome from "@/assets/icons/home.svg?react";
@@ -26,7 +26,10 @@ const tabs = [
  * shift width when tapped reads as a layout error.
  */
 export default function BottomNav() {
+  const conversationOpen = useMatch("/chats/:roomId/*");
   const { unreadTotal } = useChats();
+
+  if (conversationOpen) return null;
 
   return (
     <nav

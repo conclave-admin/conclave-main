@@ -354,6 +354,7 @@ const listRooms = asyncHandler(async (req, res) => {
         ORDER BY m.room_sequence DESC
         LIMIT 1
      ) lm ON TRUE
+     WHERE rmp.hidden_sequence IS NULL OR r.message_sequence > rmp.hidden_sequence
      ORDER BY COALESCE(lm.created_at, r.created_at) DESC, r.id DESC`,
     [req.user.id],
   );

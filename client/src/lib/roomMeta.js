@@ -46,6 +46,8 @@ export function formatRoomTime(value, now = new Date()) {
 export function formatRoomPreview(message) {
   if (!message) return "No messages yet";
   if (message.is_deleted) return "Message deleted";
+  if (message.content === "[Encrypted message]" || message._cryptoError)
+    return "Message unavailable on this device";
   if (message.content) return message.content;
   if (message.has_attachment) {
     if (message.attachment_type?.startsWith("image/")) return "Photo";

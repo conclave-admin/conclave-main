@@ -142,7 +142,12 @@ export default function Settings() {
       </p>
 
       <PrivacySecuritySettings />
-      <EncryptionSettings />
+      <details className="mt-6 rounded-xl border border-line p-4">
+        <summary className="cursor-pointer text-label text-ink">
+          Security and recovery
+        </summary>
+        <EncryptionSettings />
+      </details>
 
       <section className="mt-8 rounded-xl border border-line bg-surface p-6">
         <h2 className="text-h2 text-ink">Appearance</h2>
