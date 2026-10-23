@@ -51,7 +51,8 @@ export default function DiscoverRooms() {
   async function join(room) {
     setJoining(room.id);
     try {
-      await joinPublicRoom(room.id);
+      const result=await joinPublicRoom(room.id);
+      if(result.status==='pending'){toast({title:"Join request sent",description:"An admin must approve your request."});return;}
       toast({ title: `Joined ${room.name}`, tone: "success" });
       navigate(`/chats/${room.id}`);
     } catch (err) {

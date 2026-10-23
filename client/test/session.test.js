@@ -162,3 +162,36 @@ test("stable session identity survives token rotation and disappears on logout",
   clearSession();
   assert.equal(getSessionId(), null);
 });
+
+function userToken(sub) {
+  return `header.${btoa(JSON.stringify({ sub }))}.signature`;
+}
+
+test("late successful responses cannot cross an account switch", async () => {
+  saveSession({
+    accessToken: userToken("alice"),
+    refreshToken: "alice-refresh",
+  });
+  respond = async (config) => {
+    saveSession({ accessToken: userToken("bob"), refreshToken: "bob-refresh" });
+    return success(config, { private: "alice data" });
+  };
+  await assert.rejects(api.get("/rooms/private"), (err) => axios.isCancel(err));
+  assert.equal(stored.get("refreshToken"), "bob-refresh");
+});
+
+test("late 401 responses cannot refresh or replay as another account", async () => {
+  saveSession({
+    accessToken: userToken("alice"),
+    refreshToken: "alice-refresh",
+  });
+  let calls = 0;
+  respond = async (config) => {
+    calls++;
+    saveSession({ accessToken: userToken("bob"), refreshToken: "bob-refresh" });
+    return reject(config, 401);
+  };
+  await assert.rejects(api.get("/rooms/private"));
+  assert.equal(calls, 1);
+  assert.equal(stored.get("refreshToken"), "bob-refresh");
+});

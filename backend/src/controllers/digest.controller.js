@@ -75,7 +75,7 @@ const getRoomDigest = asyncHandler(async (req, res) => {
      FROM message_mentions mm
      INNER JOIN messages m ON m.id = mm.message_id
      INNER JOIN users u ON u.id = m.sender_id
-     WHERE m.room_id = $1
+     WHERE m.room_id = $1 AND message_visible(m.id,$3)
        AND m.created_at > $2
        AND mm.user_id = $3
        AND m.sender_id != $3
@@ -92,11 +92,11 @@ const getRoomDigest = asyncHandler(async (req, res) => {
      FROM attachments a
      INNER JOIN messages m ON m.id = a.message_id
      INNER JOIN users u ON u.id = m.sender_id
-     WHERE m.room_id = $1 AND a.created_at > $2
+     WHERE m.room_id = $1 AND message_visible(m.id,$3) AND a.created_at > $2
        AND m.deleted_at IS NULL
      ORDER BY a.created_at DESC
      LIMIT 20`,
-    [roomId, lastSeenAt],
+    [roomId, lastSeenAt, req.user.id],
   );
 
   // 6. Activity count (total new messages since the digest was last marked).
@@ -112,8 +112,8 @@ const getRoomDigest = asyncHandler(async (req, res) => {
   const activity = await query(
     `SELECT COUNT(*)::int AS message_count, MAX(created_at) AS last_activity_at
      FROM messages
-     WHERE room_id = $1 AND created_at > $2 AND deleted_at IS NULL`,
-    [roomId, lastSeenAt],
+     WHERE room_id = $1 AND created_at > $2 AND deleted_at IS NULL AND message_visible(id,$3)`,
+    [roomId, lastSeenAt, req.user.id],
   );
 
   const items = [
@@ -250,7 +250,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
      INNER JOIN rooms r ON r.id = m.room_id
      INNER JOIN users u ON u.id = m.sender_id
      INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-     WHERE m.room_id = ANY($1)
+     WHERE m.room_id = ANY($1) AND message_visible(m.id,$2)
        AND mm.user_id = $2
        AND m.sender_id != $2
        AND m.deleted_at IS NULL
@@ -269,7 +269,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
      INNER JOIN rooms r ON r.id = m.room_id
      INNER JOIN users u ON u.id = m.sender_id
      INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-     WHERE m.room_id = ANY($1)
+     WHERE m.room_id = ANY($1) AND message_visible(m.id,$2)
        AND a.created_at > rm.digest_seen_at
      ORDER BY a.created_at DESC
      LIMIT 50`,
@@ -288,7 +288,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
      FROM messages m
      INNER JOIN rooms r ON r.id = m.room_id
      INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-     WHERE m.room_id = ANY($1)
+     WHERE m.room_id = ANY($1) AND message_visible(m.id,$2)
        AND m.created_at > rm.digest_seen_at
        AND m.deleted_at IS NULL
      GROUP BY m.room_id, r.name`,

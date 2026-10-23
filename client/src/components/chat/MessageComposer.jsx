@@ -42,7 +42,7 @@ const MAX_LINES = 5;
  * Selected files and captions are saved to the account outbox before the
  * editor closes. Upload progress and retry controls then live in the timeline.
  *
- * @param {boolean} disabled - no realtime connection
+ * @param {boolean} disabled - conversation permissions prevent sending
  * @param {(payload: object) => void} onSend
  * @param {Array} members - room members, for the mention picker
  * @param {() => void} onTyping - emits a typing event, throttled by this composer
@@ -563,6 +563,7 @@ export default function MessageComposer({
         </div>
 
         <textarea
+          disabled={disabled}
           ref={textareaRef}
           value={content}
           onChange={handleTextChange}
@@ -604,6 +605,7 @@ export default function MessageComposer({
         files={pendingFiles}
         initialCaption={content}
         sending={sending}
+        sendDisabled={disabled}
         error={error}
         onSend={submitPreview}
         onCancel={cancelPreview}

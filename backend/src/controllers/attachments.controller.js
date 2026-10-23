@@ -125,7 +125,7 @@ const getAttachment = asyncHandler(async (req, res) => {
        FROM attachments a
        INNER JOIN messages m ON m.id = a.message_id
        INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-      WHERE a.id = $1 AND m.deleted_at IS NULL`,
+      WHERE a.id = $1 AND message_visible(m.id,$2) AND m.deleted_at IS NULL`,
     [attachmentId, req.user.id],
   );
 
@@ -214,7 +214,7 @@ const getAttachmentUrl = asyncHandler(async (req, res) => {
        FROM attachments a
        INNER JOIN messages m ON m.id = a.message_id
        INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-      WHERE a.id = $1 AND m.deleted_at IS NULL`,
+      WHERE a.id = $1 AND message_visible(m.id,$2) AND m.deleted_at IS NULL`,
     [attachmentId, req.user.id],
   );
   if (!result.rows.length) throw new ApiError(404, "Attachment not found");
@@ -267,7 +267,7 @@ const getAttachmentPreviewUrl = asyncHandler(async (req, res) => {
        FROM attachments a
        INNER JOIN messages m ON m.id = a.message_id
        INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-      WHERE a.id = $1 AND m.deleted_at IS NULL`,
+      WHERE a.id = $1 AND message_visible(m.id,$2) AND m.deleted_at IS NULL`,
     [attachmentId, req.user.id],
   );
   if (!result.rows.length) throw new ApiError(404, "Attachment not found");

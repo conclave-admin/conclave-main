@@ -6,6 +6,10 @@ Use each **Title** as the GitHub issue title and copy its description, source, d
 
 Completed Phase 1–3 and Phase 5 implementation items are excluded. Remaining Phase 4–5 release acceptance is included. Related open checkboxes are grouped, with source IDs retained. Where existing work overlaps an open checkbox, the draft asks for verification and demonstrated fixes rather than assuming the feature is absent. The detailed Phase 5 section takes precedence over its stale “Not started” entry in the tracker summary.
 
+Phase 6 drafts GH-06–GH-16 are retained with completion status for tracking.
+Their local implementation is complete; see `docs/ROOMS_AND_PERSONAL_HISTORY.md`
+and the latest Phase 6 progress entry in `issue.md` for evidence and rollout.
+
 ## Suggested order
 
 1. P1: verify live push/email and complete encryption security/storage/protocol reviews.
@@ -163,24 +167,26 @@ Implemented inline audio playback, speed/seeking/duration controls, explicit pre
 ## GH-07
 
 **Title:** Verify receipt details and live updates across conversation info pages
+**Status:** Complete — local automated acceptance; deployment/physical-device acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `conversation-info`, `synchronization`, `validation`
 **Tracker source:** 6.4, 6.8
 
 ### Description
 
-Per-message receipt information and synchronization already exist in Phases 2–3. Audit their exposure and freshness in information pages, then fix demonstrated gaps.
+Audited sender-only receipt information and added open-dialog synchronization for privacy, membership, profile, and replay changes. Conversation information now refreshes roles and available actions. See `docs/ROOMS_AND_PERSONAL_HISTORY.md`.
 
 ### Acceptance criteria
 
-- [ ] Keep sender-only Message info discoverable and correct for DMs, groups, departed recipients, and incomplete legacy history.
-- [ ] Respect hidden DM read receipts without displaying private reads as confirmed unread status.
-- [ ] Reconcile membership, role, room, and profile changes in an already-open info page without manual reload.
-- [ ] Removal and role changes immediately update available actions and preserve server authorization.
+- [x] Keep sender-only Message info discoverable and correct for DMs, groups, departed recipients, and incomplete legacy history.
+- [x] Respect hidden DM read receipts without displaying private reads as confirmed unread status.
+- [x] Reconcile membership, role, room, and profile changes in an already-open info page without manual reload.
+- [x] Removal and role changes immediately update available actions and preserve server authorization.
 
 ## GH-08
 
 **Title:** Add shared-link browsing to conversation information
+**Status:** Complete — local automated acceptance; deployment/physical-device acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `conversation-info`, `search`, `frontend`
 **Tracker source:** 6.5
@@ -191,13 +197,14 @@ Add a shared-links view alongside shared media, with appropriate access and encr
 
 ### Acceptance criteria
 
-- [ ] Provide link listing, navigation to the source message, and bounded pagination or incremental loading.
-- [ ] Exclude deleted, personally cleared, or unauthorized messages according to the documented history policy.
-- [ ] For encrypted conversations, derive links from locally decrypted data and clearly describe incomplete local coverage.
+- [x] Provide link listing, navigation to the source message, and bounded pagination or incremental loading.
+- [x] Exclude deleted, personally cleared, or unauthorized messages according to the documented history policy.
+- [x] For encrypted conversations, derive links from locally decrypted data and clearly describe incomplete local coverage.
 
 ## GH-09
 
 **Title:** Clarify conversation notification controls
+**Status:** Complete — local automated acceptance; deployment/physical-device acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `notifications`, `conversation-info`, `ux`
 **Tracker source:** 6.6
@@ -208,13 +215,14 @@ Make conversation-specific notification settings understandable and consistent w
 
 ### Acceptance criteria
 
-- [ ] Show the current mute/notification state and explain its interaction with global settings.
-- [ ] Make the available controls accessible and understandable on desktop and mobile.
-- [ ] Confirm saved settings update interruption behavior and remain correct after reconnect or use on another device.
+- [x] Show the current mute/notification state and explain its interaction with global settings.
+- [x] Make the available controls accessible and understandable on desktop and mobile.
+- [x] Confirm saved settings update interruption behavior and remain correct after reconnect or use on another device.
 
 ## GH-10
 
 **Title:** Show useful conversation and device storage information
+**Status:** Complete — local automated acceptance; deployment/physical-device acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `media`, `conversation-info`, `ux`
 **Tracker source:** 6.7
@@ -225,13 +233,14 @@ Expose storage information users can act on without confusing local cached copie
 
 ### Acceptance criteria
 
-- [ ] Display scoped storage usage with clear device-local versus conversation/server distinctions.
-- [ ] Explain cache eviction/download behavior and encrypted-media limitations.
-- [ ] Where storage actions are offered, confirm they preserve other users’ messages and accurately update displayed usage.
+- [x] Display scoped storage usage with clear device-local versus conversation/server distinctions.
+- [x] Explain cache eviction/download behavior and encrypted-media limitations.
+- [x] Where storage actions are offered, confirm they preserve other users’ messages and accurately update displayed usage.
 
 ## GH-11
 
 **Title:** Implement revocable room invitation links
+**Status:** Complete — local automated acceptance; deployment/physical-device acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `rooms`, `permissions`, `backend`
 **Tracker source:** 6.9
@@ -242,13 +251,14 @@ Provide shareable invitation links whose access can be revoked by authorized roo
 
 ### Acceptance criteria
 
-- [ ] Authorize link creation/revocation and define supported expiry or usage constraints.
-- [ ] Ensure revoked or expired links cannot grant membership, including during concurrent join/revoke requests.
-- [ ] Prevent membership/history leakage through invalid links and reconcile successful joins across devices.
+- [x] Authorize link creation/revocation and define supported expiry or usage constraints.
+- [x] Ensure revoked or expired links cannot grant membership, including during concurrent join/revoke requests.
+- [x] Prevent membership/history leakage through invalid links and reconcile successful joins across devices.
 
 ## GH-12
 
 **Title:** Add optional room join approval
+**Status:** Complete — local automated acceptance; deployment/physical-device acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `rooms`, `permissions`, `frontend`
 **Tracker source:** 6.10
@@ -259,14 +269,15 @@ Allow administrators to require approval before an invitation or join request gr
 
 ### Acceptance criteria
 
-- [ ] Provide authorized request review, approval, and rejection with clear pending UI.
-- [ ] Do not expose room messages/media to pending applicants.
-- [ ] Handle duplicate requests, revoked invitations, and concurrent admin decisions safely.
-- [ ] Apply encrypted-room device readiness and history rules when approval grants access.
+- [x] Provide authorized request review, approval, and rejection with clear pending UI.
+- [x] Do not expose room messages/media to pending applicants.
+- [x] Handle duplicate requests, revoked invitations, and concurrent admin decisions safely.
+- [x] Apply encrypted-room device readiness and history rules when approval grants access.
 
 ## GH-13
 
 **Title:** Define room participant permissions and membership/history policy
+**Status:** Complete — local automated acceptance; deployment/physical-device acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `rooms`, `permissions`, `architecture`
 **Tracker source:** 6.11, 6.12
@@ -277,14 +288,15 @@ Define configurable participant capabilities and what history members can access
 
 ### Acceptance criteria
 
-- [ ] Document a permission matrix for admins and participants, including permission changes.
-- [ ] Define server-readable and encrypted-room history access, including new-device and new-member behavior.
-- [ ] Enforce the policy across API, realtime, synchronization, search, and media.
-- [ ] Verify concurrent role/membership changes and clearly disclose limits on recalling downloaded copies.
+- [x] Document a permission matrix for admins and participants, including permission changes.
+- [x] Define server-readable and encrypted-room history access, including new-device and new-member behavior.
+- [x] Enforce the policy across API, realtime, synchronization, search, and media.
+- [x] Verify concurrent role/membership changes and clearly disclose limits on recalling downloaded copies.
 
 ## GH-14
 
 **Title:** Provide a guided room administrator handover
+**Status:** Complete — local automated acceptance; deployment/physical-device acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `rooms`, `permissions`, `ux`
 **Tracker source:** 6.13
@@ -295,13 +307,14 @@ Add a clear handover flow so room ownership/administration remains usable when a
 
 ### Acceptance criteria
 
-- [ ] Authorize and confirm selection of an eligible successor.
-- [ ] Define and enforce the last-admin and simultaneous-handover rules transactionally.
-- [ ] Keep room roles and controls synchronized across devices after handover, leaving, or removal.
+- [x] Authorize and confirm selection of an eligible successor.
+- [x] Define and enforce the last-admin and simultaneous-handover rules transactionally.
+- [x] Keep room roles and controls synchronized across devices after handover, leaving, or removal.
 
 ## GH-15
 
 **Title:** Audit and complete cross-device conversation preference synchronization
+**Status:** Complete — local automated acceptance; deployment/physical-device acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `preferences`, `synchronization`, `validation`
 **Tracker source:** 6.14
@@ -312,27 +325,28 @@ Some preference synchronization is already part of the baseline and replay work.
 
 ### Acceptance criteria
 
-- [ ] Inventory account-wide and device-local conversation preferences and document their scope.
-- [ ] Verify two-device updates, offline/reconnect recovery, and concurrent changes.
-- [ ] Fix missing persistence/replay paths and ensure another account cannot inherit cached preferences.
+- [x] Inventory account-wide and device-local conversation preferences and document their scope.
+- [x] Verify two-device updates, offline/reconnect recovery, and concurrent changes.
+- [x] Fix missing persistence/replay paths and ensure another account cannot inherit cached preferences.
 
 ## GH-16
 
 **Title:** Define and synchronize personal message-clearing behavior
+**Status:** Complete — local automated acceptance; deployment/physical-device acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `personal-history`, `synchronization`, `privacy`
 **Tracker source:** 6.15, 6.16
 
 ### Description
 
-Current Clear for me uses a device-local timestamp. Decide and implement the intended account/device scope without globally deleting messages.
+Implemented explicitly confirmed account-wide clearing with a monotonic server boundary and a separate device-only action. Clearing survives membership rejoin, synchronizes on reconnect, filters secondary views/download access, and preserves peer history and pending sends. See `docs/ROOMS_AND_PERSONAL_HISTORY.md`.
 
 ### Acceptance criteria
 
-- [ ] Document account-wide versus device-only clearing, with matching UI labels and confirmation.
-- [ ] Synchronize account-wide actions across devices and reconcile them after offline periods without resurrecting cleared content.
-- [ ] Keep other participants’ history intact and preserve the intended behavior for replies, search, shared media, and unread counts.
-- [ ] Cover encrypted conversations and pending messages explicitly.
+- [x] Document account-wide versus device-only clearing, with matching UI labels and confirmation.
+- [x] Synchronize account-wide actions across devices and reconcile them after offline periods without resurrecting cleared content.
+- [x] Keep other participants’ history intact and preserve the intended behavior for replies, search, shared media, and unread counts.
+- [x] Cover encrypted conversations and pending messages explicitly.
 
 ## GH-17
 

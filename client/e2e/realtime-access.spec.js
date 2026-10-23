@@ -610,3 +610,47 @@ test("reconnect refreshes historical receipt summaries and retries cached delive
     ),
   ).toBe(true);
 });
+
+test("personal clearing hides cached chat previews and ignores late pre-clear updates", async ({
+  page,
+}) => {
+  await page.goto("/chats");
+  const room = page
+    .getByRole("link")
+    .filter({ hasText: "Product & Engineering" })
+    .first();
+  await expect(room).toBeVisible();
+  await page.evaluate(async () => {
+    const { applyAccountClear } =
+      await import("/src/lib/clearedConversations.js");
+    applyAccountClear(
+      "dev-preview-user",
+      "preview-room",
+      "999999",
+      "2026-10-23T12:00:00Z",
+    );
+  });
+  await expect(room).not.toContainText(
+    "On it—validating the config and update by EOD.",
+  );
+  await page.evaluate(() =>
+    window.__realtimeEvent("chat:updated", {
+      roomId: "preview-room",
+      roomSequence: "1",
+      unreadCount: 3,
+      lastMessage: {
+        id: "late-cleared",
+        room_sequence: "1",
+        content: "CLEARED PREVIEW MUST NOT RETURN",
+        created_at: "2026-10-08T09:37:00Z",
+      },
+    }),
+  );
+  await expect(
+    page.getByText("CLEARED PREVIEW MUST NOT RETURN", { exact: true }),
+  ).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByRole("link").filter({ hasText: "Product & Engineering" }).first(),
+  ).not.toContainText("On it—validating the config and update by EOD.");
+});

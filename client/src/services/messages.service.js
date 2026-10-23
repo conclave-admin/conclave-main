@@ -1,4 +1,8 @@
 import {
+  conversationMessageVisible,
+  applyAccountClear,
+} from "../lib/clearedConversations";
+import {
   decryptMessage,
   decryptMessages,
   encryptEdit,
@@ -170,20 +174,47 @@ export async function listPinnedMessages(roomId) {
   return decryptMessages(data.data.messages);
 }
 
+// Inspect only locally available history. While online, revalidate those IDs
+// so information views cannot continue showing a deleted/cleared cached body.
+export async function localConversationMessages(roomId) {
+  const userId = getSessionUserId();
+  let rows = await readRoomMessages(userId, roomId);
+  if (getSessionUserId() !== userId) throw new Error("Account changed");
+  if (navigator.onLine !== false && rows.length) {
+    const { data } = await api.get(`/messages/room/${roomId}`, {
+      params: {
+        ids: rows
+          .slice(-200)
+          .map((m) => m.id)
+          .join(","),
+      },
+    });
+    rows = data.data.messages;
+  }
+  rows = await decryptMessages(rows);
+  if (getSessionUserId() !== userId) throw new Error("Account changed");
+  return rows.filter((m) => conversationMessageVisible(m, userId, roomId));
+}
+
 export async function listRoomMedia(
   roomId,
   { kind = "media", cursor, limit = 24, after, signal } = {},
 ) {
   if (!isDevAuthBypass) {
     const room = (await api.get(`/rooms/${roomId}`, { signal })).data.data;
+    applyAccountClear(
+      getSessionUserId(),
+      roomId,
+      room.cleared_sequence,
+      room.cleared_at,
+    );
     if (room.encryption_mode === "e2ee-v1") {
-      const messages = await decryptMessages(
-        await readRoomMessages(getSessionUserId(), roomId),
-      );
+      const messages = await localConversationMessages(roomId);
       const files = messages
         .filter(
           (m) =>
             m._decrypted &&
+            conversationMessageVisible(m, getSessionUserId(), roomId) &&
             !m.is_deleted &&
             !m.deleted_at &&
             (!after || new Date(m.created_at) > new Date(after)),

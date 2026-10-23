@@ -1,3 +1,4 @@
+import { useSyncReconciler } from "../../contexts/SyncContext";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { listRoomMedia } from "../../services/messages.service";
@@ -32,8 +33,10 @@ export default function SharedMediaBrowser({ roomId, userId }) {
   const request = useRef(null);
   useEffect(() => {
     const cleared = (event) => {
-      if (event.detail?.userId === userId && event.detail?.roomId === roomId)
+      if (event.detail?.userId === userId && event.detail?.roomId === roomId) {
         setClearedAt(event.detail.clearedAt);
+        setRevision((value) => value + 1);
+      }
     };
     window.addEventListener("conclave:conversation-cleared", cleared);
     return () =>
@@ -79,6 +82,19 @@ export default function SharedMediaBrowser({ roomId, userId }) {
     load();
     return () => request.current?.abort();
   }, [roomId, kind, clearedAt, revision]);
+  useSyncReconciler(
+    async (batch) => {
+      if (
+        batch.reset ||
+        batch.changes.some(
+          (c) =>
+            c.room_id === roomId && ["message", "preferences"].includes(c.kind),
+        )
+      )
+        await load();
+    },
+    [userId, roomId, kind, clearedAt],
+  );
   const section = sections.find((item) => item.kind === kind);
   return (
     <section

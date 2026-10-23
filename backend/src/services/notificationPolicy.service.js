@@ -3,7 +3,7 @@ const { pool } = require("../config/db");
 // references remain as context-free historical rows; revoked live targets do not.
 function visibleSql(n = "n") {
   return `NOT EXISTS(SELECT 1 FROM user_blocks b WHERE (b.blocker_id=${n}.recipient_id AND b.blocked_id=${n}.actor_id) OR (b.blocked_id=${n}.recipient_id AND b.blocker_id=${n}.actor_id))
-    AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=${n}.reference_id AND ${n}.type IN ('mention','new_message','file_uploaded') AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=m.room_id AND rm.user_id=${n}.recipient_id))
+    AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=${n}.reference_id AND ${n}.type IN ('mention','new_message','file_uploaded') AND NOT message_visible(m.id,${n}.recipient_id))
     AND NOT EXISTS(SELECT 1 FROM rooms r WHERE r.id=${n}.reference_id AND ${n}.type IN ('room_invite','member_joined') AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=r.id AND rm.user_id=${n}.recipient_id))
     AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.id=${n}.reference_id AND ${n}.type='task' AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=t.room_id AND rm.user_id=${n}.recipient_id))`;
 }

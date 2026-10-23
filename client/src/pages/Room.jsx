@@ -78,6 +78,24 @@ export default function Room() {
   const scrollContainerRef = useRef(null);
 
   useEffect(() => {
+    const cleared = (event) => {
+      if (event.detail?.userId !== viewerId || event.detail?.roomId !== roomId)
+        return;
+      // Selected objects can outlive the filtered timeline. Drop their old text
+      // without touching the composer's draft or the durable pending outbox.
+      setReplyTo(null);
+      setThreadRoot(null);
+      setMessageInfo(null);
+      setEditing(null);
+      setDeleting(null);
+      setForwarding(null);
+    };
+    window.addEventListener("conclave:conversation-cleared", cleared);
+    return () =>
+      window.removeEventListener("conclave:conversation-cleared", cleared);
+  }, [viewerId, roomId]);
+
+  useEffect(() => {
     const online = () => setBrowserOnline(true);
     const offline = () => setBrowserOnline(false);
     window.addEventListener("online", online);
@@ -473,59 +491,69 @@ export default function Room() {
           )}
         </div>
       ) : (
-        <MessageComposer
-          className="row-start-3"
-          onEditLast={() => {
-            const last = [...messages]
-              .reverse()
-              .find(
-                (message) =>
-                  message.sender_id === viewerId &&
-                  !message.is_deleted &&
-                  !message._optimistic,
-              );
-            if (last) {
-              setEditing(last);
-              setEditDraft(last.content || "");
+        <div className="row-start-3">
+          {room.member_can_send === false && room.my_role !== "admin" && (
+            <p role="status" className="px-4 text-body text-muted">
+              Only admins can send messages in this room.
+            </p>
+          )}
+          <MessageComposer
+            disabled={
+              room.member_can_send === false && room.my_role !== "admin"
             }
-          }}
-          onSend={async (payload) => {
-            await sendMessage(payload);
-            if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
-          }}
-          onSendMedia={async (items) => {
-            await sendMedia(items);
-            if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
-          }}
-          isOnline={browserOnline && isConnected}
-          onCreatePoll={
-            room?.encryption_mode === "e2ee-v1"
-              ? undefined
-              : () => setCreatingPoll(true)
-          }
-          onCreateDecision={
-            room?.encryption_mode === "e2ee-v1"
-              ? undefined
-              : () => setPromoting({ manual: true })
-          }
-          onCreateTask={
-            room?.encryption_mode === "e2ee-v1"
-              ? undefined
-              : () => setFlagging({ manual: true })
-          }
-          members={members}
-          activityScope={roomId}
-          onTyping={handleTyping}
-          onStopTyping={stopTyping}
-          onRecording={() => {
-            if (socket?.connected) socket.emit("start-recording", { roomId });
-          }}
-          onStopRecording={() => {
-            if (socket?.connected) socket.emit("stop-recording", { roomId });
-          }}
-          replyTo={replyTo}
-          onCancelReply={() => setReplyTo(null)}
-        />
+            className=""
+            onEditLast={() => {
+              const last = [...messages]
+                .reverse()
+                .find(
+                  (message) =>
+                    message.sender_id === viewerId &&
+                    !message.is_deleted &&
+                    !message._optimistic,
+                );
+              if (last) {
+                setEditing(last);
+                setEditDraft(last.content || "");
+              }
+            }}
+            onSend={async (payload) => {
+              await sendMessage(payload);
+              if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
+            }}
+            onSendMedia={async (items) => {
+              await sendMedia(items);
+              if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
+            }}
+            isOnline={browserOnline && isConnected}
+            onCreatePoll={
+              room?.encryption_mode === "e2ee-v1"
+                ? undefined
+                : () => setCreatingPoll(true)
+            }
+            onCreateDecision={
+              room?.encryption_mode === "e2ee-v1"
+                ? undefined
+                : () => setPromoting({ manual: true })
+            }
+            onCreateTask={
+              room?.encryption_mode === "e2ee-v1"
+                ? undefined
+                : () => setFlagging({ manual: true })
+            }
+            members={members}
+            activityScope={roomId}
+            onTyping={handleTyping}
+            onStopTyping={stopTyping}
+            onRecording={() => {
+              if (socket?.connected) socket.emit("start-recording", { roomId });
+            }}
+            onStopRecording={() => {
+              if (socket?.connected) socket.emit("stop-recording", { roomId });
+            }}
+            replyTo={replyTo}
+            onCancelReply={() => setReplyTo(null)}
+          />
+        </div>
       )}
 
       <MessageInfoDialog

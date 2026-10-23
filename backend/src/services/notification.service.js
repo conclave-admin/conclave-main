@@ -373,7 +373,7 @@ const UNREAD_COUNT_SQL = `(
   SELECT COUNT(*)
     FROM messages m
    WHERE m.room_id = rm.room_id
-     AND m.room_sequence > rm.last_seen_sequence
+     AND m.room_sequence > GREATEST(rm.last_seen_sequence,rm.cleared_sequence)
      AND m.deleted_at IS NULL
      AND m.sender_id <> rm.user_id
      AND NOT EXISTS (SELECT 1 FROM message_recipients mr
@@ -405,7 +405,7 @@ async function emitChatUpdated(io, roomId) {
     // apart in the first place.
     const [messageResult, membersResult] = await Promise.all([
       pool.query(
-        `SELECT m.id, m.content, m.deleted_at, m.created_at, m.sender_id,
+        `SELECT m.id, m.room_sequence, m.content, m.deleted_at, m.created_at, m.sender_id,
                 u.display_name AS sender_name,
                 u.avatar_url   AS sender_avatar,
                 EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id)
@@ -418,7 +418,7 @@ async function emitChatUpdated(io, roomId) {
         [roomId],
       ),
       pool.query(
-        `SELECT rm.user_id, ${UNREAD_COUNT_SQL} AS unread_count
+        `SELECT rm.user_id, rm.cleared_sequence, rm.cleared_at, ${UNREAD_COUNT_SQL} AS unread_count
            FROM room_members rm
           WHERE rm.room_id = $1`,
         [roomId],
@@ -432,6 +432,7 @@ async function emitChatUpdated(io, roomId) {
     const lastMessage = row
       ? {
           id: row.id,
+          room_sequence: row.room_sequence,
           // Masked server-side for the same reason listMessages masks it: the
           // row exists, its text does not.
           content: row.deleted_at ? null : row.content,
@@ -447,10 +448,17 @@ async function emitChatUpdated(io, roomId) {
     for (const member of membersResult.rows) {
       io.to(personalRoom(member.user_id)).emit("chat:updated", {
         roomId,
-        lastMessage: await require("./privacy.service").present(
-          lastMessage,
-          member.user_id,
-        ),
+        roomSequence: row?.room_sequence ?? null,
+        lastMessage:
+          row &&
+          (row.room_sequence == null
+            ? Boolean(member.cleared_at)
+            : BigInt(row.room_sequence) <= BigInt(member.cleared_sequence || 0))
+            ? null
+            : await require("./privacy.service").present(
+                lastMessage,
+                member.user_id,
+              ),
         unreadCount: member.unread_count,
       });
     }

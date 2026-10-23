@@ -9,7 +9,10 @@ import { usePresence } from "../contexts/PresenceContext";
 import { subscribeToRoom } from "../lib/roomSubscriptions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
-import { getConversationClearTime } from "../lib/clearedConversations";
+import {
+  getConversationClearTime,
+  conversationMessageVisible,
+} from "../lib/clearedConversations";
 import { useRealtime } from "../contexts/RealtimeContext";
 import { readRoomMessages, saveRoomMessages } from "../lib/fileCache";
 import { useOutbox } from "../contexts/OutboxContext";
@@ -65,6 +68,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
 
   const [messages, setMessages] = useState([]);
   const [receiptUpdates, setReceiptUpdates] = useState(() => new Map());
+  const [clearRevision, setClearRevision] = useState(0);
   const [clearedAt, setClearedAt] = useState(() =>
     getConversationClearTime(viewerId, roomId),
   );
@@ -87,8 +91,14 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   useEffect(() => {
     setClearedAt(getConversationClearTime(viewerId, roomId));
     const onCleared = (event) => {
-      if (event.detail?.userId === viewerId && event.detail?.roomId === roomId)
-        setClearedAt(event.detail.clearedAt);
+      if (
+        event.detail?.userId === viewerId &&
+        event.detail?.roomId === roomId
+      ) {
+        if (event.detail.scope === "account")
+          setClearRevision((value) => value + 1);
+        else setClearedAt(event.detail.clearedAt);
+      }
     };
     window.addEventListener("conclave:conversation-cleared", onCleared);
     return () =>
@@ -102,7 +112,9 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
       if (
         !batch.reset &&
         !changes.some((c) =>
-          ["message", "membership", "room", "profile"].includes(c.kind),
+          ["message", "membership", "room", "profile", "preferences"].includes(
+            c.kind,
+          ),
         ) &&
         !batch.changes.some((c) => c.kind === "profile")
       )
@@ -631,7 +643,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
       .filter(
         (message) =>
           !retiredIds.has(message.id) &&
-          new Date(message.created_at).getTime() > clearedAt,
+          conversationMessageVisible(message, viewerId, roomId),
       )
       .map((message) => ({
         ...message,
@@ -644,6 +656,9 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     messages,
     roomDrafts,
     clearedAt,
+    clearRevision,
+    viewerId,
+    roomId,
     user?.display_name,
     receiptUpdates,
     retiredIds,

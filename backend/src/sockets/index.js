@@ -377,6 +377,19 @@ function registerSocketHandlers(io) {
           if (!allowed) throw new ApiError(429, "Too many activity updates");
         }
         return withRoomMembership(roomId, userId, async (client) => {
+          if (
+            active &&
+            (
+              await client.query(
+                `SELECT 1 FROM rooms r JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$2 WHERE r.id=$1 AND NOT r.member_can_send AND rm.role<>'admin'`,
+                [roomId, userId],
+              )
+            ).rowCount
+          )
+            throw new ApiError(
+              403,
+              "Only admins can send activity in this room",
+            );
           if (!socket.connected || !socket.rooms.has(roomId))
             throw new ApiError(
               403,

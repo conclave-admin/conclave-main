@@ -1,3 +1,5 @@
+import { getSessionUserId } from "../lib/session";
+import { isDevAuthBypass } from "../config/devPreview";
 import { useSyncReconciler } from "../contexts/SyncContext";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { subscribeToRoom } from "../lib/roomSubscriptions";
@@ -21,6 +23,7 @@ export default function useRoom(roomId) {
     async (options = {}) => {
       const version = ++generation.current;
       const valid = () =>
+        (isDevAuthBypass || getSessionUserId() === userId) &&
         generation.current === version &&
         !revoked.current &&
         (!options?.isCurrent || options.isCurrent());

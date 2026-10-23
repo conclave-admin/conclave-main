@@ -43,6 +43,7 @@ export default function AttachmentPreviewDialog({
   files,
   initialCaption = "",
   sending = false,
+  sendDisabled = false,
   error = "",
   onSend,
   onCancel,
@@ -136,7 +137,7 @@ export default function AttachmentPreviewDialog({
   };
   const submit = (event) => {
     event?.preventDefault();
-    if (sending || compression || oversized) return;
+    if (sendDisabled || sending || compression || oversized) return;
     onSend(files.map((file) => captions.get(file) || ""));
   };
 
@@ -172,7 +173,9 @@ export default function AttachmentPreviewDialog({
           <Button
             variant="primary"
             type="submit"
-            disabled={sending || Boolean(compression) || oversized}
+            disabled={
+              sendDisabled || sending || Boolean(compression) || oversized
+            }
             className="shrink-0"
             aria-label={sending ? "Saving messages" : "Send"}
           >

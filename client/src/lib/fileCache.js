@@ -396,3 +396,29 @@ export async function removeLocalFile(key) {
     /* Best effort. */
   }
 }
+
+/** Account-scoped media usage; pending outbox Blobs are deliberately excluded. */
+export async function accountMediaUsage(userId) {
+  const rows = await transact(["meta"], "readonly", (t) =>
+    t.objectStore("meta").getAll(),
+  );
+  return rows
+    .filter((row) => row.key.startsWith(`media:${userId}:`))
+    .reduce((sum, row) => sum + (row.size || 0), 0);
+}
+export async function clearAccountMediaCache(userId) {
+  const rows = await transact(["meta"], "readonly", (t) =>
+    t.objectStore("meta").getAll(),
+  );
+  const keys = rows
+    .filter((row) => row.key.startsWith(`media:${userId}:`))
+    .map((row) => row.key);
+  await transact(["files", "meta"], "readwrite", (t) =>
+    keys.forEach((key) => {
+      t.objectStore("files").delete(key);
+      t.objectStore("meta").delete(key);
+    }),
+  );
+  cacheRemoved(keys);
+  return keys.length;
+}

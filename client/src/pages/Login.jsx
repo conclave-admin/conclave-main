@@ -32,7 +32,7 @@ export default function Login() {
       // deep link sounds considerate until the session expires on /settings or
       // /profile, where signing in then dumping you back on that screen reads
       // as "the app ignored my login" rather than as "we remembered".
-      navigate("/chats", { replace: true });
+      navigate(sessionStorage.getItem("conclave:pending-invitation") ? "/join" : "/chats", { replace: true });
     } catch (err) {
       setError(err.response?.data?.message || "Could not sign in.");
     } finally {

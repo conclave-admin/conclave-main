@@ -829,3 +829,14 @@ The ciphertext upload cap is 50 MiB. Authorized download/Range endpoints remain
 the transport; the browser decrypts and caches plaintext separately. Server
 search/tasks/decisions/polls/forwarding that would process encrypted content are
 rejected; local search covers only decrypted cached history.
+
+### Room lifecycle and personal history (migration 038)
+
+See [Rooms and personal history](ROOMS_AND_PERSONAL_HISTORY.md) for the endpoint
+contracts, invitation/approval rules, participant permission matrix, encrypted
+history policy, and account versus device clearing semantics. Apply migration
+038 before deploying this API/client. Existing public join clients must handle a
+`pending` result without opening the room. Room detail responses include
+`my_role`, `join_approval`, `member_can_send`, `member_can_invite`,
+`cleared_sequence`, and `cleared_at`; room list responses include personal clear
+state. Sequences must be handled as decimal strings without losing precision.

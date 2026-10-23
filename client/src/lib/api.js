@@ -1,6 +1,7 @@
 import axios from "axios";
 import {
   getAccessToken,
+  getSessionUserId,
   getRefreshToken,
   saveSession,
   clearSession,
@@ -62,13 +63,21 @@ export async function getValidAccessToken() {
 }
 
 api.interceptors.request.use((config) => {
+  if (!Object.hasOwn(config, "_accountUserId"))
+    config._accountUserId = getSessionUserId();
+  else if (config._accountUserId !== getSessionUserId())
+    throw new axios.CanceledError("Account changed; request cancelled");
   const token = getAccessToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    if (response.config._accountUserId !== getSessionUserId())
+      throw new axios.CanceledError("Account changed; response discarded");
+    return response;
+  },
   async (error) => {
     const config = error.config;
     if (
@@ -79,6 +88,7 @@ api.interceptors.response.use(
     ) {
       throw error;
     }
+    if (config._accountUserId !== getSessionUserId()) throw error;
     config._retried = true;
     // A late 401 may belong to a request sent before another request refreshed.
     let token = getAccessToken();
