@@ -8,6 +8,12 @@ export default defineConfig({
   expect: { timeout: 25000 },
   use: {
     baseURL: "http://localhost:5188",
+    launchOptions: {
+      args: [
+        "--use-fake-device-for-media-stream",
+        "--use-fake-ui-for-media-stream",
+      ],
+    },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

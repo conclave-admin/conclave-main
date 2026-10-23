@@ -275,6 +275,16 @@ export default function AttachmentPreviewDialog({
             or remove the oversized file before sending.
           </p>
         )}
+        {files.length === 1 && active?.type?.startsWith("audio/") && (
+          <button
+            type="button"
+            disabled={sending || Boolean(compression)}
+            onClick={onCancel}
+            className="min-h-11 shrink-0 border-t border-line px-4 text-label text-error"
+          >
+            Discard voice message
+          </button>
+        )}
         {files.length > 1 && (
           <div className="scrollbar-none flex shrink-0 gap-2 overflow-x-auto border-t border-line px-4 py-3">
             {files.map((file, i) => (

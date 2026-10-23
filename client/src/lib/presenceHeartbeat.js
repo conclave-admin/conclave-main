@@ -16,7 +16,7 @@ export function startPresenceHeartbeat(
   let previous = now();
   let suspended = false;
   const send = (background = false) => {
-    if (!socket.connected) return;
+    if (!socket.connected || win.navigator?.onLine === false) return;
     if (now() - previous >= 45000)
       win.dispatchEvent(new Event("conclave:presence-stale"));
     previous = now();
@@ -64,6 +64,7 @@ export function startPresenceHeartbeat(
     if (doc.visibilityState === "visible") start();
     else send(true);
   };
+  const offline = () => { clear(); win.dispatchEvent(new Event("conclave:presence-stale")); };
   const resync = () => send();
   socket.on("connect", start);
   socket.on("disconnect", clear);
@@ -73,7 +74,8 @@ export function startPresenceHeartbeat(
   win.addEventListener("blur", blur);
   win.addEventListener("pagehide", hide);
   win.addEventListener("pageshow", start);
-  win.addEventListener("online", focus);
+  win.addEventListener("online", start);
+  win.addEventListener("offline", offline);
   if (socket.connected) start();
   return () => {
     clear();
@@ -85,6 +87,7 @@ export function startPresenceHeartbeat(
     win.removeEventListener("blur", blur);
     win.removeEventListener("pagehide", hide);
     win.removeEventListener("pageshow", start);
-    win.removeEventListener("online", focus);
+    win.removeEventListener("online", start);
+    win.removeEventListener("offline", offline);
   };
 }

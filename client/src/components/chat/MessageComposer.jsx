@@ -1,3 +1,4 @@
+import { voiceRecordingFile, voiceRecorderOptions } from "@/lib/voiceRecording";
 import { createActivitySender } from "@/lib/conversationActivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 import IconClose from "@/assets/icons/close.svg?react";
@@ -381,7 +382,10 @@ export default function MessageComposer({
       recordingStreamRef.current = stream;
       const chunks = [];
       recordingChunksRef.current = chunks;
-      const recorder = new MediaRecorder(stream);
+      const recorder = new MediaRecorder(
+        stream,
+        voiceRecorderOptions(MediaRecorder),
+      );
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
         if (event.data.size) chunks.push(event.data);
@@ -398,11 +402,12 @@ export default function MessageComposer({
         }
         recordingChunksRef.current = [];
         if (!failed) {
-          const type = recorder.mimeType || "audio/webm";
-          const file = new File(chunks, `voice-note-${Date.now()}.webm`, {
-            type,
-          });
-          if (file.size) setPendingFiles([file]);
+          try {
+            const file = voiceRecordingFile(chunks, recorder.mimeType);
+            if (file.size) setPendingFiles([file]);
+          } catch (error) {
+            setError(error.message);
+          }
         }
       };
       recorder.onerror = () => {

@@ -62,7 +62,7 @@ function socketSend(socket, payload, signal) {
     };
     const abort = () =>
       finish(new DOMException("Connection interrupted", "AbortError"));
-    if (signal.aborted || !socket?.connected) {
+    if (signal.aborted || navigator.onLine === false || !socket?.connected) {
       abort();
       return;
     }

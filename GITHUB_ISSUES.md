@@ -140,20 +140,25 @@ The current signed-envelope protocol has no forward secrecy or post-compromise r
 ## GH-06
 
 **Title:** Complete the voice-note playback and recording experience
+**Status:** Complete — local automated acceptance; real-device/live-R2 acceptance remains in Phase 7
 **Priority:** P2
 **Suggested labels:** `P2`, `voice`, `media`, `frontend`
 **Tracker source:** 6.1, 6.2, 6.3
 
 ### Description
 
-Recording exists, but received audio follows a generic file-card path. Complete the end-to-end voice-note experience.
+Implemented inline audio playback, speed/seeking/duration controls, explicit preview discard, recording MIME/container normalization, and cached offline playback for encrypted and server-readable conversations. See `docs/VOICE_MESSAGES.md`.
 
 ### Acceptance criteria
 
-- [ ] Provide inline playback, seeking, duration, playback speed, and accessible controls.
-- [ ] Allow previewing and discarding a recording before sending.
-- [ ] Integrate cached/offline playback and the existing recording indicators, including cleanup on interruption.
-- [ ] Verify encrypted and server-readable conversation behavior without exposing decrypted audio to server preview services.
+- [x] Provide inline playback, seeking, duration, playback speed, and accessible controls.
+- [x] Allow previewing and discarding a recording before sending.
+- [x] Integrate cached/offline playback and the existing recording indicators, including cleanup on interruption.
+- [x] Verify encrypted and server-readable conversation behavior without exposing decrypted audio to server preview services.
+
+### Verification
+
+78 client assertions, 39 backend unit checks, four desktop/mobile voice cases, six recording lifecycle checks, four info/presence regression rechecks, and the production build passed. Browser checks use fake microphone capture and mocked R2. An initial signup-fixture limit and resource-contended timeouts were resolved in the fixtures/isolated reruns; no production limits were relaxed. No commit or PR was created.
 
 ## GH-07
 

@@ -1,3 +1,4 @@
+import { useRealtime } from "../../contexts/RealtimeContext";
 import { Link } from "react-router-dom";
 import IconArrowLeft from "@/assets/icons/arrow-left.svg?react";
 import IconInfo from "@/assets/icons/info.svg?react";
@@ -25,6 +26,7 @@ import { usePresence } from "@/contexts/PresenceContext";
  * @param {boolean} isConnected
  */
 export default function RoomHeader({ room, isConnected }) {
+  const { isOnline } = useRealtime();
   const title = room.display_name || room.name;
   const { user } = useAuth();
   const { isOnlineIn, getPresence, labelFor } = usePresence();
@@ -75,9 +77,9 @@ export default function RoomHeader({ room, isConnected }) {
           {isDm
             ? labelFor(room.id, peer?.id)
             : `${room.members?.length || 0} members`}
-          <span className="md:hidden">
+          <span>
             {" "}
-            · {isConnected ? "Live" : "Reconnecting"}
+            · {!isOnline ? "Offline · messages queued" : isConnected ? "Live" : "Connecting…"}
           </span>
         </p>
       </div>
