@@ -46,6 +46,8 @@ process.on("SIGINT", () => cleanup());
     PORT: "7120",
     CLIENT_ORIGIN: "http://localhost:5188",
     NODE_ENV: "test",
+    // Fixture-only proxy trust lets signup fixtures represent distinct clients.
+    TRUST_PROXY_HOPS: "1",
     R2_DIRECT_UPLOADS_ENABLED: "false",
     RESEND_API_KEY: "",
     RESEND_FROM: "",

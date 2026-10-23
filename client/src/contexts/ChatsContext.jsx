@@ -1,3 +1,4 @@
+import { conversationMessageVisible } from "../lib/clearedConversations";
 import { useSyncReconciler } from "./SyncContext";
 import {
   createContext,
@@ -72,9 +73,14 @@ export function ChatsProvider({ children }) {
           if (options?.strict) throw new Error("Chat refresh superseded");
           return;
         }
-        const loaded = rows.filter(
-          (room) => !revokedRooms.current.has(room.id),
-        );
+        const loaded = rows
+          .filter((room) => !revokedRooms.current.has(room.id))
+          .map((room) =>
+            room.last_message &&
+            !conversationMessageVisible(room.last_message, userId, room.id)
+              ? { ...room, last_message: null, has_message: false }
+              : room,
+          );
         setRooms(loaded);
         setPinned(
           loaded.filter((room) => room.is_pinned).map((room) => room.id),
@@ -150,15 +156,31 @@ export function ChatsProvider({ children }) {
   useEffect(() => {
     if (!socket) return undefined;
 
-    const onChatUpdated = ({ roomId, lastMessage, unreadCount }) => {
+    const onChatUpdated = ({
+      roomId,
+      lastMessage,
+      unreadCount,
+      roomSequence,
+    }) => {
+      // Delayed pre-clear events must not restore text from hidden history.
+      if (
+        lastMessage &&
+        !conversationMessageVisible(lastMessage, userId, roomId)
+      )
+        return;
       setRooms((current) =>
         current.map((room) =>
-          room.id === roomId
+          room.id === roomId &&
+          !(
+            roomSequence != null &&
+            room.last_message?.room_sequence != null &&
+            BigInt(roomSequence) < BigInt(room.last_message.room_sequence)
+          )
             ? {
                 ...room,
                 last_message: lastMessage,
                 unread_count: unreadCount,
-                has_message: true,
+                has_message: Boolean(lastMessage),
               }
             : room,
         ),
@@ -187,6 +209,31 @@ export function ChatsProvider({ children }) {
       socket.off("chat:updated", onChatUpdated);
     };
   }, [socket, userId, refresh]);
+
+  useEffect(() => {
+    const cleared = (event) => {
+      if (event.detail?.userId !== userId) return;
+      setRooms((rows) =>
+        rows.map((room) =>
+          room.id === event.detail.roomId &&
+          room.last_message &&
+          !conversationMessageVisible(room.last_message, userId, room.id)
+            ? {
+                ...room,
+                last_message: null,
+                has_message: false,
+                ...(event.detail.scope === "account"
+                  ? { unread_count: 0 }
+                  : {}),
+              }
+            : room,
+        ),
+      );
+    };
+    window.addEventListener("conclave:conversation-cleared", cleared);
+    return () =>
+      window.removeEventListener("conclave:conversation-cleared", cleared);
+  }, [userId]);
 
   /**
    * Mark a room read, optimistically.

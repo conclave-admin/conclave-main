@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { conversationMessageVisible } from "../../lib/clearedConversations";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
-import { readRoomMessages } from "../../lib/fileCache";
-import { decryptMessages } from "../../lib/encryption";
+import { localConversationMessages } from "../../services/messages.service";
 import Input from "../ui/Input";
 import Button from "../ui/Button";
 export default function EncryptedSearch({ room }) {
@@ -11,6 +11,23 @@ export default function EncryptedSearch({ room }) {
     [results, setResults] = useState([]),
     [searched, setSearched] = useState(false),
     [error, setError] = useState("");
+  const generation = useRef(0);
+  useEffect(() => {
+    setResults([]);
+    setSearched(false);
+    const cleared = (event) => {
+      if (event.detail?.userId !== user.id || event.detail?.roomId !== room.id)
+        return;
+      generation.current++;
+      setResults([]);
+      setSearched(false);
+    };
+    window.addEventListener("conclave:conversation-cleared", cleared);
+    return () => {
+      generation.current++;
+      window.removeEventListener("conclave:conversation-cleared", cleared);
+    };
+  }, [user.id, room.id]);
   if (room?.encryption_mode !== "e2ee-v1") return null;
   return (
     <section className="space-y-3 rounded-xl border border-line bg-surface p-5">
@@ -23,14 +40,16 @@ export default function EncryptedSearch({ room }) {
         className="space-y-3"
         onSubmit={async (e) => {
           e.preventDefault();
+          const version = ++generation.current;
+          setError("");
           try {
-            const rows = await decryptMessages(
-              await readRoomMessages(user.id, room.id),
-            );
+            const rows = await localConversationMessages(room.id);
+            if (version !== generation.current) return;
             setResults(
               rows
                 .filter(
                   (m) =>
+                    conversationMessageVisible(m, user.id, room.id) &&
                     !m.is_deleted &&
                     !m.deleted_at &&
                     m._decrypted &&
@@ -40,7 +59,7 @@ export default function EncryptedSearch({ room }) {
             );
             setSearched(true);
           } catch (e) {
-            setError(e.message);
+            if (version === generation.current) setError(e.message);
           }
         }}
       >

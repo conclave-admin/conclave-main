@@ -226,13 +226,13 @@ async function unpinMessage({ messageId, userId, scope, io }) {
  */
 async function listRoomPins(roomId, viewerId) {
   const result = await query(
-    `SELECT m.id, m.room_id, m.sender_id, m.client_id, m.album_id, m.forwarded, m.room_sequence, m.content, m.reply_to_id,
+    `SELECT m.id,m.encrypted_payload, m.room_id, m.sender_id, m.client_id, m.album_id, m.forwarded, m.room_sequence, m.content, m.reply_to_id,
             m.edited_at, m.deleted_at, m.created_at,
             u.display_name AS sender_name, u.avatar_url AS sender_avatar
        FROM message_pins mp
        INNER JOIN messages m ON m.id = mp.message_id
        INNER JOIN users u ON u.id = m.sender_id
-      WHERE mp.scope = 'room'
+      WHERE mp.scope = 'room' AND message_visible(m.id,$2)
         AND m.room_id = $1
         -- Deleting a message tombstones it rather than removing the row, so the
         -- pin would outlive the text it refers to and the panel would keep a
@@ -240,7 +240,7 @@ async function listRoomPins(roomId, viewerId) {
         -- the client so every consumer of this endpoint gets the same list.
         AND m.deleted_at IS NULL
       ORDER BY mp.pinned_at ASC`,
-    [roomId],
+    [roomId, viewerId],
   );
 
   if (result.rows.length === 0) return [];

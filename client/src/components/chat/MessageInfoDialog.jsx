@@ -1,3 +1,4 @@
+import { useSyncReconciler } from "../../contexts/SyncContext";
 import { useEffect, useState } from "react";
 import Modal from "../ui/Modal";
 import Button from "../ui/Button";
@@ -11,6 +12,21 @@ export default function MessageInfoDialog({ message, onClose }) {
   const [details, setDetails] = useState(null);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  useSyncReconciler(
+    async (batch) => {
+      if (
+        message?.id &&
+        (batch.reset ||
+          batch.changes.some(
+            (c) =>
+              c.entity_id === message.id ||
+              ["preferences", "profile", "membership"].includes(c.kind),
+          ))
+      )
+        setRefresh((value) => value + 1);
+    },
+    [message?.id],
+  );
   useEffect(() => {
     if (!message?.id) return undefined;
     let active = true;
@@ -37,11 +53,17 @@ export default function MessageInfoDialog({ message, onClose }) {
       if (payload.receipts?.some((item) => item.messageId === message.id))
         load();
     };
+    const privacy = () => {
+      setDetails(null);
+      load();
+    };
     load();
+    socket?.on("privacy:changed", privacy);
     socket?.on("message:receipts", update);
     socket?.on("connect", load);
     return () => {
       active = false;
+      socket?.off("privacy:changed", privacy);
       socket?.off("message:receipts", update);
       socket?.off("connect", load);
     };

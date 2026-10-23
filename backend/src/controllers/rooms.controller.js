@@ -271,7 +271,7 @@ const listRooms = asyncHandler(async (req, res) => {
        rm.role AS my_role,
        rm.joined_at,
        rm.last_seen_at,
-       rm.last_seen_sequence,
+       rm.last_seen_sequence, rm.cleared_sequence,rm.cleared_at,
        COALESCE(rmp.pinned, FALSE) AS is_pinned,
        COALESCE(rmp.muted, FALSE) AS is_muted,
        COALESCE(rmp.archived, FALSE) AS is_archived,
@@ -350,7 +350,7 @@ const listRooms = asyncHandler(async (req, res) => {
                 AS has_mention
          FROM messages m
          INNER JOIN users u ON u.id = m.sender_id
-        WHERE m.room_id = r.id
+        WHERE m.room_id = r.id AND message_visible(m.id,$1)
         ORDER BY m.room_sequence DESC
         LIMIT 1
      ) lm ON TRUE
@@ -401,6 +401,19 @@ const discoverRooms = asyncHandler(async (req, res) => {
 // Joining an open room and resolving a concurrent duplicate request are one
 // transaction. Locking the room row serializes joins with visibility edits.
 const joinPublicRoom = asyncHandler(async (req, res) => {
+  const approval = (
+    await query("SELECT join_approval FROM rooms WHERE id=$1", [
+      req.params.roomId,
+    ])
+  ).rows[0];
+  if (approval?.join_approval)
+    return ok(
+      res,
+      await require("../services/roomLifecycle.service").enter({
+        roomId: req.params.roomId,
+        userId: req.user.id,
+      }),
+    );
   const { roomId } = req.params;
   const client = await pool.connect();
   let admins = [];
@@ -409,7 +422,7 @@ const joinPublicRoom = asyncHandler(async (req, res) => {
   try {
     await client.query("BEGIN");
     const roomResult = await client.query(
-      "SELECT id, type FROM rooms WHERE id = $1 FOR UPDATE",
+      "SELECT id, type, join_approval FROM rooms WHERE id = $1 FOR UPDATE",
       [roomId],
     );
     const room = roomResult.rows[0];
@@ -417,12 +430,25 @@ const joinPublicRoom = asyncHandler(async (req, res) => {
     if (room.type !== "public")
       throw new ApiError(403, "This room is not open to join");
 
+    if (room.join_approval) {
+      await client.query("ROLLBACK");
+      // Return the promise without awaiting here: finally releases this client
+      // before the lifecycle transaction needs another pool connection.
+      return require("../services/roomLifecycle.service")
+        .enter({ roomId, userId: req.user.id })
+        .then((result) => ok(res, result));
+    }
     const insert = await client.query(
       `INSERT INTO room_members (room_id, user_id, role)
        VALUES ($1, $2, 'member') ON CONFLICT (room_id, user_id) DO NOTHING RETURNING user_id`,
       [roomId, req.user.id],
     );
     joined = insert.rowCount > 0;
+    if (joined)
+      await client.query(
+        "UPDATE room_join_requests SET status='approved',updated_at=NOW() WHERE room_id=$1 AND user_id=$2 AND status='pending'",
+        [roomId, req.user.id],
+      );
     if (joined) {
       const result = await client.query(
         `SELECT user_id FROM room_members WHERE room_id = $1 AND role = 'admin' AND user_id <> $2`,
@@ -592,7 +618,26 @@ const getRoom = asyncHandler(async (req, res) => {
         [roomId],
       )
     ).rows[0] || null;
-  return ok(res, { ...room, members, message_request: request });
+  const personal = (
+    await query(
+      "SELECT cleared_sequence,cleared_at FROM room_members WHERE room_id=$1 AND user_id=$2",
+      [roomId, req.user.id],
+    )
+  ).rows[0];
+  const settings = (
+    await query(
+      "SELECT join_approval,member_can_send,member_can_invite FROM rooms WHERE id=$1",
+      [roomId],
+    )
+  ).rows[0];
+  return ok(res, {
+    ...room,
+    ...personal,
+    ...settings,
+    my_role,
+    members,
+    message_request: request,
+  });
 });
 
 // ---------- addMember ----------
@@ -616,7 +661,7 @@ const addMember = asyncHandler(async (req, res) => {
     await client.query("BEGIN");
 
     const room = await client.query(
-      "SELECT id, type FROM rooms WHERE id = $1 FOR UPDATE",
+      "SELECT id, type,encryption_mode FROM rooms WHERE id = $1 FOR UPDATE",
       [roomId],
     );
     if (!room.rows.length) throw new ApiError(404, "Room not found");
@@ -640,6 +685,19 @@ const addMember = asyncHandler(async (req, res) => {
     if (caller_role !== "admin")
       throw new ApiError(403, "Only room admins can add members");
 
+    if (
+      room.rows[0].encryption_mode === "e2ee-v1" &&
+      !(
+        await client.query(
+          `SELECT 1 FROM encryption_devices d JOIN auth_sessions s ON s.id=d.session_id WHERE d.user_id=$1 AND d.approved_at IS NOT NULL AND d.revoked_at IS NULL AND s.revoked_at IS NULL AND s.expires_at>NOW() LIMIT 1`,
+          [userId],
+        )
+      ).rowCount
+    )
+      throw new ApiError(
+        409,
+        "Participant needs an approved encryption device first",
+      );
     const insertResult = await client.query(
       `INSERT INTO room_members (room_id, user_id, role)
        VALUES ($1, $2, 'member')

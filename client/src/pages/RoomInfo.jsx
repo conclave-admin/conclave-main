@@ -1,3 +1,7 @@
+import ConversationManagement, {
+  PersonalHistoryActions,
+} from "../components/chat/ConversationManagement";
+import SharedLinksBrowser from "../components/chat/SharedLinksBrowser";
 import ConversationEncryption from "../components/chat/ConversationEncryption";
 import EncryptedSearch from "../components/chat/EncryptedSearch";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -36,7 +40,6 @@ import {
   uploadAvatar,
 } from "@/services/users.service";
 import SharedMediaBrowser from "@/components/chat/SharedMediaBrowser";
-import { clearConversationForMe } from "@/lib/clearedConversations";
 import Modal from "@/components/ui/Modal";
 import Page from "@/components/layout/Page";
 import { usePresence } from "@/contexts/PresenceContext";
@@ -715,6 +718,18 @@ export default function RoomInfo() {
         </section>
       )}
 
+      <ConversationManagement
+        key={`management:${user.id}:${roomId}`}
+        room={room}
+        user={user}
+        onChanged={reload}
+      />
+      <SharedLinksBrowser
+        key={`links:${user.id}:${roomId}`}
+        room={room}
+        user={user}
+      />
+
       <SharedMediaBrowser
         key={`${user.id}:${roomId}`}
         roomId={roomId}
@@ -730,18 +745,12 @@ export default function RoomInfo() {
           These actions affect your account or this device only.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button
-            variant="secondary"
-            onClick={() => {
-              clearConversationForMe(user.id, roomId);
-              toast({
-                title: "Messages cleared on this device",
-                tone: "success",
-              });
-            }}
-          >
-            Clear messages for me
-          </Button>
+          <PersonalHistoryActions
+            key={`${user.id}:${roomId}`}
+            roomId={roomId}
+            userId={user.id}
+            onChanged={reload}
+          />
           {peer && (
             <>
               <Button variant="ghost" onClick={() => setReportTarget(peer)}>

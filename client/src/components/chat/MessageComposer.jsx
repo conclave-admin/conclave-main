@@ -1,3 +1,4 @@
+import { voiceRecordingFile, voiceRecorderOptions } from "@/lib/voiceRecording";
 import { createActivitySender } from "@/lib/conversationActivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 import IconClose from "@/assets/icons/close.svg?react";
@@ -41,7 +42,7 @@ const MAX_LINES = 5;
  * Selected files and captions are saved to the account outbox before the
  * editor closes. Upload progress and retry controls then live in the timeline.
  *
- * @param {boolean} disabled - no realtime connection
+ * @param {boolean} disabled - conversation permissions prevent sending
  * @param {(payload: object) => void} onSend
  * @param {Array} members - room members, for the mention picker
  * @param {() => void} onTyping - emits a typing event, throttled by this composer
@@ -381,7 +382,10 @@ export default function MessageComposer({
       recordingStreamRef.current = stream;
       const chunks = [];
       recordingChunksRef.current = chunks;
-      const recorder = new MediaRecorder(stream);
+      const recorder = new MediaRecorder(
+        stream,
+        voiceRecorderOptions(MediaRecorder),
+      );
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
         if (event.data.size) chunks.push(event.data);
@@ -398,11 +402,12 @@ export default function MessageComposer({
         }
         recordingChunksRef.current = [];
         if (!failed) {
-          const type = recorder.mimeType || "audio/webm";
-          const file = new File(chunks, `voice-note-${Date.now()}.webm`, {
-            type,
-          });
-          if (file.size) setPendingFiles([file]);
+          try {
+            const file = voiceRecordingFile(chunks, recorder.mimeType);
+            if (file.size) setPendingFiles([file]);
+          } catch (error) {
+            setError(error.message);
+          }
         }
       };
       recorder.onerror = () => {
@@ -558,6 +563,7 @@ export default function MessageComposer({
         </div>
 
         <textarea
+          disabled={disabled}
           ref={textareaRef}
           value={content}
           onChange={handleTextChange}
@@ -599,6 +605,7 @@ export default function MessageComposer({
         files={pendingFiles}
         initialCaption={content}
         sending={sending}
+        sendDisabled={disabled}
         error={error}
         onSend={submitPreview}
         onCancel={cancelPreview}

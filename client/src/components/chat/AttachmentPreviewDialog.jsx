@@ -43,6 +43,7 @@ export default function AttachmentPreviewDialog({
   files,
   initialCaption = "",
   sending = false,
+  sendDisabled = false,
   error = "",
   onSend,
   onCancel,
@@ -136,7 +137,7 @@ export default function AttachmentPreviewDialog({
   };
   const submit = (event) => {
     event?.preventDefault();
-    if (sending || compression || oversized) return;
+    if (sendDisabled || sending || compression || oversized) return;
     onSend(files.map((file) => captions.get(file) || ""));
   };
 
@@ -172,7 +173,9 @@ export default function AttachmentPreviewDialog({
           <Button
             variant="primary"
             type="submit"
-            disabled={sending || Boolean(compression) || oversized}
+            disabled={
+              sendDisabled || sending || Boolean(compression) || oversized
+            }
             className="shrink-0"
             aria-label={sending ? "Saving messages" : "Send"}
           >
@@ -274,6 +277,16 @@ export default function AttachmentPreviewDialog({
             A selected file exceeds its send limit. Compress or trim the video,
             or remove the oversized file before sending.
           </p>
+        )}
+        {files.length === 1 && active?.type?.startsWith("audio/") && (
+          <button
+            type="button"
+            disabled={sending || Boolean(compression)}
+            onClick={onCancel}
+            className="min-h-11 shrink-0 border-t border-line px-4 text-label text-error"
+          >
+            Discard voice message
+          </button>
         )}
         {files.length > 1 && (
           <div className="scrollbar-none flex shrink-0 gap-2 overflow-x-auto border-t border-line px-4 py-3">

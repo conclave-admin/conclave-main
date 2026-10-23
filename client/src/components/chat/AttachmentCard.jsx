@@ -4,7 +4,7 @@ import IconDownload from "@/assets/icons/download.svg?react";
 import IconFile from "@/assets/icons/file.svg?react";
 import IconImage from "@/assets/icons/image.svg?react";
 import IconSpreadsheet from "@/assets/icons/spreadsheet.svg?react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMediaViewer } from "./MediaViewer";
 import Modal from "@/components/ui/Modal";
 import useAttachmentDownload from "@/hooks/useAttachmentDownload";
@@ -109,7 +109,160 @@ function DownloadState({ download, attachment }) {
   );
 }
 
+function AudioAttachment({ attachment }) {
+  const download = useAttachmentDownload(attachment);
+  const src = useObjectUrl(download.blob);
+  const player = useRef(null);
+  const [speed, setSpeed] = useState(1);
+  const [error, setError] = useState("");
+  const [duration, setDuration] = useState(null);
+  const probing = useRef(false);
+  const probeTimer = useRef(null);
+  useEffect(() => () => clearTimeout(probeTimer.current), [src]);
+  useEffect(() => {
+    setError("");
+    setDuration(null);
+    probing.current = false;
+  }, [src]);
+  useEffect(() => {
+    if (player.current) player.current.playbackRate = speed;
+  }, [speed, src]);
+  useEffect(() => {
+    const audio = player.current;
+    const pause = () => audio?.pause();
+    const another = (event) => {
+      if (event.detail !== audio) pause();
+    };
+    window.addEventListener("conclave:voice-playing", another);
+    window.addEventListener("conclave:session-ended", pause);
+    window.addEventListener("conclave:outbox-stop", pause);
+    return () => {
+      pause();
+      window.removeEventListener("conclave:voice-playing", another);
+      window.removeEventListener("conclave:session-ended", pause);
+      window.removeEventListener("conclave:outbox-stop", pause);
+    };
+  }, [src]);
+  const metadata = () => {
+    const audio = player.current;
+    if (Number.isFinite(audio?.duration) && audio.duration > 0) {
+      setDuration(audio.duration);
+      if (probing.current) {
+        probing.current = false;
+        clearTimeout(probeTimer.current);
+        audio.currentTime = 0;
+      }
+    }
+  };
+  const loaded = () => {
+    metadata();
+    // Chromium can report Infinity for MediaRecorder WebM until the end is
+    // inspected. This seeks only the already downloaded local Blob.
+    if (player.current?.duration === Infinity) {
+      probing.current = true;
+      player.current.currentTime = 1e10;
+      probeTimer.current = setTimeout(() => {
+        probing.current = false;
+        if (player.current) player.current.currentTime = 0;
+      }, 2000);
+    }
+  };
+  return (
+    <section
+      aria-label="Voice message"
+      className="w-full min-w-0 max-w-sm space-y-2 rounded-lg border border-line bg-canvas p-3"
+    >
+      <p className="truncate text-label text-ink">
+        {attachment.filename || "Voice message"}
+      </p>
+      {src ? (
+        <>
+          <audio
+            ref={player}
+            src={src}
+            controls
+            preload="metadata"
+            aria-label={`Play ${attachment.filename || "voice message"}`}
+            className="block h-11 w-full min-w-0 max-w-full"
+            onLoadedMetadata={loaded}
+            onDurationChange={metadata}
+            onTimeUpdate={metadata}
+            onPlay={() =>
+              window.dispatchEvent(
+                new CustomEvent("conclave:voice-playing", {
+                  detail: player.current,
+                }),
+              )
+            }
+            onError={() =>
+              setError(
+                "This browser could not play the recording. You can save it and try another player.",
+              )
+            }
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-metadata text-muted">
+              {duration
+                ? `${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, "0")}`
+                : "Duration available in player"}
+            </span>
+            <label className="text-metadata text-ink">
+              Playback speed{" "}
+              <select
+                aria-label="Voice message playback speed"
+                value={speed}
+                className="min-h-11 rounded border border-line bg-surface px-2"
+                onChange={(event) => setSpeed(Number(event.target.value))}
+              >
+                {[1, 1.25, 1.5, 2].map((value) => (
+                  <option key={value} value={value}>
+                    {value}×
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <button
+            type="button"
+            className="min-h-11 text-label text-brand"
+            onClick={() => saveAttachmentToDevice(attachment, download.blob)}
+          >
+            Save audio
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="min-h-11 text-label text-brand"
+          disabled={
+            download.checking ||
+            download.status === "downloading" ||
+            !(attachment.id || attachment.local_blob)
+          }
+          onClick={() => download.start()}
+        >
+          Download voice message · {formatSize(attachment.size)}
+        </button>
+      )}
+      {error && (
+        <p role="alert" className="text-metadata text-error">
+          {error}
+        </p>
+      )}
+      <DownloadState download={download} attachment={attachment} />
+    </section>
+  );
+}
+
 function FileAttachment({ attachment }) {
+  return attachment.mime_type?.startsWith("audio/") ? (
+    <AudioAttachment attachment={attachment} />
+  ) : (
+    <DocumentAttachment attachment={attachment} />
+  );
+}
+
+function DocumentAttachment({ attachment }) {
   const Icon = iconFor(attachment.mime_type);
   const download = useAttachmentDownload(attachment);
   const save = async () => {

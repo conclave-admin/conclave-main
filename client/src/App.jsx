@@ -1,3 +1,4 @@
+import JoinRoom from "./pages/JoinRoom";
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import AppShell from "./components/layout/AppShell";
@@ -146,6 +147,7 @@ export default function App() {
                         </Route>
                       </Route>
 
+                      <Route path="/join" element={<JoinRoom/>}/>
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </Suspense>

@@ -162,8 +162,8 @@ async function createMessage({
   // 2. If replying, verify the parent message exists in the same room
   if (replyToId) {
     const parent = await query(
-      `SELECT id FROM messages WHERE id = $1 AND room_id = $2`,
-      [replyToId, roomId],
+      `SELECT id FROM messages WHERE id = $1 AND room_id = $2 AND message_visible(id,$3)`,
+      [replyToId, roomId, senderId],
     );
     if (parent.rows.length === 0) {
       throw new ApiError(400, "Reply target message not found in this room");
@@ -193,7 +193,7 @@ async function createMessage({
     // after any in-flight copy has committed, before allocating a sequence.
     const lockedRoom = (
       await client.query(
-        "SELECT id,superseded_by FROM rooms WHERE id = $1 FOR UPDATE",
+        "SELECT id,superseded_by,member_can_send FROM rooms WHERE id = $1 FOR UPDATE",
         [roomId],
       )
     ).rows[0];
@@ -217,6 +217,16 @@ async function createMessage({
     }
 
     if (!isRetry) {
+      const activeMember = (
+        await client.query(
+          "SELECT role FROM room_members WHERE room_id=$1 AND user_id=$2",
+          [roomId, senderId],
+        )
+      ).rows[0];
+      if (!activeMember)
+        throw new ApiError(403, "You are not a member of this room");
+      if (lockedRoom.member_can_send === false && activeMember.role !== "admin")
+        throw new ApiError(403, "Only admins can send messages in this room");
       if (lockedRoom.superseded_by)
         throw new ApiError(409, "Continue in the new encrypted conversation");
       let encrypted = null;
@@ -271,7 +281,7 @@ async function createMessage({
         const source = await client.query(
           `SELECT m.id, m.content,m.encrypted_payload FROM messages m
           JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-          WHERE m.id = $1 AND m.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM polls p WHERE p.message_id = m.id)
+          WHERE m.id = $1 AND message_visible(m.id,$2) AND m.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM polls p WHERE p.message_id = m.id)
           FOR SHARE OF m, rm`,
           [forwardSource.messageId, senderId],
         );

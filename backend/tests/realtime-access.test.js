@@ -2458,3 +2458,593 @@ test("durable session invalidation retries a failed cluster eviction after revoc
     ).rowCount,
   );
 });
+
+test("phase6: approval keeps applicants outside history until an admin accepts", async () => {
+  const a = await account(),
+    b = await account(),
+    c = await account(),
+    id = await room(a, b, "public");
+  assert.equal(
+    (
+      await request(`/rooms/${id}/settings`, b.token, "PATCH", {
+        join_approval: true,
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(`/rooms/${id}/settings`, a.token, "PATCH", {
+        join_approval: true,
+      })
+    ).status,
+    200,
+  );
+  const pending = await request(`/rooms/${id}/join`, c.token, "POST");
+  assert.equal(pending.status, 200);
+  assert.equal(pending.body.data.status, "pending");
+  assert.equal((await request(`/rooms/${id}`, c.token)).status, 403);
+  assert.equal((await request(`/messages/room/${id}`, c.token)).status, 403);
+  assert.equal(
+    (
+      await request(`/rooms/${id}/requests/${c.userId}`, b.token, "POST", {
+        decision: "approved",
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(`/rooms/${id}/requests/${c.userId}`, a.token, "POST", {
+        decision: "approved",
+      })
+    ).status,
+    200,
+  );
+  assert.equal((await request(`/rooms/${id}`, c.token)).status, 200);
+  const deletedApplicant = await account();
+  assert.equal(
+    (await request(`/rooms/${id}/join`, deletedApplicant.token, "POST")).body
+      .data.status,
+    "pending",
+  );
+  await query("UPDATE users SET deleted_at=NOW() WHERE id=$1", [
+    deletedApplicant.userId,
+  ]);
+  assert.equal(
+    (
+      await request(
+        `/rooms/${id}/requests/${deletedApplicant.userId}`,
+        a.token,
+        "POST",
+        { decision: "approved" },
+      )
+    ).status,
+    409,
+  );
+  assert.equal(
+    (
+      await query(
+        "SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2",
+        [id, deletedApplicant.userId],
+      )
+    ).rowCount,
+    0,
+  );
+});
+test("phase6: revocable bounded invitations serialize concurrent joins and pending approvals", async () => {
+  const a = await account(),
+    b = await account(),
+    c = await account(),
+    d = await account(),
+    id = await room(a, b);
+  assert.equal(
+    (await request(`/rooms/${id}/invitations`, b.token, "POST", {})).status,
+    403,
+  );
+  const invite = await request(`/rooms/${id}/invitations`, a.token, "POST", {
+    maxUses: 1,
+    expiresInHours: 1,
+  });
+  assert.equal(invite.status, 201);
+  const token = invite.body.data.token;
+  assert.ok(token);
+  assert.equal(
+    (
+      await query("SELECT token_hash FROM room_invites WHERE id=$1", [
+        invite.body.data.id,
+      ])
+    ).rows[0].token_hash,
+    createHash("sha256").update(token).digest("hex"),
+  );
+  const results = await Promise.all(
+    [c, d].map((u) =>
+      request("/rooms/invitations/accept", u.token, "POST", { token }),
+    ),
+  );
+  assert.equal(results.filter((r) => r.status === 200).length, 1);
+  assert.equal(results.filter((r) => r.status === 404).length, 1);
+  const next = await request(`/rooms/${id}/invitations`, a.token, "POST", {});
+  await request(`/rooms/${id}/settings`, a.token, "PATCH", {
+    join_approval: true,
+  });
+  const outsider = await account();
+  assert.equal(
+    (
+      await request("/rooms/invitations/accept", outsider.token, "POST", {
+        token: next.body.data.token,
+      })
+    ).body.data.status,
+    "pending",
+  );
+  assert.equal(
+    (
+      await request(
+        `/rooms/${id}/invitations/${next.body.data.id}`,
+        b.token,
+        "DELETE",
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(
+        `/rooms/${id}/invitations/${next.body.data.id}`,
+        a.token,
+        "DELETE",
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await request(
+        `/rooms/${id}/requests/${outsider.userId}`,
+        a.token,
+        "POST",
+        { decision: "approved" },
+      )
+    ).status,
+    409,
+  );
+  assert.equal((await request(`/rooms/${id}`, outsider.token)).status, 403);
+});
+test("phase6: participant send/link permissions and atomic admin handover are enforced", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b);
+  await request(`/rooms/${id}/settings`, a.token, "PATCH", {
+    member_can_send: false,
+    member_can_invite: true,
+  });
+  assert.equal(
+    (
+      await request("/messages", b.token, "POST", {
+        roomId: id,
+        content: "not allowed",
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request("/messages", a.token, "POST", {
+        roomId: id,
+        content: "admin announcement",
+      })
+    ).status,
+    201,
+  );
+  assert.equal(
+    (await request(`/rooms/${id}/invitations`, b.token, "POST", {})).status,
+    201,
+  );
+  assert.equal(
+    (
+      await request(`/rooms/${id}/handover`, b.token, "POST", {
+        successorId: a.userId,
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(`/rooms/${id}/handover`, a.token, "POST", {
+        successorId: b.userId,
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await query(
+        "SELECT COUNT(*)::int AS n FROM room_members WHERE room_id=$1 AND role='admin'",
+        [id],
+      )
+    ).rows[0].n,
+    1,
+  );
+  assert.equal(
+    (
+      await request(`/rooms/${id}/settings`, a.token, "PATCH", {
+        member_can_send: true,
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(`/rooms/${id}/settings`, b.token, "PATCH", {
+        member_can_send: true,
+      })
+    ).status,
+    200,
+  );
+});
+test("phase6: personal clearing filters histories, links, media and snapshots without reading or deleting messages", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b),
+    second = await session(b.userId);
+  const sent = (
+    await request("/messages", a.token, "POST", {
+      roomId: id,
+      content: "Visible https://example.test/phase6",
+    })
+  ).body.data;
+  assert.ok(sent.id);
+  const aid = randomUUID();
+  await query(
+    "INSERT INTO attachments(id,message_id,filename,file_url,file_type,size_bytes) VALUES($1,$2,'test.txt','r2://fixture/phase6','text/plain',4)",
+    [aid, sent.id],
+  );
+  assert.equal(
+    (await request(`/rooms/${id}/links`, b.token)).body.data.messages.length,
+    1,
+  );
+  assert.equal(
+    (await request(`/messages/room/${id}/media?kind=documents`, b.token)).body
+      .data.media.length,
+    1,
+  );
+  assert.equal(
+    (await request(`/rooms/${id}/clear`, b.token, "POST")).status,
+    200,
+  );
+  const clearedRoom = (await request("/rooms", second.token)).body.data.find(
+    (r) => r.id === id,
+  );
+  assert.equal(clearedRoom.last_message, null);
+  assert.equal(clearedRoom.unread_count, 0);
+  const mine = (await request(`/messages/room/${id}`, second.token)).body.data;
+  assert.equal(mine.messages.length, 0);
+  assert.equal(
+    (await request(`/messages/room/${id}?ids=${sent.id}`, second.token)).body
+      .data.missingIds[0],
+    sent.id,
+  );
+  assert.equal(
+    (await request(`/rooms/${id}/links`, second.token)).body.data.messages
+      .length,
+    0,
+  );
+  assert.equal(
+    (await request(`/messages/room/${id}/media?kind=documents`, second.token))
+      .body.data.media.length,
+    0,
+  );
+  assert.equal(
+    (await request(`/attachments/${aid}`, second.token)).status,
+    404,
+  );
+  assert.equal(
+    (await request(`/messages/room/${id}/search?q=Visible`, second.token)).body
+      .data.messages.length,
+    0,
+  );
+  assert.equal(
+    (await request(`/messages/room/${id}`, a.token)).body.data.messages.length,
+    1,
+  );
+  assert.equal(
+    (
+      await query(
+        "SELECT read FROM message_recipients WHERE message_id=$1 AND recipient_id=$2",
+        [sent.id, b.userId],
+      )
+    ).rows[0].read,
+    false,
+  );
+  const later = await request("/messages", b.token, "POST", {
+    roomId: id,
+    clientId: randomUUID(),
+    content: "Offline draft sent after clear",
+  });
+  assert.equal(later.status, 201);
+  assert.equal(
+    (await request(`/messages/room/${id}`, b.token)).body.data.messages.length,
+    1,
+  );
+  const cleared = (await request(`/rooms/${id}`, b.token)).body.data
+    .cleared_sequence;
+  assert.ok(BigInt(cleared) > 0n);
+  await request(`/rooms/${id}/members/${b.userId}`, b.token, "DELETE");
+  await request(`/rooms/${id}/members`, a.token, "POST", { userId: b.userId });
+  assert.equal(
+    (await request(`/rooms/${id}`, b.token)).body.data.cleared_sequence,
+    cleared,
+  );
+});
+test("phase6: room preference patches compose across devices and private replay records clearing", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b),
+    other = await session(b.userId);
+  await Promise.all([
+    request(`/rooms/${id}/preferences`, b.token, "PATCH", { muted: true }),
+    request(`/rooms/${id}/preferences`, other.token, "PATCH", { pinned: true }),
+  ]);
+  const state = (await request(`/rooms/${id}/management`, other.token)).body
+    .data;
+  assert.equal(state.preferences.muted, true);
+  assert.equal(state.preferences.pinned, true);
+  await request("/messages", a.token, "POST", {
+    roomId: id,
+    content: "clear me",
+  });
+  await request(`/rooms/${id}/clear`, b.token, "POST");
+  assert.ok(
+    (
+      await query(
+        "SELECT 1 FROM sync_changes WHERE room_id=$1 AND user_id=$2 AND kind='preferences' AND private",
+        [id, b.userId],
+      )
+    ).rowCount,
+  );
+  assert.equal(
+    (await request(`/rooms/${id}/management`, (await account()).token)).status,
+    404,
+  );
+});
+
+test("phase6: encrypted joins require approved devices and never gain historical message keys", async () => {
+  const { protocol, a, b, av, bv } = await cryptoFixture();
+  const created = await request("/rooms", a.token, "POST", {
+    type: "private",
+    name: "Encrypted history policy",
+    memberIds: [b.userId],
+  });
+  assert.equal(created.status, 201);
+  const id = created.body.data.id;
+  const roster = (await request(`/encryption/rooms/${id}`, a.token)).body.data,
+    clientId = randomUUID();
+  const saved = await request("/messages", a.token, "POST", {
+    roomId: id,
+    clientId,
+    encryptedPayload: protocol.sealMessage(av, roster, {
+      roomId: id,
+      clientId,
+      content: "Historical private body",
+    }),
+  });
+  assert.equal(saved.status, 201);
+  const c = await account(),
+    link = (await request(`/rooms/${id}/invitations`, a.token, "POST", {})).body
+      .data;
+  assert.equal(
+    (
+      await request("/rooms/invitations/accept", c.token, "POST", {
+        token: link.token,
+      })
+    ).status,
+    409,
+  );
+  const cv = protocol.createVault(c.userId);
+  assert.equal(
+    (
+      await request(
+        "/encryption/devices",
+        c.token,
+        "POST",
+        protocol.publicDevice(cv),
+      )
+    ).status,
+    201,
+  );
+  await request(`/rooms/${id}/settings`, a.token, "PATCH", {
+    join_approval: true,
+  });
+  assert.equal(
+    (
+      await request("/rooms/invitations/accept", c.token, "POST", {
+        token: link.token,
+      })
+    ).body.data.status,
+    "pending",
+  );
+  assert.equal((await request(`/encryption/rooms/${id}`, c.token)).status, 403);
+  assert.equal(
+    (
+      await request(`/rooms/${id}/requests/${c.userId}`, a.token, "POST", {
+        decision: "approved",
+      })
+    ).status,
+    200,
+  );
+  const old = (await request(`/messages/room/${id}`, c.token)).body.data
+    .messages[0];
+  assert.throws(() => protocol.openMessage(cv, old), /no key/);
+  assert.equal(
+    protocol.openMessage(bv, old).content,
+    "Historical private body",
+  );
+  assert.equal(
+    (await request(`/rooms/${id}/clear`, c.token, "POST")).status,
+    200,
+  );
+  assert.equal(
+    (await request(`/messages/room/${id}`, c.token)).body.data.messages.length,
+    0,
+  );
+  assert.equal(
+    (await request(`/messages/room/${id}`, a.token)).body.data.messages.length,
+    1,
+  );
+  const nextRoster = (await request(`/encryption/rooms/${id}`, a.token)).body
+      .data,
+    nextId = randomUUID();
+  const next = await request("/messages", a.token, "POST", {
+    roomId: id,
+    clientId: nextId,
+    encryptedPayload: protocol.sealMessage(av, nextRoster, {
+      roomId: id,
+      clientId: nextId,
+      content: "Future private body",
+    }),
+  });
+  assert.equal(next.status, 201);
+  assert.equal(
+    protocol.openMessage(cv, next.body.data).content,
+    "Future private body",
+  );
+});
+test("phase6: expired invitations disclose no room metadata and handover races keep an admin", async () => {
+  const a = await account(),
+    b = await account(),
+    c = await account(),
+    id = await room(a, b);
+  const link = (await request(`/rooms/${id}/invitations`, a.token, "POST", {}))
+    .body.data;
+  await query(
+    "UPDATE room_invites SET expires_at=NOW()-INTERVAL '1 minute' WHERE id=$1",
+    [link.id],
+  );
+  const expired = await request("/rooms/invitations/accept", c.token, "POST", {
+    token: link.token,
+  });
+  assert.equal(expired.status, 404);
+  assert.ok(!JSON.stringify(expired.body).includes(id));
+  const attempts = await Promise.all([
+    request(`/rooms/${id}/handover`, a.token, "POST", {
+      successorId: b.userId,
+    }),
+    request(`/rooms/${id}/members/${b.userId}`, a.token, "DELETE"),
+  ]);
+  assert.ok(attempts.some((result) => result.status === 200));
+  assert.ok(
+    (
+      await query(
+        "SELECT 1 FROM room_members WHERE room_id=$1 AND role='admin'",
+        [id],
+      )
+    ).rowCount,
+  );
+});
+
+test("phase6: pending invitation status survives refresh without silently resubmitting a rejected request", async () => {
+  const a = await account(),
+    b = await account(),
+    c = await account(),
+    id = await room(a, b);
+  await request(`/rooms/${id}/settings`, a.token, "PATCH", {
+    join_approval: true,
+  });
+  const token = (await request(`/rooms/${id}/invitations`, a.token, "POST", {}))
+    .body.data.token;
+  await request("/rooms/invitations/accept", c.token, "POST", { token });
+  assert.equal(
+    (await request("/rooms/invitations/status", c.token, "POST", { token }))
+      .body.data.status,
+    "pending",
+  );
+  await request(`/rooms/${id}/requests/${c.userId}`, a.token, "POST", {
+    decision: "rejected",
+  });
+  assert.equal(
+    (await request("/rooms/invitations/status", c.token, "POST", { token }))
+      .body.data.status,
+    "rejected",
+  );
+  assert.equal(
+    (
+      await query(
+        "SELECT status FROM room_join_requests WHERE room_id=$1 AND user_id=$2",
+        [id, c.userId],
+      )
+    ).rows[0].status,
+    "rejected",
+  );
+});
+
+test("phase6: shared links paginate without duplicates and reject malformed cursors", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b);
+  for (let i = 0; i < 27; i++) {
+    await query(
+      `WITH next AS (UPDATE rooms SET message_sequence=message_sequence+1 WHERE id=$1 RETURNING message_sequence) INSERT INTO messages(room_id,sender_id,room_sequence,content) SELECT $1,$2,message_sequence,$3 FROM next`,
+      [id, a.userId, `Link https://example.test/page/${i}`],
+    );
+  }
+  const first = await request(`/rooms/${id}/links`, b.token);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.data.messages.length, 25);
+  assert.ok(first.body.data.nextCursor);
+  const second = await request(
+    `/rooms/${id}/links?before=${first.body.data.nextCursor}`,
+    b.token,
+  );
+  assert.equal(second.body.data.messages.length, 2);
+  assert.equal(second.body.data.nextCursor, null);
+  assert.equal(
+    new Set(
+      [...first.body.data.messages, ...second.body.data.messages].map(
+        (m) => m.id,
+      ),
+    ).size,
+    27,
+  );
+  for (const cursor of ["9999999999999999999", "abc", "1&before=2"])
+    assert.equal(
+      (await request(`/rooms/${id}/links?before=${cursor}`, b.token)).status,
+      400,
+    );
+  const outsider = await account();
+  assert.equal(
+    (await request(`/rooms/${id}/links`, outsider.token)).status,
+    404,
+  );
+  await request(`/rooms/${id}/clear`, b.token, "POST");
+  assert.equal(
+    (await request(`/rooms/${id}/links`, b.token)).body.data.messages.length,
+    0,
+  );
+  assert.equal(
+    (await request(`/rooms/${id}/links`, a.token)).body.data.messages.length,
+    25,
+  );
+});
+
+test("phase6: active invitations stay manageable after many links are revoked", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b);
+  const active = randomUUID();
+  await query(
+    "INSERT INTO room_invites(id,room_id,token_hash,created_by,expires_at,max_uses,created_at) VALUES($1,$2,$3,$4,NOW()+INTERVAL '1 day',10,NOW()-INTERVAL '1 hour')",
+    [active, id, randomUUID(), a.userId],
+  );
+  await query(
+    "INSERT INTO room_invites(room_id,token_hash,created_by,expires_at,max_uses,revoked_at) SELECT $1,gen_random_uuid()::text,$2,NOW()+INTERVAL '1 day',10,NOW() FROM generate_series(1,60)",
+    [id, a.userId],
+  );
+  const data = (await request(`/rooms/${id}/management`, a.token)).body.data;
+  assert.equal(data.invites.length, 50);
+  assert.equal(data.invites[0].id, active);
+  assert.equal(
+    (await request(`/rooms/${id}/invitations/${active}`, a.token, "DELETE"))
+      .status,
+    200,
+  );
+});

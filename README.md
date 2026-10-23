@@ -88,10 +88,16 @@ docker-compose.yml   Postgres + Redis for local dev
 
 REST requests follow routes → controllers → shared services → PostgreSQL.
 Socket.IO uses the same message write service; Redis maintains presence and
-relays events between API instances. Cloudinary stores uploaded attachments.
+relays events between API instances. R2 stores new attachments; legacy Cloudinary
+attachments remain supported.
 
 - [API contracts](docs/API_CONTRACTS.md): endpoint payloads and integration notes.
 - [Backend backlog](docs/BACKEND_TASKS.md): current status, priorities and risks.
 - [Product brief](docs/PKB_Project_Architecture_Brief.docx): product rationale.
 - [Frontend guidance](docs/CLAUDE.md), [design questions](docs/DESIGN_QUESTIONS.md)
   and [visual QA](docs/design-qa.md): Isaac's implementation references.
+
+Room invitations, approval, permissions, handover, and personal history require
+migration **038** before deploying the updated API/client. See
+[Rooms and personal history](docs/ROOMS_AND_PERSONAL_HISTORY.md) for rollout,
+permission, and clearing rules.

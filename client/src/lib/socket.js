@@ -25,6 +25,7 @@ export function connectSocket() {
   }
 
   socket = io(import.meta.env.VITE_SOCKET_URL, {
+    autoConnect: navigator.onLine !== false,
     // Re-read (and if needed refresh) the token on every connection attempt.
     auth: (callback) => {
       authUnavailable = false;
@@ -48,7 +49,7 @@ export function connectSocket() {
     clearTimeout(retryTimer);
     if (isCurrent() && getRefreshToken()) {
       retryTimer = setTimeout(() => {
-        if (isCurrent()) instance.connect();
+        if (isCurrent() && navigator.onLine !== false) instance.connect();
       }, 1000);
     }
   };
@@ -87,7 +88,7 @@ export function connectSocket() {
     if (getRefreshToken()) {
       clearTimeout(retryTimer);
       retryTimer = setTimeout(() => {
-        if (isCurrent()) instance.connect();
+        if (isCurrent() && navigator.onLine !== false) instance.connect();
       }, 5000);
     }
   });

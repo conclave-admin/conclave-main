@@ -126,8 +126,8 @@ const listMessages = asyncHandler(async (req, res) => {
         "around must identify one message without another history cursor",
       );
     const anchor = await query(
-      "SELECT room_sequence FROM messages WHERE id = $1 AND room_id = $2 AND deleted_at IS NULL",
-      [req.query.around, roomId],
+      "SELECT room_sequence FROM messages WHERE id = $1 AND room_id = $2 AND deleted_at IS NULL AND message_visible(id,$3)",
+      [req.query.around, roomId, req.user.id],
     );
     if (!anchor.rows.length)
       throw new ApiError(404, "Message no longer available");
@@ -189,7 +189,8 @@ const listMessages = asyncHandler(async (req, res) => {
     LEFT JOIN attachments a ON a.message_id = m.id
     WHERE m.room_id = $1
   `;
-  const params = [roomId];
+  const params = [roomId, req.user.id];
+  sql += " AND message_visible(m.id,$2)";
 
   if (anchorSequence !== null) {
     params.push(anchorSequence);
@@ -375,7 +376,7 @@ const searchMessages = asyncHandler(async (req, res) => {
      FROM messages m
      INNER JOIN users u ON u.id = m.sender_id
      LEFT JOIN attachments a ON a.message_id = m.id
-     WHERE m.room_id = $1
+     WHERE m.room_id = $1 AND message_visible(m.id,$3)
        AND m.deleted_at IS NULL
        AND to_tsvector('english', m.content) @@ plainto_tsquery('english', $2)
      GROUP BY m.id, m.room_id, m.sender_id, m.client_id, m.room_sequence, u.profile_version, u.display_name, u.avatar_url,
@@ -383,7 +384,7 @@ const searchMessages = asyncHandler(async (req, res) => {
       m.forwarded, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
      ORDER BY rank DESC, m.created_at DESC
      LIMIT 50`,
-    [roomId, q.trim()],
+    [roomId, q.trim(), req.user.id],
   );
 
   return ok(res, {
@@ -593,8 +594,8 @@ const listRoomMedia = asyncHandler(async (req, res) => {
     documents:
       "(COALESCE(a.file_type, '') NOT LIKE 'image/%' AND COALESCE(a.file_type, '') NOT LIKE 'video/%' AND COALESCE(a.file_type, '') NOT LIKE 'audio/%')",
   };
-  const params = [roomId];
-  let bounds = "";
+  const params = [roomId, req.user.id];
+  let bounds = " AND message_visible(m.id,$2)";
   if (after) {
     params.push(after);
     bounds += ` AND m.created_at > $${params.length}::timestamptz`;

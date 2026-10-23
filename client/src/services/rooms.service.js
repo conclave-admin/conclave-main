@@ -1,3 +1,5 @@
+import { applyAccountClear } from "../lib/clearedConversations";
+import { getSessionUserId } from "../lib/session";
 import { api } from "../lib/api";
 import {
   isDevAuthBypass,
@@ -8,7 +10,11 @@ import {
 
 export async function listRooms() {
   if (isDevAuthBypass) return previewRooms;
+  const userId = getSessionUserId();
   const { data } = await api.get("/rooms");
+  if (getSessionUserId() === userId)
+    for (const room of data.data)
+      applyAccountClear(userId, room.id, room.cleared_sequence,room.cleared_at);
   return data.data;
 }
 
@@ -87,7 +93,10 @@ export async function getRoom(roomId) {
       );
     return { ...found, id: roomId };
   }
+  const userId = getSessionUserId();
   const { data } = await api.get(`/rooms/${roomId}`);
+  if (getSessionUserId() === userId)
+    applyAccountClear(userId, roomId, data.data.cleared_sequence,data.data.cleared_at);
   return data.data;
 }
 

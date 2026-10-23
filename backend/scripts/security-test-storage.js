@@ -1,5 +1,5 @@
-// Explicit preload for the Phase 5 browser test process only. Bytes never leave
-// memory and no real R2/SMTP/push provider is called by this fixture.
+// Explicit preload for the disposable security/media browser fixture. Bytes
+// stay in memory; no real R2, email, or push provider is called.
 const { Readable } = require("node:stream");
 const { createHash } = require("node:crypto");
 const r2 = require("../src/config/r2");
@@ -12,10 +12,21 @@ const object = (key) => {
 };
 r2.isConfigured = () => true;
 r2.putObject = async ({ key, body, contentType }) => {
+  const wave =
+    contentType === "audio/wav" &&
+    Buffer.from(body).subarray(0, 4).toString() === "RIFF" &&
+    Buffer.from(body).subarray(8, 12).toString() === "WAVE";
+  const webm =
+    contentType === "audio/webm" &&
+    Buffer.from(body)
+      .subarray(0, 4)
+      .equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
   if (
-    contentType !== "application/vnd.conclave.encrypted" ||
-    Buffer.from(body).subarray(0, 5).toString() !== "CCEF1" ||
-    Buffer.from(body).includes(Buffer.from("SECRET DOCUMENT CONTENT"))
+    !wave &&
+    !webm &&
+    (contentType !== "application/vnd.conclave.encrypted" ||
+      Buffer.from(body).subarray(0, 5).toString() !== "CCEF1" ||
+      Buffer.from(body).includes(Buffer.from("SECRET DOCUMENT CONTENT")))
   )
     throw new Error("The browser sent plaintext to encrypted test storage");
   objects.set(key, {

@@ -40,7 +40,7 @@ tracked in the phases below.
 | 3     | P1       | Recoverable delivery and reconnect synchronization                | Complete    |
 | 4     | P1       | Background notifications and preference enforcement               | In progress |
 | 5     | P1       | Privacy controls, account recovery, devices, and encryption       | Not started |
-| 6     | P2       | Voice messages, info pages, rooms, and personal history           | Not started |
+| 6     | P2       | Voice messages, info pages, rooms, and personal history           | Complete    |
 | 7     | P2       | Deployed media, browser CI, real devices, accessibility, and load | Not started |
 | 8     | P3       | Calling, events, and further collaboration                        | Not started |
 
@@ -285,47 +285,51 @@ access alone is not encryption. See [privacy and encryption policy](docs/PRIVACY
 ## Phase 6 — Voice messages, information pages, rooms, and personal history
 
 **Priority:** P2  
-**Status:** Not started
+**Status:** Complete — local automated acceptance; deployed/physical-device validation remains in Phase 7
 
 ### Voice messages
 
-Recording exists; received audio currently follows the generic file-card path.
+Voice notes now have inline playback, seeking, duration, speed controls, a local
+preview/discard flow, and cached offline playback through the existing encrypted
+or server-readable media path. See [voice-message notes](docs/VOICE_MESSAGES.md).
 
-- [ ] **6.1** Add inline audio playback with seeking, duration, and playback speed.
-- [ ] **6.2** Add recording preview and discard controls.
-- [ ] **6.3** Integrate playback with cached/offline media and the recording indicators in phase 2.
+- [x] **6.1** Add inline audio playback with seeking, duration, and playback speed.
+- [x] **6.2** Add recording preview and discard controls.
+- [x] **6.3** Integrate playback with cached/offline media and the recording indicators in phase 2.
 
 ### Information pages
 
-- [ ] **6.4** Expose the per-message delivery/read information from phase 2.
-- [ ] **6.5** Add shared-link browsing alongside shared media.
-- [ ] **6.6** Make conversation notification controls clearer.
-- [ ] **6.7** Show useful storage information.
-- [ ] **6.8** Refresh information pages live after membership, role, room, or profile changes.
+- [x] **6.4** Expose the per-message delivery/read information from phase 2.
+- [x] **6.5** Add shared-link browsing alongside shared media.
+- [x] **6.6** Make conversation notification controls clearer.
+- [x] **6.7** Show useful storage information.
+- [x] **6.8** Refresh information pages live after membership, role, room, or profile changes.
 
 ### Rooms
 
-- [ ] **6.9** Add revocable invitation links.
-- [ ] **6.10** Add optional join approval.
-- [ ] **6.11** Add configurable participant permissions.
-- [ ] **6.12** Define membership/history access policy.
-- [ ] **6.13** Provide a guided admin handover flow.
+- [x] **6.9** Add revocable invitation links.
+- [x] **6.10** Add optional join approval.
+- [x] **6.11** Add configurable participant permissions.
+- [x] **6.12** Define membership/history access policy.
+- [x] **6.13** Provide a guided admin handover flow.
 
 ### Multi-device personal actions
 
-- [ ] **6.14** Synchronize conversation preferences across devices.
-- [ ] **6.15** Define account-wide versus device-only personal clearing and implement the intended behaviour.
-- [ ] **6.16** Synchronize personal history actions without globally deleting other participants' messages.
+- [x] **6.14** Synchronize conversation preferences across devices.
+- [x] **6.15** Define account-wide versus device-only personal clearing and implement the intended behaviour.
+- [x] **6.16** Synchronize personal history actions without globally deleting other participants' messages.
 
-Current “Clear for me” uses a device-local timestamp. Message edits, deletions,
-and membership synchronization are tracked in phase 3.
+Account clearing now synchronizes a monotonic sequence boundary; device-only
+clearing remains a separate local action. Neither deletes peers’ history or
+pending sends. See [room and personal-history policy](docs/ROOMS_AND_PERSONAL_HISTORY.md)
+for permissions, invitations, encryption/history rules, and storage scopes.
 
 ### Acceptance checks
 
-- [ ] Voice notes can be recorded, previewed, discarded, played, and reopened offline as designed.
-- [ ] Info pages stay current without manual reload and enforce the same permissions as their actions.
-- [ ] Revoked invites, join approval, and admin handover work under concurrent changes.
-- [ ] Personal history actions have clearly labelled, consistent device/account scope.
+- [x] Voice notes can be recorded, previewed, discarded, played, and reopened offline as designed (Chromium desktop/mobile emulation, mocked storage).
+- [x] Info pages stay current without manual reload and enforce the same permissions as their actions.
+- [x] Revoked invites, join approval, and admin handover work under concurrent changes.
+- [x] Personal history actions have clearly labelled, consistent device/account scope.
 
 ## Phase 7 — Production validation, performance, and moderation
 
@@ -416,3 +420,7 @@ implemented or verified equivalent behaviour.
 | 2026-10-23 | 5.1–5.12 | Added per-viewer activity/profile privacy, reciprocal DM receipt controls, unknown-user requests, consistent blocking, verification/recovery with encrypted durable Resend SMTP jobs, session management and durable cluster eviction, device certificates/linking/safety codes, new DM/private-room message/file encryption, key backups and explicit lost-key reset, local encrypted search/media, and explicit legacy timeline migration/collaboration policy. Fixed opaque upload metadata, durable sealed outbox retries, lost device-registration responses, cross-tab key persistence, password-reset/login races, and private read-pointer leakage in delivery events. | Backend unit checks: 39 passed; client checks: 76 passed; PostgreSQL/Redis suite: 236 passed, 0 failed, 6 live R2 checks skipped; targeted privacy/mail/session race checks: 5 passed; desktop/mobile Playwright: 40 passed (36 recovery regressions + 4 real API encryption checks with mocked storage). Production build and whitespace checks passed. Migrations 036–037 applied locally and rerun safely. Resend SMTP defaults configured; API key, verified sender, real email/storage/device acceptance, and independent cryptographic review remain open. Custom protocol has no forward secrecy/ratchet or OS-protected local key store. See docs/PRIVACY_AND_ENCRYPTION.md. No commits made. |
 
 | 2026-10-23 | Phase 5 email provider | Replaced Nodemailer/SMTP with the official Resend HTTPS API SDK, migrated configuration to RESEND_API_KEY/RESEND_FROM, preserved encrypted queued mail and bounded retries, and added stable per-job idempotency keys and API error/timeout handling. Updated deployment docs and existing mock fixtures. | No live email sent; real Resend delivery still requires configured credentials and a verified sender. No commits made. |
+
+| 2026-10-23 | GH-06 / 6.1–6.3 | Added inline audio playback, native seeking/duration with local WebM duration probing, 1×–2× speed controls, explicit preview discard, supported recorder container selection and codec/MIME/extension normalization. Reused authorized encrypted/plain downloads and local caching; paused audio on source cleanup/session end and when another voice starts. Added recording and offline browser coverage and voice-message documentation. | Client assertions: 78 passed on Node 22; backend unit checks: 39 passed; four desktop/mobile voice cases passed (one mobile timeout rerun in isolation), plus six recording lifecycle regressions and four info/presence rechecks passed; production build and whitespace checks passed. Browser checks use real API/PostgreSQL/Redis, fake microphones and mocked R2; physical devices/live R2 remain Phase 7 acceptance. The first expanded suite hit the signup limiter; distinct fixture client addresses retain production limits. A parallel broad regression run was interrupted after timeouts; both affected scenarios passed isolated desktop/mobile rechecks. Targeted passes do not claim a completed full 36-case recovery run. GH-07–GH-16 remain open. No commits made. |
+
+| 2026-10-23 | GH-07–GH-16 / 6.4–6.16 | Completed live sender-only receipt/info refresh, bounded shared links with local encrypted extraction, clear notification controls, scoped server/device storage and cache removal, hashed expiring/use-limited revocable invitations, optional join approval, participant send/invite permissions, documented membership/encrypted-history policy, atomic guided admin handover, account-fenced preference replay, and explicit account/device personal clearing. Clearing survives rejoin, preserves peer history and pending sends, filters secondary views/downloads, clears selected old-message UI, and rejects delayed preview resurrection. Added migration 038, API/policy documentation, and updated GitHub issue drafts. | Backend unit checks: 39 passed; client assertions: 84 passed; PostgreSQL/Redis suite: 252 total, 246 passed, 0 failed, 6 live-R2 checks skipped; desktop/mobile browser checks: 50 passed (12 real-API encryption/voice/Phase 6 cases with mocked R2, including encrypted search clearing and offline reconciliation, plus 38 recovery/presence/typing/receipt/notification cases). Production build and whitespace checks passed. Local migration runner reports schema up to date; verified migration 038 and its visibility function. Initial tests exposed switch snapback, a missing textarea disabled attribute, and legacy unsequenced-history filtering; fixed and rerun. Deployment requires migration 038 before API/client rollout. Real storage/devices, production load and independent encryption review remain separate acceptance work. No files staged or committed. |
