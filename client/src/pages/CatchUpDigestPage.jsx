@@ -1,36 +1,45 @@
-import { useEffect, useState } from 'react';
-import { useOutletContext } from 'react-router-dom';
-import EmptyState from '../components/ui/EmptyState';
-import Button from '../components/ui/Button';
-import Spinner from '../components/ui/Spinner';
-import { getUserDigest, markDigestRead } from '../services/digest.service';
-import Page from '@/components/layout/Page';
+import { useEffect, useState } from "react";
+import { useOutletContext } from "react-router-dom";
+import EmptyState from "../components/ui/EmptyState";
+import Button from "../components/ui/Button";
+import Spinner from "../components/ui/Spinner";
+import { getUserDigest, markDigestRead } from "../services/digest.service";
+import Page from "@/components/layout/Page";
 
 // Type-to-label/colour mapping lives here, not in the fixtures — the backend
 // sends a bare `type`, never display copy. Five types exist on the server
 // (decision, task, mention, file, activity); an unknown one still renders
 // rather than throwing, so a new server-side type cannot blank this page.
 const ITEM_TYPES = {
-  decision: { label: 'DECISION', color: 'text-success', dot: 'bg-success' },
-  task: { label: 'TASK ASSIGNED', color: 'text-warning', dot: 'bg-warning' },
-  mention: { label: 'MENTION', color: 'text-brand', dot: 'bg-brand' },
-  file: { label: 'FILE SHARED', color: 'text-brand', dot: 'bg-brand' },
-  activity: { label: 'HIGH ACTIVITY', color: 'text-brand', dot: 'bg-brand' },
+  decision: { label: "DECISION", color: "text-success", dot: "bg-success" },
+  task: { label: "TASK ASSIGNED", color: "text-warning", dot: "bg-warning" },
+  mention: { label: "MENTION", color: "text-brand", dot: "bg-brand" },
+  file: { label: "FILE SHARED", color: "text-brand", dot: "bg-brand" },
+  activity: { label: "HIGH ACTIVITY", color: "text-brand", dot: "bg-brand" },
 };
 
 function DigestItem({ type, title, metadata, room_name }) {
-  const { label, color, dot } = ITEM_TYPES[type] || { label: 'UPDATE', color: 'text-muted', dot: 'bg-muted' };
+  const { label, color, dot } = ITEM_TYPES[type] || {
+    label: "UPDATE",
+    color: "text-muted",
+    dot: "bg-muted",
+  };
   return (
     <article className="flex items-start gap-[14px] rounded-xl border border-line bg-surface px-4 pt-18 pb-[15px]">
-      <span className={`h-7 w-7 shrink-0 rounded-full ${dot}`} aria-hidden="true" />
+      <span
+        className={`h-7 w-7 shrink-0 rounded-full ${dot}`}
+        aria-hidden="true"
+      />
       <div className="min-w-0 flex-1">
         <p className={`text-label ${color}`}>{label}</p>
-        <p className="mt-3 text-h2 text-ink [overflow-wrap:anywhere]">{title}</p>
+        <p className="mt-3 text-h2 text-ink [overflow-wrap:anywhere]">
+          {title}
+        </p>
         {/* metadata is authored by, or describes, the room — so it is never
             null for the four content types, and null for activity. The room
             name carries the "where" when there is no actor to name. */}
         <p className="mt-3 text-metadata text-muted">
-          {[metadata, room_name].filter(Boolean).join(' · ')}
+          {[metadata, room_name].filter(Boolean).join(" · ")}
         </p>
       </div>
     </article>
@@ -56,25 +65,28 @@ export default function CatchUpDigestPage() {
   const { setRoomHeader } = useOutletContext();
   const [digest, setDigest] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [isMarkingRead, setIsMarkingRead] = useState(false);
 
   useEffect(() => {
-    setRoomHeader('Catch-up digest');
+    setRoomHeader("Catch-up digest");
     return () => setRoomHeader(null);
   }, [setRoomHeader]);
 
   useEffect(() => {
     let active = true;
     setIsLoading(true);
-    setError('');
+    setError("");
 
     getUserDigest()
       .then((value) => {
         if (active) setDigest(value);
       })
       .catch((err) => {
-        if (active) setError(err.response?.data?.message || 'Could not load your digest.');
+        if (active)
+          setError(
+            err.response?.data?.message || "Could not load your digest.",
+          );
       })
       .finally(() => {
         if (active) setIsLoading(false);
@@ -91,9 +103,17 @@ export default function CatchUpDigestPage() {
     setIsMarkingRead(true);
     try {
       await markDigestRead();
-      setDigest({ items: [], summary: { headline: digest.summary.headline, summary: digest.summary.summary } });
+      setDigest({
+        items: [],
+        summary: {
+          headline: digest.summary.headline,
+          summary: digest.summary.summary,
+        },
+      });
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not mark the digest as read.');
+      setError(
+        err.response?.data?.message || "Could not mark the digest as read.",
+      );
     } finally {
       setIsMarkingRead(false);
     }
@@ -104,7 +124,12 @@ export default function CatchUpDigestPage() {
   if (error) {
     return (
       <Page width="content">
-        <p role="alert" className="rounded-lg bg-error/10 p-4 text-body text-error">{error}</p>
+        <p
+          role="alert"
+          className="rounded-lg bg-error/10 p-4 text-body text-error"
+        >
+          {error}
+        </p>
       </Page>
     );
   }
@@ -112,7 +137,7 @@ export default function CatchUpDigestPage() {
   const items = digest?.items || [];
 
   return (
-      <Page width="content">
+    <Page width="content">
       {items.length === 0 ? (
         <div className="rounded-xl border border-dashed border-line">
           <EmptyState
@@ -125,7 +150,9 @@ export default function CatchUpDigestPage() {
           <div className="rounded-xl border border-line bg-surface px-5 pt-6 pb-7 md:px-6">
             <p className="text-label text-muted">SINCE YOU WERE AWAY</p>
             <p className="mt-3 text-h1 text-ink">{digest.summary.headline}</p>
-            <p className="mt-3 text-body text-muted">{digest.summary.summary}</p>
+            <p className="mt-3 text-body text-muted">
+              {digest.summary.summary}
+            </p>
 
             {/* Explicit, because the pointer only moves here. Doing it on read
                 would mean a reload discarded a backlog you had not finished
@@ -136,7 +163,7 @@ export default function CatchUpDigestPage() {
               disabled={isMarkingRead}
               className="mt-5"
             >
-              {isMarkingRead ? 'Marking…' : 'Mark as read'}
+              {isMarkingRead ? "Marking…" : "Mark as read"}
             </Button>
           </div>
           <div className="mt-10 flex flex-col gap-5 pb-8">
@@ -146,6 +173,6 @@ export default function CatchUpDigestPage() {
           </div>
         </>
       )}
-      </Page>
+    </Page>
   );
 }

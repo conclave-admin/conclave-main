@@ -1,4 +1,4 @@
-import IconChevronDown from '@/assets/icons/chevron-down.svg?react';
+import IconChevronDown from "@/assets/icons/chevron-down.svg?react";
 
 /**
  * A native `<select>` with the app's field styling.
@@ -13,14 +13,23 @@ import IconChevronDown from '@/assets/icons/chevron-down.svg?react';
  * @param {string} [id]
  * @param {React.ReactNode} children - the `<option>`s
  */
-export default function Select({ label, error, id, children, className = '', ...props }) {
+export default function Select({
+  label,
+  error,
+  id,
+  children,
+  className = "",
+  ...props
+}) {
   return (
     <label className="block" htmlFor={id}>
-      {label && <span className="mb-2 block text-sm font-medium text-ink">{label}</span>}
+      {label && (
+        <span className="mb-2 block text-sm font-medium text-ink">{label}</span>
+      )}
       <span className="relative block">
         <select
           id={id}
-          className={`min-h-12 w-full appearance-none rounded-lg border bg-surface pl-3.5 pr-10 text-sm text-ink outline-none transition-shadow focus:border-brand focus:ring-2 focus:ring-brand/15 ${error ? 'border-error' : 'border-line'} ${className}`}
+          className={`min-h-12 w-full appearance-none rounded-lg border bg-surface pl-3.5 pr-10 text-sm text-ink outline-none transition-shadow focus:border-brand focus:ring-2 focus:ring-brand/15 ${error ? "border-error" : "border-line"} ${className}`}
           {...props}
         >
           {children}
@@ -30,7 +39,9 @@ export default function Select({ label, error, id, children, className = '', ...
           aria-hidden="true"
         />
       </span>
-      {error && <span className="mt-1.5 block text-sm text-error">{error}</span>}
+      {error && (
+        <span className="mt-1.5 block text-sm text-error">{error}</span>
+      )}
     </label>
   );
 }

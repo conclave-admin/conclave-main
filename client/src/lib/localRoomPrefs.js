@@ -1,5 +1,5 @@
-const PINNED_KEY = 'conclave-pinned-rooms';
-const MUTED_KEY = 'conclave-muted-rooms';
+const PINNED_KEY = "conclave-pinned-rooms";
+const MUTED_KEY = "conclave-muted-rooms";
 
 /**
  * Pin and mute, stored per browser.
@@ -20,7 +20,9 @@ export function readIdList(key) {
   try {
     const raw = localStorage.getItem(key);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((id) => typeof id === "string")
+      : [];
   } catch {
     return [];
   }

@@ -1,4 +1,8 @@
-const { parseMediaPage, mediaCursor, UUID } = require('../utils/mediaPagination');
+const {
+  parseMediaPage,
+  mediaCursor,
+  UUID,
+} = require("../utils/mediaPagination");
 const { query } = require("../config/db");
 const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
@@ -10,11 +14,22 @@ const {
   addReaction,
   removeReaction,
 } = require("../services/message.service");
-const { assertAllowedEmoji, attachReactions } = require("../services/reaction.service");
-const { attachPins: attachMessagePins, pinMessage, unpinMessage, listRoomPins } = require("../services/messagePin.service");
+const {
+  assertAllowedEmoji,
+  attachReactions,
+} = require("../services/reaction.service");
+const {
+  attachPins: attachMessagePins,
+  pinMessage,
+  unpinMessage,
+  listRoomPins,
+} = require("../services/messagePin.service");
 const { attachPolls } = require("../services/poll.service");
-const { attachReceiptSummaries } = require("../services/messageReceipt.service");
-const attachPollsAndReceipts = async rows => attachReceiptSummaries(await attachPolls(rows));
+const {
+  attachReceiptSummaries,
+} = require("../services/messageReceipt.service");
+const attachPollsAndReceipts = async (rows) =>
+  attachReceiptSummaries(await attachPolls(rows));
 
 const PAGE_SIZE = 50;
 
@@ -24,7 +39,16 @@ const PAGE_SIZE = 50;
 // write through message.service.createMessage so history stays consistent.
 const sendMessage = asyncHandler(async (req, res) => {
   const { roomId } = req.body;
-  const { content, replyToId, attachments, albumId, mentionedUserIds, clientId, forwardSource,encryptedPayload } = req.body;
+  const {
+    content,
+    replyToId,
+    attachments,
+    albumId,
+    mentionedUserIds,
+    clientId,
+    forwardSource,
+    encryptedPayload,
+  } = req.body;
 
   if (!roomId) {
     throw new ApiError(400, "roomId is required");
@@ -39,7 +63,8 @@ const sendMessage = asyncHandler(async (req, res) => {
     attachments,
     albumId,
     mentionedUserIds,
-    forwardSource, encryptedPayload,
+    forwardSource,
+    encryptedPayload,
     io: req.app.get("io"),
   });
 
@@ -54,10 +79,29 @@ const listMessages = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
   const { before, afterSeq } = req.query;
 
-  if(req.query.ids!==undefined){
-    const ids=typeof req.query.ids==='string'?req.query.ids.split(','):[];
-    if(!ids.length||ids.length>200||ids.some(id=>!UUID.test(id))||before!==undefined||afterSeq!==undefined||req.query.around!==undefined)throw new ApiError(400,'Provide 1–200 message IDs without another cursor');
-    return ok(res,await require('../services/messageSnapshot.service').snapshots(roomId,req.user.id,ids));
+  if (req.query.ids !== undefined) {
+    const ids =
+      typeof req.query.ids === "string" ? req.query.ids.split(",") : [];
+    if (
+      !ids.length ||
+      ids.length > 200 ||
+      ids.some((id) => !UUID.test(id)) ||
+      before !== undefined ||
+      afterSeq !== undefined ||
+      req.query.around !== undefined
+    )
+      throw new ApiError(
+        400,
+        "Provide 1–200 message IDs without another cursor",
+      );
+    return ok(
+      res,
+      await require("../services/messageSnapshot.service").snapshots(
+        roomId,
+        req.user.id,
+        ids,
+      ),
+    );
   }
 
   // 1. Verify the caller is a member of this room
@@ -71,9 +115,22 @@ const listMessages = asyncHandler(async (req, res) => {
 
   let anchorSequence = null;
   if (req.query.around !== undefined) {
-    if (typeof req.query.around !== 'string' || !UUID.test(req.query.around) || before !== undefined || afterSeq !== undefined) throw new ApiError(400, 'around must identify one message without another history cursor');
-    const anchor = await query('SELECT room_sequence FROM messages WHERE id = $1 AND room_id = $2 AND deleted_at IS NULL', [req.query.around, roomId]);
-    if (!anchor.rows.length) throw new ApiError(404, 'Message no longer available');
+    if (
+      typeof req.query.around !== "string" ||
+      !UUID.test(req.query.around) ||
+      before !== undefined ||
+      afterSeq !== undefined
+    )
+      throw new ApiError(
+        400,
+        "around must identify one message without another history cursor",
+      );
+    const anchor = await query(
+      "SELECT room_sequence FROM messages WHERE id = $1 AND room_id = $2 AND deleted_at IS NULL",
+      [req.query.around, roomId],
+    );
+    if (!anchor.rows.length)
+      throw new ApiError(404, "Message no longer available");
     anchorSequence = anchor.rows[0].room_sequence;
   }
 
@@ -139,7 +196,8 @@ const listMessages = asyncHandler(async (req, res) => {
     sql += ` AND m.room_sequence <= $${params.length}`;
   } else if (afterSeq !== undefined) {
     const seq = Number(afterSeq);
-    if (!Number.isSafeInteger(seq) || seq < 0) throw new ApiError(400, 'afterSeq must be a non-negative integer');
+    if (!Number.isSafeInteger(seq) || seq < 0)
+      throw new ApiError(400, "afterSeq must be a non-negative integer");
     params.push(seq);
     sql += ` AND m.room_sequence > $${params.length}`;
   } else if (before) {
@@ -148,14 +206,14 @@ const listMessages = asyncHandler(async (req, res) => {
     // drops every row equal to the cursor — including the one we just returned
     // and any that followed it (BACKEND_TASKS.md Bug 15). The id breaks the tie.
     // A cursor without the separator is still accepted for older clients.
-    const sep = before.indexOf('|');
+    const sep = before.indexOf("|");
     if (sep === -1) {
       if (/^\d+$/.test(before)) {
         params.push(before);
         sql += ` AND m.room_sequence < $${params.length}`;
       } else {
-      params.push(before);
-      sql += ` AND m.created_at < $${params.length}`;
+        params.push(before);
+        sql += ` AND m.created_at < $${params.length}`;
       }
     } else {
       const seq = before.slice(0, sep);
@@ -173,7 +231,7 @@ const listMessages = asyncHandler(async (req, res) => {
   sql += `
     GROUP BY m.id, m.room_id, m.sender_id, u.profile_version, u.display_name, u.avatar_url,
              m.client_id, m.album_id, m.forwarded, m.room_sequence, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
-    ORDER BY m.room_sequence ${ascending ? 'ASC' : 'DESC'} LIMIT $${params.length + 1}`;
+    ORDER BY m.room_sequence ${ascending ? "ASC" : "DESC"} LIMIT $${params.length + 1}`;
   params.push(ascending ? 200 : PAGE_SIZE);
 
   const result = await query(sql, params);
@@ -195,9 +253,7 @@ const listMessages = asyncHandler(async (req, res) => {
   // inside the same second skipped or repeated rows. Decisions already send
   // ISO for the same reason.
   const nextCursor =
-    messages.length === PAGE_SIZE && last
-      ? String(last.room_sequence)
-      : null;
+    messages.length === PAGE_SIZE && last ? String(last.room_sequence) : null;
 
   return ok(res, { messages, nextCursor });
 });
@@ -211,11 +267,17 @@ const listMessages = asyncHandler(async (req, res) => {
  * shape. Returning the raw updated row would have reintroduced exactly the drift
  * that Bug 6 describes, one endpoint at a time.
  */
-async function getMessagePayload(messageId,viewerId){
-  const found=await query('SELECT room_id FROM messages WHERE id=$1',[messageId]);
-  if(!found.rows.length)throw new ApiError(404,'Message not found');
-  const result=await require('../services/messageSnapshot.service').snapshots(found.rows[0].room_id,viewerId,[messageId]);
-  if(!result.messages.length)throw new ApiError(404,'Message not found');
+async function getMessagePayload(messageId, viewerId) {
+  const found = await query("SELECT room_id FROM messages WHERE id=$1", [
+    messageId,
+  ]);
+  if (!found.rows.length) throw new ApiError(404, "Message not found");
+  const result = await require("../services/messageSnapshot.service").snapshots(
+    found.rows[0].room_id,
+    viewerId,
+    [messageId],
+  );
+  if (!result.messages.length) throw new ApiError(404, "Message not found");
   return result.messages[0];
 }
 
@@ -239,7 +301,15 @@ const searchMessages = asyncHandler(async (req, res) => {
     throw new ApiError(403, "You are not a member of this room");
   }
 
-  if((await query("SELECT 1 FROM rooms WHERE id=$1 AND encryption_mode='e2ee-v1'",[roomId])).rowCount)throw new ApiError(409,'Search encrypted messages on your device');
+  if (
+    (
+      await query(
+        "SELECT 1 FROM rooms WHERE id=$1 AND encryption_mode='e2ee-v1'",
+        [roomId],
+      )
+    ).rowCount
+  )
+    throw new ApiError(409, "Search encrypted messages on your device");
 
   // 2. Full-text search with ts_rank for relevance ordering.
   //    Deleted messages are excluded outright: a search should never be able
@@ -327,7 +397,6 @@ const searchMessages = asyncHandler(async (req, res) => {
   });
 });
 
-
 // ---------- editMessage ----------
 // PATCH /messages/:id — author-only, no time limit. Replaces the body wholesale.
 const editMessageHandler = asyncHandler(async (req, res) => {
@@ -338,12 +407,20 @@ const editMessageHandler = asyncHandler(async (req, res) => {
   // A poll's question IS its message content. Editing it would mean the votes
   // recorded underneath now answer different words, so the option is removed
   // rather than hidden — clients hide Edit on a poll too.
-  const poll = await query(`SELECT 1 FROM polls WHERE message_id = $1`, [messageId]);
+  const poll = await query(`SELECT 1 FROM polls WHERE message_id = $1`, [
+    messageId,
+  ]);
   if (poll.rows.length > 0) throw new ApiError(400, "A poll cannot be edited");
 
   // `io` goes to the service first so the chat-list refresh happens at the
   // point of write. Re-read afterwards for the response.
-  await editMessage({ messageId, userId: req.user.id, content, encryptedPayload:req.body.encryptedPayload, io });
+  await editMessage({
+    messageId,
+    userId: req.user.id,
+    content,
+    encryptedPayload: req.body.encryptedPayload,
+    io,
+  });
 
   // Re-read the full row rather than trusting the UPDATE ... RETURNING, so the
   // response has exactly the shape listMessages returns — including sender
@@ -352,7 +429,12 @@ const editMessageHandler = asyncHandler(async (req, res) => {
   const message = await getMessagePayload(messageId, req.user.id);
 
   if (io) {
-    await require('../services/privacy.service').emitMessage(io,message.room_id,'message:updated',message);
+    await require("../services/privacy.service").emitMessage(
+      io,
+      message.room_id,
+      "message:updated",
+      message,
+    );
   }
 
   return ok(res, message);
@@ -368,10 +450,18 @@ const deleteMessageHandler = asyncHandler(async (req, res) => {
 
   // Re-read for the full shape. The tombstone is what clients swap in, and it
   // carries is_deleted so the client knows to render one.
-  const payload = await getMessagePayload(message.room_id && message.id, req.user.id);
+  const payload = await getMessagePayload(
+    message.room_id && message.id,
+    req.user.id,
+  );
 
   if (io) {
-    await require('../services/privacy.service').emitMessage(io,payload.room_id,'message:deleted',payload);
+    await require("../services/privacy.service").emitMessage(
+      io,
+      payload.room_id,
+      "message:deleted",
+      payload,
+    );
   }
 
   return ok(res, payload);
@@ -389,7 +479,12 @@ const addReactionHandler = asyncHandler(async (req, res) => {
 
   const io = req.app.get("io");
   if (io) {
-    await require('../services/privacy.service').emitMessage(io,message.room_id,'message:reaction',message);
+    await require("../services/privacy.service").emitMessage(
+      io,
+      message.room_id,
+      "message:reaction",
+      message,
+    );
   }
 
   return ok(res, message);
@@ -410,13 +505,16 @@ const removeReactionHandler = asyncHandler(async (req, res) => {
 
   const io = req.app.get("io");
   if (io) {
-    await require('../services/privacy.service').emitMessage(io,message.room_id,'message:reaction',message);
+    await require("../services/privacy.service").emitMessage(
+      io,
+      message.room_id,
+      "message:reaction",
+      message,
+    );
   }
 
   return ok(res, message);
 });
-
-
 
 // ---------- pinMessage / unpinMessage / listPinnedMessages ----------
 // Three routes over the same service decisionPin.service uses for decisions.
@@ -436,7 +534,7 @@ const pinMessageHandler = asyncHandler(async (req, res) => {
     messageId,
     userId: req.user.id,
     scope: req.body?.scope,
-    io: req.app.get('io'),
+    io: req.app.get("io"),
   });
   return ok(res, message);
 });
@@ -448,9 +546,16 @@ const unpinMessageHandler = asyncHandler(async (req, res) => {
     messageId,
     userId: req.user.id,
     scope,
-    io: req.app.get('io'),
+    io: req.app.get("io"),
   });
-  return ok(res, message || { id: messageId, pins: { room: null, mine: [] }, unpinned: false });
+  return ok(
+    res,
+    message || {
+      id: messageId,
+      pins: { room: null, mine: [] },
+      unpinned: false,
+    },
+  );
 });
 
 // GET /messages/room/:roomId/pinned
@@ -468,7 +573,7 @@ const listPinnedMessages = asyncHandler(async (req, res) => {
     // 403 rather than 404 here: the room id is the caller's to know, they only
     // asked for a room they are not in. This is the same answer getRoomDigest
     // gives, and the opposite of getDecision's — see the note there.
-    throw new ApiError(403, 'You are not a member of this room');
+    throw new ApiError(403, "You are not a member of this room");
   }
 
   return ok(res, { messages: await listRoomPins(roomId, req.user.id) });
@@ -476,18 +581,28 @@ const listPinnedMessages = asyncHandler(async (req, res) => {
 
 const listRoomMedia = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
-  const membership = await query('SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
-  if (!membership.rows.length) throw new ApiError(404, 'Room not found');
+  const membership = await query(
+    "SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2",
+    [roomId, req.user.id],
+  );
+  if (!membership.rows.length) throw new ApiError(404, "Room not found");
   const { kind, limit, after, cursor } = parseMediaPage(req.query, roomId);
   const filters = {
     media: "(a.file_type LIKE 'image/%' OR a.file_type LIKE 'video/%')",
     audio: "a.file_type LIKE 'audio/%'",
-    documents: "(COALESCE(a.file_type, '') NOT LIKE 'image/%' AND COALESCE(a.file_type, '') NOT LIKE 'video/%' AND COALESCE(a.file_type, '') NOT LIKE 'audio/%')",
+    documents:
+      "(COALESCE(a.file_type, '') NOT LIKE 'image/%' AND COALESCE(a.file_type, '') NOT LIKE 'video/%' AND COALESCE(a.file_type, '') NOT LIKE 'audio/%')",
   };
   const params = [roomId];
-  let bounds = '';
-  if (after) { params.push(after); bounds += ` AND m.created_at > $${params.length}::timestamptz`; }
-  if (cursor) { params.push(cursor.sequence, cursor.id); bounds += ` AND (m.room_sequence, a.id) < ($${params.length - 1}::bigint, $${params.length}::uuid)`; }
+  let bounds = "";
+  if (after) {
+    params.push(after);
+    bounds += ` AND m.created_at > $${params.length}::timestamptz`;
+  }
+  if (cursor) {
+    params.push(cursor.sequence, cursor.id);
+    bounds += ` AND (m.room_sequence, a.id) < ($${params.length - 1}::bigint, $${params.length}::uuid)`;
+  }
   params.push(limit + 1);
   const result = await query(
     `SELECT a.id, a.filename, a.size_bytes AS size, a.file_type AS mime_type,
@@ -498,23 +613,61 @@ const listRoomMedia = asyncHandler(async (req, res) => {
        INNER JOIN attachments a ON a.message_id = m.id
        INNER JOIN users u ON u.id = m.sender_id
       WHERE m.room_id = $1 AND m.deleted_at IS NULL AND m.room_sequence IS NOT NULL AND ${filters[kind]} ${bounds}
-      ORDER BY m.room_sequence DESC, a.id DESC LIMIT $${params.length}`, params,
+      ORDER BY m.room_sequence DESC, a.id DESC LIMIT $${params.length}`,
+    params,
   );
   const hasMore = result.rows.length > limit;
   const media = result.rows.slice(0, limit);
-  return ok(res, { media, nextCursor: hasMore ? mediaCursor(media[media.length - 1], roomId, kind, after) : null });
+  return ok(res, {
+    media,
+    nextCursor: hasMore
+      ? mediaCursor(media[media.length - 1], roomId, kind, after)
+      : null,
+  });
 });
 
-module.exports = { sendMessage, listMessages, searchMessages, editMessage: editMessageHandler, deleteMessage: deleteMessageHandler, addReaction: addReactionHandler, removeReaction: removeReactionHandler, pinMessageHandler, unpinMessageHandler, listPinnedMessages, listRoomMedia };
+module.exports = {
+  sendMessage,
+  listMessages,
+  searchMessages,
+  editMessage: editMessageHandler,
+  deleteMessage: deleteMessageHandler,
+  addReaction: addReactionHandler,
+  removeReaction: removeReactionHandler,
+  pinMessageHandler,
+  unpinMessageHandler,
+  listPinnedMessages,
+  listRoomMedia,
+};
 
-module.exports.getMessageReceipts = asyncHandler(async (req, res) => ok(res, await require('../services/messageReceipt.service').details(req.params.messageId, req.user.id)));
+module.exports.getMessageReceipts = asyncHandler(async (req, res) =>
+  ok(
+    res,
+    await require("../services/messageReceipt.service").details(
+      req.params.messageId,
+      req.user.id,
+    ),
+  ),
+);
 
 module.exports.getRoomReceiptSummaries = asyncHandler(async (req, res) => {
-  const ids = typeof req.query.ids === 'string' ? req.query.ids.split(',') : [];
-  if (!ids.length || ids.length > 200 || ids.some(id => !UUID.test(id))) throw new ApiError(400, 'Provide up to 200 message IDs');
-  const receipts = await require('../services/realtimeAccess.service').withRoomMembership(req.params.roomId, req.user.id, async db => {
-    const rows = await db.query('SELECT id FROM messages WHERE room_id=$1 AND id=ANY($2::uuid[])', [req.params.roomId, ids]);
-    return (await attachReceiptSummaries(rows.rows, db)).map(m => ({ messageId: m.id, receipt_summary: m.receipt_summary }));
-  });
+  const ids = typeof req.query.ids === "string" ? req.query.ids.split(",") : [];
+  if (!ids.length || ids.length > 200 || ids.some((id) => !UUID.test(id)))
+    throw new ApiError(400, "Provide up to 200 message IDs");
+  const receipts =
+    await require("../services/realtimeAccess.service").withRoomMembership(
+      req.params.roomId,
+      req.user.id,
+      async (db) => {
+        const rows = await db.query(
+          "SELECT id FROM messages WHERE room_id=$1 AND id=ANY($2::uuid[])",
+          [req.params.roomId, ids],
+        );
+        return (await attachReceiptSummaries(rows.rows, db)).map((m) => ({
+          messageId: m.id,
+          receipt_summary: m.receipt_summary,
+        }));
+      },
+    );
   return ok(res, { roomId: req.params.roomId, receipts });
 });

@@ -18,8 +18,16 @@
       is a known, deliberate trade — the alternative is injecting the tag from
       JavaScript, which loses it for the first paint on every reload.
     -->
-    <meta name="theme-color" content="#f7f5f0" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#121214" media="(prefers-color-scheme: dark)" />
+    <meta
+      name="theme-color"
+      content="#f7f5f0"
+      media="(prefers-color-scheme: light)"
+    />
+    <meta
+      name="theme-color"
+      content="#121214"
+      media="(prefers-color-scheme: dark)"
+    />
 
     <!--
       Icons. The SVG first so modern browsers take the vector; the 32px PNG is
@@ -45,7 +53,10 @@
       property="og:description"
       content="Bring your people, conversations and plans together. Direct messages, rooms, shared media, decisions and tasks — all in Conclave."
     />
-    <meta property="og:image" content="https://conclave-main.vercel.app/og.png" />
+    <meta
+      property="og:image"
+      content="https://conclave-main.vercel.app/og.png"
+    />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
@@ -75,12 +86,12 @@
     <script>
       (function () {
         try {
-          var stored = localStorage.getItem('conclave-theme');
+          var stored = localStorage.getItem("conclave-theme");
           var dark =
-            stored === 'dark' ||
-            (stored !== 'light' &&
-              window.matchMedia('(prefers-color-scheme: dark)').matches);
-          if (dark) document.documentElement.classList.add('dark');
+            stored === "dark" ||
+            (stored !== "light" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
         } catch (e) {
           /* storage unavailable: stay on the light default */
         }

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from "react";
 
 /**
  * A multi-line field that grows with its content up to `maxRows`.
@@ -15,7 +15,16 @@ import { useEffect, useRef } from 'react';
  * @param {number} [rows]   - starting height
  * @param {number} [maxRows] - clamp; beyond this the box scrolls instead
  */
-export default function Textarea({ label, error, id, rows = 1, maxRows = 5, value, className = '', ...props }) {
+export default function Textarea({
+  label,
+  error,
+  id,
+  rows = 1,
+  maxRows = 5,
+  value,
+  className = "",
+  ...props
+}) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -24,7 +33,7 @@ export default function Textarea({ label, error, id, rows = 1, maxRows = 5, valu
 
     // Reset before measuring: scrollHeight is taken against the current height,
     // so without this the box can shrink back after deleting a line.
-    el.style.height = 'auto';
+    el.style.height = "auto";
 
     const lineHeight = parseFloat(window.getComputedStyle(el).lineHeight);
     // `line-height: normal` parses to NaN. Clamping needs a number, so if the
@@ -38,16 +47,20 @@ export default function Textarea({ label, error, id, rows = 1, maxRows = 5, valu
 
   return (
     <label className="block" htmlFor={id}>
-      {label && <span className="mb-2 block text-sm font-medium text-ink">{label}</span>}
+      {label && (
+        <span className="mb-2 block text-sm font-medium text-ink">{label}</span>
+      )}
       <textarea
         ref={ref}
         id={id}
         rows={rows}
         value={value}
-        className={`block w-full resize-none overflow-y-auto rounded-lg border bg-surface px-3.5 py-2.5 text-sm text-ink outline-none transition-shadow placeholder:text-muted/70 focus:border-brand focus:ring-2 focus:ring-brand/15 ${error ? 'border-error' : 'border-line'} ${className}`}
+        className={`block w-full resize-none overflow-y-auto rounded-lg border bg-surface px-3.5 py-2.5 text-sm text-ink outline-none transition-shadow placeholder:text-muted/70 focus:border-brand focus:ring-2 focus:ring-brand/15 ${error ? "border-error" : "border-line"} ${className}`}
         {...props}
       />
-      {error && <span className="mt-1.5 block text-sm text-error">{error}</span>}
+      {error && (
+        <span className="mt-1.5 block text-sm text-error">{error}</span>
+      )}
     </label>
   );
 }

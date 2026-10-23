@@ -1,7 +1,7 @@
-const { query } = require('../config/db');
-const asyncHandler = require('../utils/asyncHandler');
-const { ok } = require('../utils/apiResponse');
-const ApiError = require('../utils/ApiError');
+const { query } = require("../config/db");
+const asyncHandler = require("../utils/asyncHandler");
+const { ok } = require("../utils/apiResponse");
+const ApiError = require("../utils/ApiError");
 
 // Catch-up Digest — per-room summary since the user's last visit:
 // new decisions, mentions, files, and high-activity messages.
@@ -37,7 +37,7 @@ const getRoomDigest = asyncHandler(async (req, res) => {
     [roomId, req.user.id],
   );
   if (membership.rows.length === 0) {
-    throw new ApiError(403, 'You are not a member of this room');
+    throw new ApiError(403, "You are not a member of this room");
   }
   const lastSeenAt = membership.rows[0].digest_seen_at;
   const roomName = membership.rows[0].room_name;
@@ -119,7 +119,7 @@ const getRoomDigest = asyncHandler(async (req, res) => {
   const items = [
     ...decisions.rows.map((d) => ({
       id: d.id,
-      type: 'decision',
+      type: "decision",
       title: d.title,
       metadata: d.author_name,
       room_id: roomId,
@@ -128,7 +128,7 @@ const getRoomDigest = asyncHandler(async (req, res) => {
     })),
     ...tasks.rows.map((t) => ({
       id: t.id,
-      type: 'task',
+      type: "task",
       title: t.title,
       metadata: `${t.status} · ${t.assignee_name}`,
       room_id: roomId,
@@ -137,7 +137,7 @@ const getRoomDigest = asyncHandler(async (req, res) => {
     })),
     ...mentions.rows.map((m) => ({
       id: m.id,
-      type: 'mention',
+      type: "mention",
       title: m.content,
       metadata: m.sender_name,
       room_id: roomId,
@@ -146,7 +146,7 @@ const getRoomDigest = asyncHandler(async (req, res) => {
     })),
     ...files.rows.map((f) => ({
       id: f.id,
-      type: 'file',
+      type: "file",
       title: f.filename,
       metadata: f.sender_name,
       room_id: roomId,
@@ -154,15 +154,17 @@ const getRoomDigest = asyncHandler(async (req, res) => {
       created_at: f.created_at,
     })),
     ...(activity.rows[0].message_count > 0
-      ? [{
-          id: `activity-${roomId}`,
-          type: 'activity',
-          title: `${activity.rows[0].message_count} new messages`,
-          metadata: null,
-          room_id: roomId,
-          room_name: roomName,
-          created_at: activity.rows[0].last_activity_at,
-        }]
+      ? [
+          {
+            id: `activity-${roomId}`,
+            type: "activity",
+            title: `${activity.rows[0].message_count} new messages`,
+            metadata: null,
+            room_id: roomId,
+            room_name: roomName,
+            created_at: activity.rows[0].last_activity_at,
+          },
+        ]
       : []),
   ];
 
@@ -188,7 +190,10 @@ const getUserDigest = asyncHandler(async (req, res) => {
 
   const roomIds = rooms.rows.map((r) => r.room_id);
   if (roomIds.length === 0) {
-    return ok(res, { items: [], summary: { headline: 'No updates', summary: 'You are not in any rooms.' } });
+    return ok(res, {
+      items: [],
+      summary: { headline: "No updates", summary: "You are not in any rooms." },
+    });
   }
 
   // Every category below joins room_members on (room_id, user_id) and filters
@@ -201,7 +206,6 @@ const getUserDigest = asyncHandler(async (req, res) => {
   // on the read receipt, which meant opening a room — advancing last_seen_at to
   // NOW() — erased the very backlog it was reporting on. Migration 018 splits
   // them: reading advances the receipt, marking the digest read advances this.
-  
 
   // 1. New decisions across all rooms
   const decisions = await query(
@@ -294,7 +298,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
   const items = [
     ...decisions.rows.map((d) => ({
       id: d.id,
-      type: 'decision',
+      type: "decision",
       title: d.title,
       metadata: d.author_name,
       room_id: d.room_id,
@@ -303,7 +307,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
     })),
     ...tasks.rows.map((t) => ({
       id: t.id,
-      type: 'task',
+      type: "task",
       title: t.title,
       metadata: `${t.status} · ${t.assignee_name}`,
       room_id: t.room_id,
@@ -312,7 +316,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
     })),
     ...mentions.rows.map((m) => ({
       id: m.id,
-      type: 'mention',
+      type: "mention",
       title: m.content,
       metadata: m.sender_name,
       room_id: m.room_id,
@@ -321,7 +325,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
     })),
     ...files.rows.map((f) => ({
       id: f.id,
-      type: 'file',
+      type: "file",
       title: f.filename,
       metadata: f.sender_name,
       room_id: f.room_id,
@@ -330,7 +334,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
     })),
     ...activity.rows.map((a) => ({
       id: `activity-${a.room_id}`,
-      type: 'activity',
+      type: "activity",
       title: `${a.message_count} new messages`,
       metadata: null,
       room_id: a.room_id,
@@ -350,7 +354,6 @@ const getUserDigest = asyncHandler(async (req, res) => {
     },
   });
 });
-
 
 // ---------- markDigestRead ----------
 // Advance the digest pointer.
@@ -381,9 +384,12 @@ const markDigestRead = asyncHandler(async (req, res) => {
       [roomId, req.user.id],
     );
     if (result.rows.length === 0) {
-      throw new ApiError(403, 'You are not a member of this room');
+      throw new ApiError(403, "You are not a member of this room");
     }
-    return ok(res, { rooms: result.rows.map((r) => r.room_id), digestSeenAt: new Date().toISOString() });
+    return ok(res, {
+      rooms: result.rows.map((r) => r.room_id),
+      digestSeenAt: new Date().toISOString(),
+    });
   }
 
   const all = await query(

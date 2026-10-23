@@ -1,10 +1,10 @@
-import { createActivitySender } from '@/lib/conversationActivity';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import IconClose from '@/assets/icons/close.svg?react';
-import IconMention from '@/assets/icons/mention.svg?react';
-import IconSend from '@/assets/icons/send.svg?react';
-import IconMic from '@/assets/icons/mic.svg?react';
-import { createClientId } from '@/lib/outbox';
+import { createActivitySender } from "@/lib/conversationActivity";
+import { useEffect, useMemo, useRef, useState } from "react";
+import IconClose from "@/assets/icons/close.svg?react";
+import IconMention from "@/assets/icons/mention.svg?react";
+import IconSend from "@/assets/icons/send.svg?react";
+import IconMic from "@/assets/icons/mic.svg?react";
+import { createClientId } from "@/lib/outbox";
 import {
   isAccepted,
   isImage,
@@ -12,11 +12,11 @@ import {
   limitFor,
   MAX_ATTACHMENTS,
   normaliseFile,
-} from '@/lib/media';
-import { MAX_VIDEO_INPUT_BYTES } from '@/lib/videoCompression';
-import AttachmentPicker from './AttachmentPicker';
-import AttachmentPreviewDialog from './AttachmentPreviewDialog';
-import MentionPicker from './MentionPicker';
+} from "@/lib/media";
+import { MAX_VIDEO_INPUT_BYTES } from "@/lib/videoCompression";
+import AttachmentPicker from "./AttachmentPicker";
+import AttachmentPreviewDialog from "./AttachmentPreviewDialog";
+import MentionPicker from "./MentionPicker";
 
 const MAX_LINES = 5;
 
@@ -70,10 +70,10 @@ export default function MessageComposer({
   onEditLast,
   // The room pane is a grid and addresses its rows explicitly, so the composer
   // needs to accept the placement the parent decides rather than hardcoding one.
-  className = '',
+  className = "",
 }) {
-  const [content, setContent] = useState('');
-  const [error, setError] = useState('');
+  const [content, setContent] = useState("");
+  const [error, setError] = useState("");
   const [pendingFiles, setPendingFiles] = useState([]);
   const [sending, setSending] = useState(false);
   const [mentionQuery, setMentionQuery] = useState(null);
@@ -105,35 +105,58 @@ export default function MessageComposer({
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
+    el.style.height = "auto";
     const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 20;
     el.style.height = `${Math.min(el.scrollHeight, lineHeight * MAX_LINES)}px`;
   }, [content]);
 
   useEffect(() => {
     setRecording(false);
-    const sender = createActivitySender({ typing: () => callbacks.current.onTyping?.(), stopTyping: () => callbacks.current.onStopTyping?.(), recording: () => callbacks.current.onRecording?.(), stopRecording: () => callbacks.current.onStopRecording?.(),
-      canSignal: () => !signalFlags.current.disabled && signalFlags.current.isOnline && document.visibilityState === 'visible' && document.hasFocus() });
+    const sender = createActivitySender({
+      typing: () => callbacks.current.onTyping?.(),
+      stopTyping: () => callbacks.current.onStopTyping?.(),
+      recording: () => callbacks.current.onRecording?.(),
+      stopRecording: () => callbacks.current.onStopRecording?.(),
+      canSignal: () =>
+        !signalFlags.current.disabled &&
+        signalFlags.current.isOnline &&
+        document.visibilityState === "visible" &&
+        document.hasFocus(),
+    });
     activityRef.current = sender;
     const suspend = (event) => {
       sender.stop();
-      if (recorderRef.current?.state === 'recording') stopVoiceRef.current?.();
-      else if (document.visibilityState !== 'visible' || event?.type === 'pagehide') { captureVersion.current++; acquiringMic.current = false; }
+      if (recorderRef.current?.state === "recording") stopVoiceRef.current?.();
+      else if (
+        document.visibilityState !== "visible" ||
+        event?.type === "pagehide"
+      ) {
+        captureVersion.current++;
+        acquiringMic.current = false;
+      }
     };
-    const visibility = () => { if (document.visibilityState !== 'visible') suspend(); };
-    window.addEventListener('blur', suspend); window.addEventListener('pagehide', suspend);
-    document.addEventListener('visibilitychange', visibility);
+    const visibility = () => {
+      if (document.visibilityState !== "visible") suspend();
+    };
+    window.addEventListener("blur", suspend);
+    window.addEventListener("pagehide", suspend);
+    document.addEventListener("visibilitychange", visibility);
     return () => {
-      sender.dispose(); captureVersion.current++; acquiringMic.current = false;
+      sender.dispose();
+      captureVersion.current++;
+      acquiringMic.current = false;
       if (recorderRef.current) {
-        recorderRef.current.onstop = null; recorderRef.current.ondataavailable = null;
-        if (recorderRef.current.state === 'recording') recorderRef.current.stop();
+        recorderRef.current.onstop = null;
+        recorderRef.current.ondataavailable = null;
+        if (recorderRef.current.state === "recording")
+          recorderRef.current.stop();
       }
       recorderRef.current = null;
-      recordingStreamRef.current?.getTracks().forEach(track => track.stop());
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
       recordingStreamRef.current = null;
-      window.removeEventListener('blur', suspend); window.removeEventListener('pagehide', suspend);
-      document.removeEventListener('visibilitychange', visibility);
+      window.removeEventListener("blur", suspend);
+      window.removeEventListener("pagehide", suspend);
+      document.removeEventListener("visibilitychange", visibility);
     };
     // Capture callbacks for this conversation so cleanup targets the old room.
   }, [activityScope, callbacks]);
@@ -145,7 +168,7 @@ export default function MessageComposer({
   const handleTextChange = (event) => {
     const { value, selectionStart } = event.target;
     setContent(value);
-    setError('');
+    setError("");
     activityRef.current?.textChanged(value);
 
     // Reconcile the recorded ids against the text that is actually there.
@@ -185,7 +208,9 @@ export default function MessageComposer({
     const insertion = `@${member.display_name} `;
     setContent(`${content.slice(0, start)}${insertion}${after}`);
     setMentionQuery(null);
-    setMentionedIds((prev) => (prev.includes(member.id) ? prev : [...prev, member.id]));
+    setMentionedIds((prev) =>
+      prev.includes(member.id) ? prev : [...prev, member.id],
+    );
 
     requestAnimationFrame(() => {
       const position = start + insertion.length;
@@ -218,7 +243,9 @@ export default function MessageComposer({
       const inputLimit = isVideo(file) ? MAX_VIDEO_INPUT_BYTES : limit;
 
       if (file.size > inputLimit) {
-        rejected.push(`"${file.name}" is larger than the ${inputLimit / (1024 * 1024)}MB selection limit. Trim or resize it before selecting.`);
+        rejected.push(
+          `"${file.name}" is larger than the ${inputLimit / (1024 * 1024)}MB selection limit. Trim or resize it before selecting.`,
+        );
       } else if (!isAccepted(file.type, file.name)) {
         rejected.push(`"${file.name}" is not a file type this app can store.`);
       } else {
@@ -236,7 +263,7 @@ export default function MessageComposer({
       accepted.length = MAX_ATTACHMENTS;
     }
 
-    const note = rejected.join(' ');
+    const note = rejected.join(" ");
     setError(note);
 
     if (accepted.length > 0) {
@@ -246,14 +273,14 @@ export default function MessageComposer({
 
   const removeFile = (index) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
-    setError('');
+    setError("");
   };
 
   const cancelPreview = () => {
     if (sending) return;
     sendToken.current += 1;
     setPendingFiles([]);
-    setError('');
+    setError("");
   };
 
   // Persist the whole selection before closing the editor. Upload work belongs
@@ -262,16 +289,24 @@ export default function MessageComposer({
     if (sending || !pendingFiles.length) return;
     const token = ++sendToken.current;
     setSending(true);
-    setError('');
+    setError("");
     try {
       const albumId = pendingFiles.length > 1 ? createClientId() : undefined;
       const items = pendingFiles.map((file, index) => {
-        const caption = (captions[index] || '').trim();
+        const caption = (captions[index] || "").trim();
         return {
-          content: caption, albumId, replyToId: index === 0 ? replyTo?.id : undefined,
+          content: caption,
+          albumId,
+          replyToId: index === 0 ? replyTo?.id : undefined,
           attachments: [],
-          mentionedUserIds: members.filter((person) => caption.includes(`@${person.display_name}`)).map((person) => person.id),
-          media: { blob: file, filename: file.name, compress: compressRef.current.has(file) },
+          mentionedUserIds: members
+            .filter((person) => caption.includes(`@${person.display_name}`))
+            .map((person) => person.id),
+          media: {
+            blob: file,
+            filename: file.name,
+            compress: compressRef.current.has(file),
+          },
         };
       });
       activityRef.current?.endTyping();
@@ -280,7 +315,10 @@ export default function MessageComposer({
       setPendingFiles([]);
       reset();
     } catch (err) {
-      if (sendToken.current === token) setError(err.message || 'Could not save these files. They are still here.');
+      if (sendToken.current === token)
+        setError(
+          err.message || "Could not save these files. They are still here.",
+        );
     } finally {
       if (sendToken.current === token) setSending(false);
     }
@@ -288,7 +326,7 @@ export default function MessageComposer({
 
   const reset = () => {
     activityRef.current?.endTyping();
-    setContent('');
+    setContent("");
     setMentionedIds([]);
     setMentionQuery(null);
     onCancelReply?.();
@@ -317,7 +355,7 @@ export default function MessageComposer({
   };
 
   const toggleVoiceRecording = async () => {
-    if (recorderRef.current?.state === 'recording') {
+    if (recorderRef.current?.state === "recording") {
       activityRef.current?.endRecording();
       const recorder = recorderRef.current;
       recorder.stop();
@@ -332,13 +370,22 @@ export default function MessageComposer({
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (version === captureVersion.current) acquiringMic.current = false;
-      if (version !== captureVersion.current || signalFlags.current.disabled || document.visibilityState !== 'visible') { stream.getTracks().forEach(track => track.stop()); return; }
+      if (
+        version !== captureVersion.current ||
+        signalFlags.current.disabled ||
+        document.visibilityState !== "visible"
+      ) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       recordingStreamRef.current = stream;
       const chunks = [];
       recordingChunksRef.current = chunks;
       const recorder = new MediaRecorder(stream);
       recorderRef.current = recorder;
-      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) chunks.push(event.data);
+      };
       let failed = false;
       recorder.onstop = () => {
         if (version !== captureVersion.current) return;
@@ -346,25 +393,36 @@ export default function MessageComposer({
         setRecording(false);
         if (recorderRef.current === recorder) recorderRef.current = null;
         if (recordingStreamRef.current === stream) {
-          stream.getTracks().forEach(track => track.stop()); recordingStreamRef.current = null;
+          stream.getTracks().forEach((track) => track.stop());
+          recordingStreamRef.current = null;
         }
         recordingChunksRef.current = [];
         if (!failed) {
-          const type = recorder.mimeType || 'audio/webm';
-          const file = new File(chunks, `voice-note-${Date.now()}.webm`, { type });
+          const type = recorder.mimeType || "audio/webm";
+          const file = new File(chunks, `voice-note-${Date.now()}.webm`, {
+            type,
+          });
           if (file.size) setPendingFiles([file]);
         }
       };
       recorder.onerror = () => {
         if (version !== captureVersion.current) return;
         failed = true;
-        if (recorder.state === 'recording') recorder.stop(); else recorder.onstop();
+        if (recorder.state === "recording") recorder.stop();
+        else recorder.onstop();
         activityRef.current?.endRecording();
-        setError('Voice recording stopped because the microphone or recorder became unavailable.');
+        setError(
+          "Voice recording stopped because the microphone or recorder became unavailable.",
+        );
       };
-      for (const track of stream.getTracks()) track.addEventListener?.('ended', () => {
-        if (version === captureVersion.current && recorder.state === 'recording') stopVoiceRef.current?.();
-      });
+      for (const track of stream.getTracks())
+        track.addEventListener?.("ended", () => {
+          if (
+            version === captureVersion.current &&
+            recorder.state === "recording"
+          )
+            stopVoiceRef.current?.();
+        });
       recorder.start();
       activityRef.current?.startRecording();
       setRecording(true);
@@ -374,7 +432,9 @@ export default function MessageComposer({
       activityRef.current?.endRecording();
       recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
       recordingStreamRef.current = null;
-      setError('Microphone access is unavailable. Check your browser permission and try again.');
+      setError(
+        "Microphone access is unavailable. Check your browser permission and try again.",
+      );
     }
   };
 
@@ -385,18 +445,18 @@ export default function MessageComposer({
     // sending a message.
     if (event.nativeEvent?.isComposing || event.keyCode === 229) return;
 
-    if (event.key === 'Escape' && replyTo) {
+    if (event.key === "Escape" && replyTo) {
       event.preventDefault();
       onCancelReply?.();
       return;
     }
-    if (event.key === 'ArrowUp' && !content && onEditLast) {
+    if (event.key === "ArrowUp" && !content && onEditLast) {
       event.preventDefault();
       onEditLast();
       return;
     }
 
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       submit();
     }
@@ -410,9 +470,12 @@ export default function MessageComposer({
       {replyTo && (
         <div className="mb-2 flex items-center gap-3 rounded-lg border-l-2 border-brand bg-canvas px-3 py-2">
           <div className="min-w-0 flex-1">
-            <p className="text-metadata text-brand">Replying to {replyTo.sender_name || 'a message'}</p>
+            <p className="text-metadata text-brand">
+              Replying to {replyTo.sender_name || "a message"}
+            </p>
             <p className="truncate text-metadata text-muted">
-              {replyTo.content || (replyTo.is_deleted ? 'deleted message' : 'attachment')}
+              {replyTo.content ||
+                (replyTo.is_deleted ? "deleted message" : "attachment")}
             </p>
           </div>
           <button
@@ -427,16 +490,25 @@ export default function MessageComposer({
       )}
 
       {!isOnline && (
-        <p role="status" className="mb-2 rounded-md bg-canvas px-2.5 py-1.5 text-metadata text-muted">
+        <p
+          role="status"
+          className="mb-2 rounded-md bg-canvas px-2.5 py-1.5 text-metadata text-muted"
+        >
           Connection unavailable. Messages will wait here until you reconnect.
         </p>
       )}
 
       <div className="relative flex items-end gap-2 rounded-lg border border-line bg-surface px-3 py-2 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10">
         <div className="flex shrink-0 gap-1 pb-1">
-          <button type="button" onClick={toggleVoiceRecording} disabled={disabled || sending || pendingFiles.length > 0}
-            aria-label={recording ? 'Stop voice note recording' : 'Record voice note'}
-            className={`grid h-8 w-8 place-items-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40 ${recording ? 'bg-error/10 text-error' : 'text-muted hover:bg-canvas hover:text-ink'}`}>
+          <button
+            type="button"
+            onClick={toggleVoiceRecording}
+            disabled={disabled || sending || pendingFiles.length > 0}
+            aria-label={
+              recording ? "Stop voice note recording" : "Record voice note"
+            }
+            className={`grid h-8 w-8 place-items-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40 ${recording ? "bg-error/10 text-error" : "text-muted hover:bg-canvas hover:text-ink"}`}
+          >
             <IconMic className="h-5 w-5" aria-hidden="true" />
           </button>
           <AttachmentPicker
@@ -465,7 +537,7 @@ export default function MessageComposer({
               // end in a mention keeps a second press from stacking `@`s, and
               // leaves an in-progress token (`@Pr`) alone to keep filtering on.
               if (!/@[^\s@]*$/.test(before)) {
-                const separator = before && !/\s$/.test(before) ? ' ' : '';
+                const separator = before && !/\s$/.test(before) ? " " : "";
                 const next = `${before}${separator}@${after}`;
                 setContent(next);
                 const position = caret + separator.length + 1;
@@ -476,7 +548,7 @@ export default function MessageComposer({
               }
 
               textareaRef.current?.focus();
-              setMentionQuery('');
+              setMentionQuery("");
             }}
             aria-label="Mention someone"
             className="grid h-8 w-8 place-items-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40"
@@ -531,7 +603,11 @@ export default function MessageComposer({
         onSend={submitPreview}
         onCancel={cancelPreview}
         onRemoveFile={removeFile}
-        onReplaceFile={(index, file) => setPendingFiles((current) => current.map((item, position) => position === index ? file : item))}
+        onReplaceFile={(index, file) =>
+          setPendingFiles((current) =>
+            current.map((item, position) => (position === index ? file : item)),
+          )
+        }
       />
     </form>
   );

@@ -103,8 +103,12 @@ export function createOutbox({
         (item) =>
           unsaved.get(item.key) || {
             ...item,
-            state: item.uploadRetryBlocked && item.media && !item.payload.attachments?.length
-              ? "failed" : item.state || "queued",
+            state:
+              item.uploadRetryBlocked &&
+              item.media &&
+              !item.payload.attachments?.length
+                ? "failed"
+                : item.state || "queued",
             // Older outbox records may already have been emitted before refresh.
             sendAttempted: item.sendAttempted ?? true,
           },
@@ -117,9 +121,7 @@ export function createOutbox({
   const schedule = () => {
     clearTimeout(timer);
     if (stopped || !canSend()) return;
-    const pending = entries.filter(
-      (item) => item.state !== "failed",
-    );
+    const pending = entries.filter((item) => item.state !== "failed");
     if (pending.length) {
       const delay = Math.max(
         250,
@@ -166,21 +168,31 @@ export function createOutbox({
           };
           await checkpoint(item);
         }
-        if(prepareEncryption&&!item.media.encrypted){item=await prepareEncryption(item);await checkpoint(item);}
-        const attachment = await upload(item.media.uploadBlob||item.media.blob, {
-          roomId: item.roomId, clientId: item.clientId, session: item.media.session,
-          onCheckpoint: async (session) => {
-            item = { ...item, media: { ...item.media, session } };
-            await checkpoint(item);
+        if (prepareEncryption && !item.media.encrypted) {
+          item = await prepareEncryption(item);
+          await checkpoint(item);
+        }
+        const attachment = await upload(
+          item.media.uploadBlob || item.media.blob,
+          {
+            roomId: item.roomId,
+            clientId: item.clientId,
+            session: item.media.session,
+            onCheckpoint: async (session) => {
+              item = { ...item, media: { ...item.media, session } };
+              await checkpoint(item);
+            },
+            metadata: item.media.encrypted ? {} : item.media.metadata,
+            filename: item.media.encrypted
+              ? "encrypted.bin"
+              : item.media.filename,
+            signal: controller.signal,
+            onProgress: (progress) => {
+              if (!stopped && !controller.signal.aborted)
+                replace({ ...item, progress });
+            },
           },
-          metadata: item.media.encrypted?{}:item.media.metadata,
-          filename: item.media.encrypted?'encrypted.bin':item.media.filename,
-          signal: controller.signal,
-          onProgress: (progress) => {
-            if (!stopped && !controller.signal.aborted)
-              replace({ ...item, progress });
-          },
-        });
+        );
         if (!attachment?.url)
           throw new Error("The upload returned no file reference.");
         // Save the successful upload BEFORE emitting anything. A lost ack must
@@ -194,12 +206,17 @@ export function createOutbox({
         await checkpoint(item);
       }
       if (item.media && item.payload.attachments?.[0]) {
-        await remember(item.payload.attachments[0].url, item.media.blob,{encrypted:item.media.encrypted});
+        await remember(item.payload.attachments[0].url, item.media.blob, {
+          encrypted: item.media.encrypted,
+        });
       }
       if (!canSend() || controller.signal.aborted || stopped)
         throw new DOMException("Offline", "AbortError");
-      if(prepareSend&&!item.wirePayload){
-        item={...item,wirePayload:await prepareSend(item.payload,item.media)};
+      if (prepareSend && !item.wirePayload) {
+        item = {
+          ...item,
+          wirePayload: await prepareSend(item.payload, item.media),
+        };
         await checkpoint(item);
       }
       item = {
@@ -210,7 +227,11 @@ export function createOutbox({
         retryAt: 0,
       };
       await checkpoint(item);
-      const message = await send(item.wirePayload||item.payload, controller.signal,item);
+      const message = await send(
+        item.wirePayload || item.payload,
+        controller.signal,
+        item,
+      );
       if (stopped || controller.signal.aborted) return;
       await store.remove(item.key);
       unsaved.delete(item.key);
@@ -236,15 +257,35 @@ export function createOutbox({
         ? item.attempts || 0
         : (item.attempts || 0) + 1;
       const status = error.response?.status || error.status;
-      const retiredUpload = Boolean(item.media && item.payload.attachments?.length && status === 400
-        && /Attachment is unavailable/.test(error.message || error.response?.data?.message || ''));
-      if (retiredUpload) item = { ...item, wirePayload:undefined,payload: { ...item.payload, attachments: [] }, sendAttempted: false };
-      if(status===409&&error.definitive&&/Encryption recipients changed/.test(error.message||''))item={...item,wirePayload:undefined,sendAttempted:false};
+      const retiredUpload = Boolean(
+        item.media &&
+        item.payload.attachments?.length &&
+        status === 400 &&
+        /Attachment is unavailable/.test(
+          error.message || error.response?.data?.message || "",
+        ),
+      );
+      if (retiredUpload)
+        item = {
+          ...item,
+          wirePayload: undefined,
+          payload: { ...item.payload, attachments: [] },
+          sendAttempted: false,
+        };
+      if (
+        status === 409 &&
+        error.definitive &&
+        /Encryption recipients changed/.test(error.message || "")
+      )
+        item = { ...item, wirePayload: undefined, sendAttempted: false };
       const retryable =
         !error.permanent &&
         (!status || status >= 500 || [408, 429].includes(status));
-      const uploadFailed = Boolean(item.media && !item.payload.attachments?.length);
-      const failed = uploadFailed || (!interrupted && (!retryable || attempts >= 5));
+      const uploadFailed = Boolean(
+        item.media && !item.payload.attachments?.length,
+      );
+      const failed =
+        uploadFailed || (!interrupted && (!retryable || attempts >= 5));
       const retryAfter = Number(error.response?.headers?.["retry-after"]);
       const delay =
         status === 429
@@ -258,14 +299,25 @@ export function createOutbox({
         attempts,
         uploadRetryBlocked: false,
         sendAttempted: error.definitive ? false : item.sendAttempted,
-        error: retiredUpload ? "This upload expired before the message was sent. Retry to upload the saved file again." : uploadFailed
-          ? interrupted ? "Upload interrupted because the connection was lost. Reconnect, then retry."
-            : status === 429 ? `Upload limit reached. Wait ${Math.ceil(delay / 1000)} seconds before retrying.`
-            : error.response?.data?.message || (status >= 500
-              ? "The upload server is temporarily unavailable. Please retry."
-              : error.code === "ERR_NETWORK" ? "The upload server could not be reached. Check your connection and retry."
-              : error.message) || "Upload failed. Check your connection and retry."
-          : interrupted ? "" : error.response?.data?.message || error.message || "Could not send this message.",
+        error: retiredUpload
+          ? "This upload expired before the message was sent. Retry to upload the saved file again."
+          : uploadFailed
+            ? interrupted
+              ? "Upload interrupted because the connection was lost. Reconnect, then retry."
+              : status === 429
+                ? `Upload limit reached. Wait ${Math.ceil(delay / 1000)} seconds before retrying.`
+                : error.response?.data?.message ||
+                  (status >= 500
+                    ? "The upload server is temporarily unavailable. Please retry."
+                    : error.code === "ERR_NETWORK"
+                      ? "The upload server could not be reached. Check your connection and retry."
+                      : error.message) ||
+                  "Upload failed. Check your connection and retry."
+            : interrupted
+              ? ""
+              : error.response?.data?.message ||
+                error.message ||
+                "Could not send this message.",
         retryNotBefore: uploadFailed && status === 429 ? now() + delay : 0,
         retryAt: interrupted || failed ? 0 : now() + delay,
       };
@@ -358,7 +410,10 @@ export function createOutbox({
       return serial(async () => {
         const item = entries.find((entry) => entry.key === key);
         if (!item || flight?.key === key || stopped) return;
-        if (item.retryNotBefore > now()) throw new Error(`Upload limit reached. Retry in ${Math.ceil((item.retryNotBefore - now()) / 1000)} seconds.`);
+        if (item.retryNotBefore > now())
+          throw new Error(
+            `Upload limit reached. Retry in ${Math.ceil((item.retryNotBefore - now()) / 1000)} seconds.`,
+          );
         const next = {
           ...item,
           state: "queued",
@@ -388,7 +443,8 @@ export function createOutbox({
         publish();
         changed();
         // The server also sweeps expired sessions if this best-effort abort is offline.
-        if (item?.media?.session) cancelUpload?.(item.media.session).catch(onError);
+        if (item?.media?.session)
+          cancelUpload?.(item.media.session).catch(onError);
       });
     },
   };

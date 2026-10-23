@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import IconArrow from '@/assets/icons/arrow-right.svg?react';
-import IconDecisions from '@/assets/icons/decisions.svg?react';
-import IconTasks from '@/assets/icons/tasks.svg?react';
-import { getUserDigest } from '@/services/digest.service';
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import IconArrow from "@/assets/icons/arrow-right.svg?react";
+import IconDecisions from "@/assets/icons/decisions.svg?react";
+import IconTasks from "@/assets/icons/tasks.svg?react";
+import { getUserDigest } from "@/services/digest.service";
 
 /**
  * The "Catch up" card at the top of the chat list.
@@ -32,8 +32,8 @@ export default function CatchUpCard() {
       .then(({ items }) => {
         if (!active) return;
         setCounts({
-          decision: items.filter((item) => item.type === 'decision').length,
-          task: items.filter((item) => item.type === 'task').length,
+          decision: items.filter((item) => item.type === "decision").length,
+          task: items.filter((item) => item.type === "task").length,
         });
       })
       .catch(() => {
@@ -56,19 +56,19 @@ export default function CatchUpCard() {
     >
       <span className="min-w-0 flex-1">
         <span className="block text-label text-ink">
-          {total} thing{total === 1 ? '' : 's'} to catch up on
+          {total} thing{total === 1 ? "" : "s"} to catch up on
         </span>
         <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-metadata text-muted">
           {counts.decision > 0 && (
             <span className="inline-flex items-center gap-1">
               <IconDecisions className="h-3.5 w-3.5" aria-hidden="true" />
-              {counts.decision} decision{counts.decision === 1 ? '' : 's'}
+              {counts.decision} decision{counts.decision === 1 ? "" : "s"}
             </span>
           )}
           {counts.task > 0 && (
             <span className="inline-flex items-center gap-1">
               <IconTasks className="h-3.5 w-3.5" aria-hidden="true" />
-              {counts.task} task{counts.task === 1 ? '' : 's'}
+              {counts.task} task{counts.task === 1 ? "" : "s"}
             </span>
           )}
         </span>

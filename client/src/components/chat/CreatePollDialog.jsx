@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
-import IconClose from '@/assets/icons/close.svg?react';
-import IconPlus from '@/assets/icons/plus.svg?react';
-import Button from '@/components/ui/Button';
-import Input from '@/components/ui/Input';
-import Modal from '@/components/ui/Modal';
-import { createPoll } from '@/services/polls.service';
+import { useEffect, useState } from "react";
+import IconClose from "@/assets/icons/close.svg?react";
+import IconPlus from "@/assets/icons/plus.svg?react";
+import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
+import Modal from "@/components/ui/Modal";
+import { createPoll } from "@/services/polls.service";
 
 // Mirror the server limits in poll.service.js.
 const MIN_OPTIONS = 2;
@@ -13,39 +13,52 @@ const MAX_QUESTION = 300;
 const MAX_OPTION = 100;
 
 export default function CreatePollDialog({ open, onClose, roomId, onCreated }) {
-  const [question, setQuestion] = useState('');
-  const [options, setOptions] = useState(['', '']);
+  const [question, setQuestion] = useState("");
+  const [options, setOptions] = useState(["", ""]);
   const [allowMultiple, setAllowMultiple] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (!open) return;
-    setQuestion('');
-    setOptions(['', '']);
+    setQuestion("");
+    setOptions(["", ""]);
     setAllowMultiple(false);
-    setError('');
+    setError("");
   }, [open]);
 
   const filled = options.map((option) => option.trim()).filter(Boolean);
-  const hasDuplicates = new Set(filled.map((option) => option.toLowerCase())).size !== filled.length;
-  const canSubmit = question.trim() && filled.length >= MIN_OPTIONS && !hasDuplicates && !isSaving;
+  const hasDuplicates =
+    new Set(filled.map((option) => option.toLowerCase())).size !==
+    filled.length;
+  const canSubmit =
+    question.trim() &&
+    filled.length >= MIN_OPTIONS &&
+    !hasDuplicates &&
+    !isSaving;
 
   const setOption = (index, value) =>
-    setOptions((current) => current.map((option, i) => (i === index ? value : option)));
+    setOptions((current) =>
+      current.map((option, i) => (i === index ? value : option)),
+    );
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!canSubmit) return;
 
     setIsSaving(true);
-    setError('');
+    setError("");
     try {
-      const message = await createPoll({ roomId, question: question.trim(), options: filled, allowMultiple });
+      const message = await createPoll({
+        roomId,
+        question: question.trim(),
+        options: filled,
+        allowMultiple,
+      });
       onCreated?.(message);
       onClose();
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not create this poll.');
+      setError(err.response?.data?.message || "Could not create this poll.");
     } finally {
       setIsSaving(false);
     }
@@ -61,13 +74,22 @@ export default function CreatePollDialog({ open, onClose, roomId, onCreated }) {
           <Button variant="secondary" type="button" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" type="submit" form="poll-form" disabled={!canSubmit}>
-            {isSaving ? 'Sending…' : 'Send poll'}
+          <Button
+            variant="primary"
+            type="submit"
+            form="poll-form"
+            disabled={!canSubmit}
+          >
+            {isSaving ? "Sending…" : "Send poll"}
           </Button>
         </>
       }
     >
-      <form id="poll-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <form
+        id="poll-form"
+        onSubmit={handleSubmit}
+        className="flex flex-col gap-4"
+      >
         <Input
           id="poll-question"
           label="Question"
@@ -94,7 +116,11 @@ export default function CreatePollDialog({ open, onClose, roomId, onCreated }) {
               {options.length > MIN_OPTIONS && (
                 <button
                   type="button"
-                  onClick={() => setOptions((current) => current.filter((_, i) => i !== index))}
+                  onClick={() =>
+                    setOptions((current) =>
+                      current.filter((_, i) => i !== index),
+                    )
+                  }
                   aria-label={`Remove option ${index + 1}`}
                   className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
                 >
@@ -107,7 +133,7 @@ export default function CreatePollDialog({ open, onClose, roomId, onCreated }) {
           {options.length < MAX_OPTIONS && (
             <button
               type="button"
-              onClick={() => setOptions((current) => [...current, ''])}
+              onClick={() => setOptions((current) => [...current, ""])}
               className="flex items-center gap-2 self-start rounded-lg px-2 py-1.5 text-label text-brand transition-colors hover:bg-brand-soft"
             >
               <IconPlus className="h-4 w-4" aria-hidden="true" />
@@ -132,7 +158,9 @@ export default function CreatePollDialog({ open, onClose, roomId, onCreated }) {
           Allow multiple answers
         </label>
 
-        <p className="text-metadata text-muted">Everyone in the room can see who voted for what.</p>
+        <p className="text-metadata text-muted">
+          Everyone in the room can see who voted for what.
+        </p>
 
         {error && (
           <p role="alert" className="text-metadata text-error">

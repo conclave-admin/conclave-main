@@ -1,5 +1,5 @@
-const { query } = require('../config/db');
-const ApiError = require('../utils/ApiError');
+const { query } = require("../config/db");
+const ApiError = require("../utils/ApiError");
 
 // Decision pins — two scopes, one table.
 //
@@ -22,7 +22,7 @@ const ApiError = require('../utils/ApiError');
 // finished payload: each client knows what it pinned and can fix up its own
 // `mine` without a second request, but it cannot know anyone else's.
 
-const PIN_SCOPES = new Set(['user', 'room']);
+const PIN_SCOPES = new Set(["user", "room"]);
 
 function assertScope(scope) {
   if (!PIN_SCOPES.has(scope)) {
@@ -61,7 +61,7 @@ async function attachPins(decisions, viewerId, { db } = {}) {
   const byDecision = new Map();
   for (const row of rows) {
     const entry = byDecision.get(row.decision_id) || { room: null, mine: [] };
-    if (row.scope === 'room') {
+    if (row.scope === "room") {
       // Shared truth, same for every viewer.
       entry.room = {
         user_id: row.user_id,
@@ -70,9 +70,9 @@ async function attachPins(decisions, viewerId, { db } = {}) {
       };
       // A room pin the viewer set is both: everyone sees it, and they did it,
       // so they are allowed to take it back.
-      if (row.user_id === viewerId) entry.mine.push('room');
+      if (row.user_id === viewerId) entry.mine.push("room");
     } else if (row.user_id === viewerId) {
-      entry.mine.push('user');
+      entry.mine.push("user");
     }
     byDecision.set(row.decision_id, entry);
   }
@@ -107,7 +107,7 @@ async function getDecisionPayload(decisionId, viewerId) {
   );
 
   if (result.rows.length === 0) {
-    throw new ApiError(404, 'Decision not found');
+    throw new ApiError(404, "Decision not found");
   }
 
   const [decision] = await attachPins(result.rows, viewerId);
@@ -137,10 +137,10 @@ async function pinDecision({ decisionId, userId, scope, io }) {
     [decisionId, userId],
   );
   if (membership.rows.length === 0) {
-    throw new ApiError(403, 'You are not a member of this room');
+    throw new ApiError(403, "You are not a member of this room");
   }
 
-  if (scope === 'room') {
+  if (scope === "room") {
     const existing = await query(
       `SELECT dp.user_id, u.display_name
          FROM decision_pins dp
@@ -150,7 +150,10 @@ async function pinDecision({ decisionId, userId, scope, io }) {
     );
     const held = existing.rows[0];
     if (held && held.user_id !== userId) {
-      throw new ApiError(409, `Already pinned to the room by ${held.display_name}`);
+      throw new ApiError(
+        409,
+        `Already pinned to the room by ${held.display_name}`,
+      );
     }
   }
 
@@ -164,7 +167,12 @@ async function pinDecision({ decisionId, userId, scope, io }) {
 
   const decision = await getDecisionPayload(decisionId, userId);
 
-  if (io) io.to(decision.room_id).emit('decision:pinned', { decision, scope, userId });
+  if (io)
+    io.to(decision.room_id).emit("decision:pinned", {
+      decision,
+      scope,
+      userId,
+    });
 
   return decision;
 }
@@ -194,10 +202,10 @@ async function unpinDecision({ decisionId, userId, scope, io }) {
 
   const held = existing.rows[0];
 
-  if (scope === 'user') {
+  if (scope === "user") {
     if (!held) return null;
     if (held.user_id !== userId) {
-      throw new ApiError(403, 'That is not your bookmark');
+      throw new ApiError(403, "That is not your bookmark");
     }
   } else if (held && held.user_id !== userId) {
     const role = await query(
@@ -206,8 +214,8 @@ async function unpinDecision({ decisionId, userId, scope, io }) {
           AND rm.room_id = (SELECT room_id FROM decisions WHERE id = $1)`,
       [decisionId, userId],
     );
-    if (role.rows[0]?.role !== 'admin') {
-      throw new ApiError(403, 'Only the pinner or a room admin can unpin this');
+    if (role.rows[0]?.role !== "admin") {
+      throw new ApiError(403, "Only the pinner or a room admin can unpin this");
     }
   }
 
@@ -221,11 +229,17 @@ async function unpinDecision({ decisionId, userId, scope, io }) {
   );
   if (removed.rows.length === 0) return null;
 
-  const roomId = await query(`SELECT room_id FROM decisions WHERE id = $1`, [decisionId]);
+  const roomId = await query(`SELECT room_id FROM decisions WHERE id = $1`, [
+    decisionId,
+  ]);
   const decision = await getDecisionPayload(decisionId, userId);
 
   if (io && roomId.rows[0]) {
-    io.to(roomId.rows[0].room_id).emit('decision:unpinned', { decision, scope, userId });
+    io.to(roomId.rows[0].room_id).emit("decision:unpinned", {
+      decision,
+      scope,
+      userId,
+    });
   }
 
   return decision;

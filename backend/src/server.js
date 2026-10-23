@@ -1,14 +1,14 @@
-const http = require('http');
-const { Server } = require('socket.io');
-const { createAdapter } = require('@socket.io/redis-adapter');
+const http = require("http");
+const { Server } = require("socket.io");
+const { createAdapter } = require("@socket.io/redis-adapter");
 
-const app = require('./app');
-const env = require('./config/env');
-const { connectRedis, redisClient } = require('./config/redis');
-const { pool } = require('./config/db');
-const presence = require('./services/presence.service');
-const storageCleanup = require('./services/storageCleanup.service');
-const registerSocketHandlers = require('./sockets');
+const app = require("./app");
+const env = require("./config/env");
+const { connectRedis, redisClient } = require("./config/redis");
+const { pool } = require("./config/db");
+const presence = require("./services/presence.service");
+const storageCleanup = require("./services/storageCleanup.service");
+const registerSocketHandlers = require("./sockets");
 
 // Every rolling deploy, container restart and `docker compose down` delivers
 // SIGTERM. Without a handler the process is killed mid-request: the HTTP server
@@ -33,7 +33,7 @@ async function shutdown(signal) {
   // Nothing here may hang forever: the platform sends SIGKILL after its own
   // grace period, and being killed is worse than exiting with a non-zero code.
   const forceExit = setTimeout(() => {
-    console.error('Shutdown exceeded its timeout, exiting anyway');
+    console.error("Shutdown exceeded its timeout, exiting anyway");
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS);
   if (forceExit.unref) forceExit.unref();
@@ -43,9 +43,9 @@ async function shutdown(signal) {
     // that are already being disconnected.
     presence.stopHeartbeatSweep();
     await storageCleanup.stopStorageCleanup();
-    await require('./services/sync.service').stop();
-    await require('./services/push.service').stop();
-    await require('./services/accountSecurity.service').stop();
+    await require("./services/sync.service").stop();
+    await require("./services/push.service").stop();
+    await require("./services/accountSecurity.service").stop();
 
     // io.close() disconnects every socket and, because the server was attached,
     // closes the underlying HTTP server too.
@@ -67,17 +67,17 @@ async function shutdown(signal) {
     await pool.end();
 
     clearTimeout(forceExit);
-    console.log('Shutdown complete');
+    console.log("Shutdown complete");
     process.exit(0);
   } catch (err) {
-    console.error('Error during shutdown', err);
+    console.error("Error during shutdown", err);
     process.exit(1);
   }
 }
 
 async function main() {
   // Do not advertise a healthy API when PostgreSQL is unreachable.
-  await pool.query('SELECT 1');
+  await pool.query("SELECT 1");
   await connectRedis();
   storageCleanup.startStorageCleanup();
 
@@ -101,10 +101,10 @@ async function main() {
   // it as an argument — a REST handler has no way to push an event, which is why
   // addMember writes a room_invite notification row that nobody is ever told
   // about. Controllers read it as req.app.get('io').
-  app.set('io', io);
-  require('./services/sync.service').start(io);
-  require('./services/push.service').start();
-  require('./services/accountSecurity.service').start();
+  app.set("io", io);
+  require("./services/sync.service").start(io);
+  require("./services/push.service").start();
+  require("./services/accountSecurity.service").start();
 
   httpServer.listen(env.port, () => {
     console.log(`API + Socket.IO listening on http://localhost:${env.port}`);
@@ -112,10 +112,10 @@ async function main() {
 }
 
 // Registered before main() so a signal arriving during startup is still caught.
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 main().catch((err) => {
-  console.error('Failed to start server', err);
+  console.error("Failed to start server", err);
   process.exit(1);
 });

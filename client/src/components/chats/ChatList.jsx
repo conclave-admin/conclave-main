@@ -1,11 +1,11 @@
-import { useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import EmptyState from '@/components/ui/EmptyState';
-import Spinner from '@/components/ui/Spinner';
-import { useChats } from '@/contexts/ChatsContext';
-import CatchUpCard from './CatchUpCard';
-import ChatFilters from './ChatFilters';
-import ChatRow from './ChatRow';
+import { useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
+import EmptyState from "@/components/ui/EmptyState";
+import Spinner from "@/components/ui/Spinner";
+import { useChats } from "@/contexts/ChatsContext";
+import CatchUpCard from "./CatchUpCard";
+import ChatFilters from "./ChatFilters";
+import ChatRow from "./ChatRow";
 
 /**
  * The chat list.
@@ -27,19 +27,26 @@ export default function ChatList() {
   // Both the chip and the search field write to the URL, so reading them here
   // keeps one source of truth and lets a filtered view be linked to directly.
   const [params] = useSearchParams();
-  const filter = params.get('filter') || '';
-  const query = params.get('q') || '';
+  const filter = params.get("filter") || "";
+  const query = params.get("q") || "";
 
   const visibleRooms = useMemo(() => {
-    let list = filter === 'archived' ? archivedRooms : rooms.filter((room) => !room.is_archived);
+    let list =
+      filter === "archived"
+        ? archivedRooms
+        : rooms.filter((room) => !room.is_archived);
 
-    if (filter === 'unread') list = list.filter((room) => (room.unread_count || 0) > 0);
-    else if (filter === 'groups') list = list.filter((room) => room.type !== 'dm');
-    else if (filter === 'dms') list = list.filter((room) => room.type === 'dm');
+    if (filter === "unread")
+      list = list.filter((room) => (room.unread_count || 0) > 0);
+    else if (filter === "groups")
+      list = list.filter((room) => room.type !== "dm");
+    else if (filter === "dms") list = list.filter((room) => room.type === "dm");
 
     const needle = query.trim().toLowerCase();
     if (needle) {
-      list = list.filter((room) => (room.display_name || room.name || '').toLowerCase().includes(needle));
+      list = list.filter((room) =>
+        (room.display_name || room.name || "").toLowerCase().includes(needle),
+      );
     }
 
     return list;
@@ -57,18 +64,21 @@ export default function ChatList() {
         {isLoading && !rooms.length && <Spinner label="Loading chats" />}
 
         {error && (
-          <p role="alert" className="m-3 rounded-lg bg-error/10 p-3 text-body text-error">
+          <p
+            role="alert"
+            className="m-3 rounded-lg bg-error/10 p-3 text-body text-error"
+          >
             {error}
           </p>
         )}
 
         {!isLoading && !error && visibleRooms.length === 0 && (
           <EmptyState
-            title={filtered ? 'Nothing matches' : 'No chats yet'}
+            title={filtered ? "Nothing matches" : "No chats yet"}
             description={
               filtered
-                ? 'Try a different filter, or clear the search to see everything.'
-                : 'Start a conversation and it will appear here.'
+                ? "Try a different filter, or clear the search to see everything."
+                : "Start a conversation and it will appear here."
             }
           />
         )}

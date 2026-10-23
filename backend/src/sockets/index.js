@@ -1,18 +1,26 @@
-const jwt = require('jsonwebtoken');
-const env = require('../config/env');
-const { query } = require('../config/db');
-const { createMessage } = require('../services/message.service');
-const { personalRoom } = require('../services/notification.service');
-const presence = require('../services/presence.service');
-const conversationActivity = require('../services/conversationActivity.service');
-const ACTIVITY_ORDER = Symbol('activityOrder');
-const indicatorEvents = new Set(['typing', 'stop-typing', 'start-recording', 'stop-recording']);
-const { redisClient } = require('../config/redis');
-const socketHandler = require('../utils/socketHandler');
-const rateLimit = require('../middlewares/rateLimit.middleware');
-const ApiError = require('../utils/ApiError');
-const { requireSession, sessionRoom } = require('../services/session.service');
-const { registerAccessControl, withRoomMembership } = require('../services/realtimeAccess.service');
+const jwt = require("jsonwebtoken");
+const env = require("../config/env");
+const { query } = require("../config/db");
+const { createMessage } = require("../services/message.service");
+const { personalRoom } = require("../services/notification.service");
+const presence = require("../services/presence.service");
+const conversationActivity = require("../services/conversationActivity.service");
+const ACTIVITY_ORDER = Symbol("activityOrder");
+const indicatorEvents = new Set([
+  "typing",
+  "stop-typing",
+  "start-recording",
+  "stop-recording",
+]);
+const { redisClient } = require("../config/redis");
+const socketHandler = require("../utils/socketHandler");
+const rateLimit = require("../middlewares/rateLimit.middleware");
+const ApiError = require("../utils/ApiError");
+const { requireSession, sessionRoom } = require("../services/session.service");
+const {
+  registerAccessControl,
+  withRoomMembership,
+} = require("../services/realtimeAccess.service");
 
 // Event names match what was scoped in the original planning conversation.
 //
@@ -129,65 +137,98 @@ function registerSocketHandlers(io) {
       return next(error);
     };
     const token = socket.handshake.auth?.token;
-    if (!token) return reject('Missing auth token', 'AUTH_INVALID');
+    if (!token) return reject("Missing auth token", "AUTH_INVALID");
     let payload;
-    try { payload = jwt.verify(token, env.jwt.accessSecret); }
-    catch (error) { return reject('Invalid or expired token', error.name === 'TokenExpiredError' ? 'ACCESS_EXPIRED' : 'AUTH_INVALID'); }
-    if (!Number.isFinite(payload.exp)) return reject('Access token must expire', 'AUTH_INVALID');
+    try {
+      payload = jwt.verify(token, env.jwt.accessSecret);
+    } catch (error) {
+      return reject(
+        "Invalid or expired token",
+        error.name === "TokenExpiredError" ? "ACCESS_EXPIRED" : "AUTH_INVALID",
+      );
+    }
+    if (!Number.isFinite(payload.exp))
+      return reject("Access token must expire", "AUTH_INVALID");
     try {
       const session = await requireSession(payload);
       socket.user = { id: payload.sub, email: payload.email };
-      socket.authClaims = { sub: payload.sub, sid: payload.sid, exp: payload.exp };
-      socket.sessionExpiresAt = Math.min(payload.exp * 1000, new Date(session.expires_at).getTime());
+      socket.authClaims = {
+        sub: payload.sub,
+        sid: payload.sid,
+        exp: payload.exp,
+      };
+      socket.sessionExpiresAt = Math.min(
+        payload.exp * 1000,
+        new Date(session.expires_at).getTime(),
+      );
       socket.data.sessionId = payload.sid;
       socket.data.userId = payload.sub;
     } catch (error) {
-      return reject(error.status === 401 ? error.message : 'Could not verify account', error.status === 401 ? 'SESSION_REVOKED' : 'AUTH_UNAVAILABLE');
+      return reject(
+        error.status === 401 ? error.message : "Could not verify account",
+        error.status === 401 ? "SESSION_REVOKED" : "AUTH_UNAVAILABLE",
+      );
     }
     return next();
   });
 
-  io.on('connection', (socket) => {
+  io.on("connection", (socket) => {
     const { id: userId } = socket.user;
     socket.data.activity = { foreground: false, roomId: null, revision: -1 };
     let activityWork = Promise.resolve();
     let indicatorOrder = 0;
     const onEvent = (event, handler) => {
-      const run = socketHandler(socket, async (...args) => {
-        const initialized = await ready;
-        if (event !== 'disconnect') {
-          if (!initialized || !socket.connected) return;
-          if (Date.now() >= socket.sessionExpiresAt) {
-            socket.emit('session:expired', { sessionId: socket.data.sessionId });
-            socket.disconnect(true);
-            throw new ApiError(401, 'Access token expired');
-          }
-          if (indicatorEvents.has(event)) {
-            if (!rateLimit.consume(`indicators:${socket.id}`, { windowMs: 10000, max: 24 })) throw new ApiError(429, 'Too many activity updates');
-          }
-          try { await requireSession(socket.authClaims); }
-          catch (error) {
-            if (error.status === 401) {
-              socket.emit('session:revoked', { sessionId: socket.data.sessionId });
+      const run = socketHandler(
+        socket,
+        async (...args) => {
+          const initialized = await ready;
+          if (event !== "disconnect") {
+            if (!initialized || !socket.connected) return;
+            if (Date.now() >= socket.sessionExpiresAt) {
+              socket.emit("session:expired", {
+                sessionId: socket.data.sessionId,
+              });
               socket.disconnect(true);
+              throw new ApiError(401, "Access token expired");
             }
-            throw error;
+            if (indicatorEvents.has(event)) {
+              if (
+                !rateLimit.consume(`indicators:${socket.id}`, {
+                  windowMs: 10000,
+                  max: 24,
+                })
+              )
+                throw new ApiError(429, "Too many activity updates");
+            }
+            try {
+              await requireSession(socket.authClaims);
+            } catch (error) {
+              if (error.status === 401) {
+                socket.emit("session:revoked", {
+                  sessionId: socket.data.sessionId,
+                });
+                socket.disconnect(true);
+              }
+              throw error;
+            }
+            // The session check is asynchronous; revocation may disconnect us while it runs.
+            if (!socket.connected) return;
           }
-          // The session check is asynchronous; revocation may disconnect us while it runs.
-          if (!socket.connected) return;
-        }
-        return handler(...args);
-      }, {
-        payload: !['heartbeat', 'disconnect'].includes(event),
-      });
+          return handler(...args);
+        },
+        {
+          payload: !["heartbeat", "disconnect"].includes(event),
+        },
+      );
       socket.on(event, (...args) => {
-        if (event === 'heartbeat') {
-          if (typeof args[0] === 'function') args.unshift({});
+        if (event === "heartbeat") {
+          if (typeof args[0] === "function") args.unshift({});
           else if (args[0] === undefined) args[0] = {};
         }
-        if (args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])) args[0][ACTIVITY_ORDER] = ++indicatorOrder;
+        if (args[0] && typeof args[0] === "object" && !Array.isArray(args[0]))
+          args[0][ACTIVITY_ORDER] = ++indicatorOrder;
         const work = run(...args);
-        if (event === 'disconnect') presence.trackCleanup(work);
+        if (event === "disconnect") presence.trackCleanup(work);
         return work;
       });
     };
@@ -207,7 +248,7 @@ function registerSocketHandlers(io) {
         await presence.publishUserPresence(io, userId);
         return true;
       } catch (error) {
-        console.error('Could not initialize socket presence', error);
+        console.error("Could not initialize socket presence", error);
         socket.disconnect(true);
         return false;
       }
@@ -220,17 +261,20 @@ function registerSocketHandlers(io) {
     // reconnect using the same still-active session.
     let expiryTimer;
     const scheduleExpiry = () => {
-      expiryTimer = setTimeout(() => {
-        if (Date.now() < socket.sessionExpiresAt) return scheduleExpiry();
-        socket.emit('session:expired', { sessionId: socket.data.sessionId });
-        socket.disconnect(true);
-      }, Math.max(1, Math.min(socket.sessionExpiresAt - Date.now(), 2147483647)));
+      expiryTimer = setTimeout(
+        () => {
+          if (Date.now() < socket.sessionExpiresAt) return scheduleExpiry();
+          socket.emit("session:expired", { sessionId: socket.data.sessionId });
+          socket.disconnect(true);
+        },
+        Math.max(1, Math.min(socket.sessionExpiresAt - Date.now(), 2147483647)),
+      );
       expiryTimer.unref?.();
     };
     scheduleExpiry();
 
     // --- join-room: verify membership, track per-room presence ---
-    onEvent('join-room', async ({ roomId }) => {
+    onEvent("join-room", async ({ roomId }) => {
       if (!roomId) return;
       return withRoomMembership(roomId, userId, async (client) => {
         if (!socket.connected) return;
@@ -241,12 +285,13 @@ function registerSocketHandlers(io) {
       });
     });
 
-    onEvent('leave-room', async ({ roomId, [ACTIVITY_ORDER]: order }) => {
+    onEvent("leave-room", async ({ roomId, [ACTIVITY_ORDER]: order }) => {
       if (!roomId || !socket.rooms.has(roomId)) return;
 
       await socket.leave(roomId);
       await presence.userLeftRoom(userId, roomId, socket.id);
-      if (socket.data.activity.roomId === roomId) socket.data.activity.roomId = null;
+      if (socket.data.activity.roomId === roomId)
+        socket.data.activity.roomId = null;
       await conversationActivity.clearDevice(roomId, userId, socket.id, order);
       await presence.publishRoomPresence(io, roomId, undefined, userId);
       return { roomId, left: true };
@@ -256,65 +301,134 @@ function registerSocketHandlers(io) {
     // mentionedUserIds is how a client says who was mentioned. Optional for now:
     // omitting it falls back to matching display names in the text, which is
     // temporary — see resolveMentionIds in services/message.service.js.
-    onEvent('send-message', async ({ roomId, clientId, content, replyToId, attachments, albumId, mentionedUserIds, forwardSource, encryptedPayload, [ACTIVITY_ORDER]: order }) => {
-      if (!rateLimit.consume(`socket:${userId}:messages`, { max: 30 })) throw new ApiError(429, 'Too many messages. Please try again shortly.');
-      const message = await createMessage({
+    onEvent(
+      "send-message",
+      async ({
         roomId,
-        senderId: userId,
         clientId,
         content,
         replyToId,
         attachments,
         albumId,
         mentionedUserIds,
-        forwardSource, encryptedPayload,
-        io,
-      });
+        forwardSource,
+        encryptedPayload,
+        [ACTIVITY_ORDER]: order,
+      }) => {
+        if (!rateLimit.consume(`socket:${userId}:messages`, { max: 30 }))
+          throw new ApiError(
+            429,
+            "Too many messages. Please try again shortly.",
+          );
+        const message = await createMessage({
+          roomId,
+          senderId: userId,
+          clientId,
+          content,
+          replyToId,
+          attachments,
+          albumId,
+          mentionedUserIds,
+          forwardSource,
+          encryptedPayload,
+          io,
+        });
 
-      // Auto-clear typing indicator when a message is sent
-      await conversationActivity.clearDevice(roomId, userId, socket.id, order);
-      await presence.publishRoomPresence(io, roomId, undefined, userId);
+        // Auto-clear typing indicator when a message is sent
+        await conversationActivity.clearDevice(
+          roomId,
+          userId,
+          socket.id,
+          order,
+        );
+        await presence.publishRoomPresence(io, roomId, undefined, userId);
 
-      if (!message._idempotentRetry) await require('../services/privacy.service').emitMessage(io,roomId,'receive-message',message);
-      return message;
-    });
+        if (!message._idempotentRetry)
+          await require("../services/privacy.service").emitMessage(
+            io,
+            roomId,
+            "receive-message",
+            message,
+          );
+        return message;
+      },
+    );
 
     // Starts are rate limited across instances; stops always clear only the
     // originating device. Aggregate snapshots keep other devices visible.
     for (const [event, kind, active] of [
-      ['typing', 'typing', true], ['stop-typing', 'typing', false],
-      ['start-recording', 'recording', true], ['stop-recording', 'recording', false],
-    ]) onEvent(event, async ({ roomId, [ACTIVITY_ORDER]: order }) => {
-      if (!roomId) throw new ApiError(400, 'roomId is required');
-      if (active) {
-        if (!redisClient.isReady) throw new ApiError(503, 'Activity updates are temporarily unavailable');
-        const allowed = await rateLimit.consumeShared(`activity:${userId}`, { windowMs: 60000, max: 120 });
-        if (!allowed) throw new ApiError(429, 'Too many activity updates');
-      }
-      return withRoomMembership(roomId, userId, async client => {
-        if (!socket.connected || !socket.rooms.has(roomId)) throw new ApiError(403, 'Join this conversation before sharing activity');
-        const changed = await conversationActivity.update(roomId, userId, socket.id, kind, active, order);
-        if (changed) await presence.publishRoomPresence(io, roomId, client, userId);
-        return { roomId, accepted: changed };
+      ["typing", "typing", true],
+      ["stop-typing", "typing", false],
+      ["start-recording", "recording", true],
+      ["stop-recording", "recording", false],
+    ])
+      onEvent(event, async ({ roomId, [ACTIVITY_ORDER]: order }) => {
+        if (!roomId) throw new ApiError(400, "roomId is required");
+        if (active) {
+          if (!redisClient.isReady)
+            throw new ApiError(
+              503,
+              "Activity updates are temporarily unavailable",
+            );
+          const allowed = await rateLimit.consumeShared(`activity:${userId}`, {
+            windowMs: 60000,
+            max: 120,
+          });
+          if (!allowed) throw new ApiError(429, "Too many activity updates");
+        }
+        return withRoomMembership(roomId, userId, async (client) => {
+          if (!socket.connected || !socket.rooms.has(roomId))
+            throw new ApiError(
+              403,
+              "Join this conversation before sharing activity",
+            );
+          const changed = await conversationActivity.update(
+            roomId,
+            userId,
+            socket.id,
+            kind,
+            active,
+            order,
+          );
+          if (changed)
+            await presence.publishRoomPresence(io, roomId, client, userId);
+          return { roomId, accepted: changed };
+        });
       });
-    });
 
     // Delivery means a device received message metadata, independent of media
     // downloads. Reading additionally requires a live foreground timeline.
-    for (const [event, read] of [['message-read', true], ['message-delivered', false]]) {
+    for (const [event, read] of [
+      ["message-read", true],
+      ["message-delivered", false],
+    ]) {
       onEvent(event, async ({ roomId, messageId }) => {
-        if (!roomId || !messageId) throw new ApiError(400, 'roomId and messageId are required');
-        return require('../services/messageReceipt.service').acknowledge({ roomId, messageId, userId, read, io,
+        if (!roomId || !messageId)
+          throw new ApiError(400, "roomId and messageId are required");
+        return require("../services/messageReceipt.service").acknowledge({
+          roomId,
+          messageId,
+          userId,
+          read,
+          io,
           authorize: async () => {
             if (!socket.connected) return false;
             if (!read) return true;
             if (!socket.rooms.has(roomId)) return false;
-            if (!redisClient.isReady) throw new ApiError(503, 'Read receipts are temporarily unavailable');
+            if (!redisClient.isReady)
+              throw new ApiError(
+                503,
+                "Read receipts are temporarily unavailable",
+              );
             const [lease, meta] = await Promise.all([
-              redisClient.zScore('presence:leases', `${userId}:${socket.id}`),
+              redisClient.zScore("presence:leases", `${userId}:${socket.id}`),
               redisClient.hGetAll(`presence:socket:${socket.id}`),
             ]);
-            return Number(lease) > Date.now() && meta.foreground === '1' && meta.roomId === roomId;
+            return (
+              Number(lease) > Date.now() &&
+              meta.foreground === "1" &&
+              meta.roomId === roomId
+            );
           },
         });
       });
@@ -323,61 +437,105 @@ function registerSocketHandlers(io) {
     // Foreground attention is separate from subscriptions (info pages and
     // background tabs retain subscriptions). Activity updates are serialized;
     // revisions also discard requests whose authorization finished out of order.
-    onEvent('heartbeat', async (payload = {}) => {
-      activityWork = activityWork.catch(() => {}).then(async () => {
-        const previous = socket.data.activity;
-        const revision = Number.isSafeInteger(payload?.revision) ? payload.revision : previous.revision + 1;
-        if (revision < previous.revision || !socket.connected) return { available: redisClient.isReady };
-        let roomId = typeof payload?.roomId === 'string' ? payload.roomId : null;
-        if (roomId && !/^[0-9a-f-]{36}$/i.test(roomId)) throw new ApiError(400, 'Invalid presence room');
-        const activity = { foreground: payload?.foreground === true, roomId, revision, order: payload[ACTIVITY_ORDER] };
-        if (!activity.foreground) activity.roomId = roomId = null;
-        let changed;
-        if (roomId) {
-          try {
-            changed = await withRoomMembership(roomId, userId, () => presence.renewSocket(userId, socket.id, activity));
-          } catch (error) {
-            if (error.status !== 403) throw error;
-            activity.roomId = null;
+    onEvent("heartbeat", async (payload = {}) => {
+      activityWork = activityWork
+        .catch(() => {})
+        .then(async () => {
+          const previous = socket.data.activity;
+          const revision = Number.isSafeInteger(payload?.revision)
+            ? payload.revision
+            : previous.revision + 1;
+          if (revision < previous.revision || !socket.connected)
+            return { available: redisClient.isReady };
+          let roomId =
+            typeof payload?.roomId === "string" ? payload.roomId : null;
+          if (roomId && !/^[0-9a-f-]{36}$/i.test(roomId))
+            throw new ApiError(400, "Invalid presence room");
+          const activity = {
+            foreground: payload?.foreground === true,
+            roomId,
+            revision,
+            order: payload[ACTIVITY_ORDER],
+          };
+          if (!activity.foreground) activity.roomId = roomId = null;
+          let changed;
+          if (roomId) {
+            try {
+              changed = await withRoomMembership(roomId, userId, () =>
+                presence.renewSocket(userId, socket.id, activity),
+              );
+            } catch (error) {
+              if (error.status !== 403) throw error;
+              activity.roomId = null;
+              changed = await presence.renewSocket(userId, socket.id, activity);
+            }
+          } else
             changed = await presence.renewSocket(userId, socket.id, activity);
+          socket.data.activity = activity;
+          if (activity.foreground)
+            await query(
+              "UPDATE users SET last_active_at=NOW() WHERE id=$1 AND (last_active_at IS NULL OR last_active_at<NOW()-INTERVAL '1 minute')",
+              [userId],
+            );
+          if (previous.roomId && previous.roomId !== activity.roomId) {
+            await conversationActivity.clearDevice(
+              previous.roomId,
+              userId,
+              socket.id,
+              payload[ACTIVITY_ORDER],
+            );
+            await presence.publishRoomPresence(
+              io,
+              previous.roomId,
+              undefined,
+              userId,
+            );
           }
-        } else changed = await presence.renewSocket(userId, socket.id, activity);
-        socket.data.activity = activity;
-        if (activity.foreground) await query("UPDATE users SET last_active_at=NOW() WHERE id=$1 AND (last_active_at IS NULL OR last_active_at<NOW()-INTERVAL '1 minute')",[userId]);
-        if (previous.roomId && previous.roomId !== activity.roomId) {
-          await conversationActivity.clearDevice(previous.roomId, userId, socket.id, payload[ACTIVITY_ORDER]);
-          await presence.publishRoomPresence(io, previous.roomId, undefined, userId);
-        }
-        // Rebuild this device's indexes after Redis data loss. Check membership
-        // under the same lock as removal, rather than trusting cached Redis sets.
-        const rooms = [...socket.rooms].filter(id => /^[0-9a-f-]{36}$/i.test(id));
-        for (const id of rooms) {
-          try {
-            await withRoomMembership(id, userId, async () => {
-              if (socket.connected && socket.rooms.has(id)) await presence.userJoinedRoom(userId, id, socket.id);
-            });
-          } catch (error) {
-            if (error.status !== 403) throw error;
-            await socket.leave(id);
-            await presence.userLeftRoom(userId, id, socket.id);
-            socket.emit('room:members', { roomId: id, userId, action: 'removed' });
+          // Rebuild this device's indexes after Redis data loss. Check membership
+          // under the same lock as removal, rather than trusting cached Redis sets.
+          const rooms = [...socket.rooms].filter((id) =>
+            /^[0-9a-f-]{36}$/i.test(id),
+          );
+          for (const id of rooms) {
+            try {
+              await withRoomMembership(id, userId, async () => {
+                if (socket.connected && socket.rooms.has(id))
+                  await presence.userJoinedRoom(userId, id, socket.id);
+              });
+            } catch (error) {
+              if (error.status !== 403) throw error;
+              await socket.leave(id);
+              await presence.userLeftRoom(userId, id, socket.id);
+              socket.emit("room:members", {
+                roomId: id,
+                userId,
+                action: "removed",
+              });
+            }
           }
-        }
-        if (changed) await presence.publishUserPresence(io, userId);
-        for (const id of rooms) if (socket.rooms.has(id)) await presence.publishRoomPresence(io, id);
-        return { available: redisClient.isReady, checkedAt: Date.now() };
-      });
+          if (changed) await presence.publishUserPresence(io, userId);
+          for (const id of rooms)
+            if (socket.rooms.has(id))
+              await presence.publishRoomPresence(io, id);
+          return { available: redisClient.isReady, checkedAt: Date.now() };
+        });
       return activityWork;
     });
 
     // --- disconnect: clean up all presence state ---
-    onEvent('disconnect', async () => {
+    onEvent("disconnect", async () => {
       clearTimeout(expiryTimer);
       // If the user still has another tab open, they are not offline — do not
       // tear down their presence or announce them as gone.
       await activityWork.catch(() => {});
-      const leftRooms = await presence.cleanupSocketFromRooms(userId, socket.id);
-      const remainingSockets = await presence.socketDisconnected(userId, socket.id);
+      const leftRooms = await presence.cleanupSocketFromRooms(
+        userId,
+        socket.id,
+      );
+      const remainingSockets = await presence.socketDisconnected(
+        userId,
+        socket.id,
+      );
 
       // Notify each room only when the user's last tab there closed.
       for (const roomId of leftRooms) {
@@ -388,8 +546,6 @@ function registerSocketHandlers(io) {
 
       // Remove the account from the online index only after its last device.
       await presence.userDisconnected(userId);
-
-
     });
   });
 
@@ -397,16 +553,16 @@ function registerSocketHandlers(io) {
   // Expire individual device leases after a crash or sleeping connection.
   presence.startHeartbeatSweep(io);
   const local = io.local || io;
-  const unavailable = () => local.emit?.('presence:unavailable');
-  const resync = () => local.emit?.('presence:resync');
-  redisClient.on('reconnecting', unavailable);
-  redisClient.on('end', unavailable);
-  redisClient.on('ready', resync);
-  io.httpServer?.once('close', () => {
+  const unavailable = () => local.emit?.("presence:unavailable");
+  const resync = () => local.emit?.("presence:resync");
+  redisClient.on("reconnecting", unavailable);
+  redisClient.on("end", unavailable);
+  redisClient.on("ready", resync);
+  io.httpServer?.once("close", () => {
     presence.stopHeartbeatSweep(io);
-    redisClient.off('reconnecting', unavailable);
-    redisClient.off('end', unavailable);
-    redisClient.off('ready', resync);
+    redisClient.off("reconnecting", unavailable);
+    redisClient.off("end", unavailable);
+    redisClient.off("ready", resync);
   });
 }
 

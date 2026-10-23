@@ -16,18 +16,19 @@
  * Postgres treats them as different strings, so it would either be rejected or
  * stack twice against the unique constraint. These four have one encoding each.
  */
-export const REACTION_EMOJI = ['👍', '👎', '🎉', '✅'];
+export const REACTION_EMOJI = ["👍", "👎", "🎉", "✅"];
 
 /** Human-readable fallback for attachment-only messages in reply and pin quotes. */
 export function messageSummary(message) {
-  if (!message) return 'Message';
-  if (message.is_deleted || message.deleted_at) return 'Deleted message';
+  if (!message) return "Message";
+  if (message.is_deleted || message.deleted_at) return "Deleted message";
   if (message.content) return message.content;
-  const type = message.attachments?.[0]?.mime_type || message.attachment_type || '';
-  if (type.startsWith('image/')) return 'Photo';
-  if (type.startsWith('video/')) return 'Video';
-  if (type.startsWith('audio/')) return 'Voice message';
-  return message.attachments?.length ? 'Document' : 'Message';
+  const type =
+    message.attachments?.[0]?.mime_type || message.attachment_type || "";
+  if (type.startsWith("image/")) return "Photo";
+  if (type.startsWith("video/")) return "Video";
+  if (type.startsWith("audio/")) return "Voice message";
+  return message.attachments?.length ? "Document" : "Message";
 }
 
 function startOfDay(value) {
@@ -43,27 +44,27 @@ export function isSameDay(a, b) {
 
 /** "Today", "Yesterday", "October 8", or "October 8, 2024" — never a raw ISO. */
 export function daySeparatorLabel(value, now = new Date()) {
-  if (!value) return '';
+  if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
+  if (Number.isNaN(date.getTime())) return "";
 
   const daysAgo = Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000);
-  if (daysAgo === 0) return 'Today';
-  if (daysAgo === 1) return 'Yesterday';
+  if (daysAgo === 0) return "Today";
+  if (daysAgo === 1) return "Yesterday";
 
   const options =
     date.getFullYear() === now.getFullYear()
-      ? { month: 'long', day: 'numeric' }
-      : { month: 'long', day: 'numeric', year: 'numeric' };
-  return date.toLocaleDateString('en-US', options);
+      ? { month: "long", day: "numeric" }
+      : { month: "long", day: "numeric", year: "numeric" };
+  return date.toLocaleDateString("en-US", options);
 }
 
 /** The clock time shown beside a message and in a grouping run's last row. */
 export function formatClockTime(value) {
-  if (!value) return '';
+  if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 /**
@@ -108,20 +109,31 @@ export function annotateMessages(messages = []) {
  * recipient. Empty recipient lists and incomplete historical lists stay sent. */
 export function newerReceipt(current, incoming) {
   if (!incoming) return current;
-  return current && Number(current.version || 0) > Number(incoming.version || 0) ? current : incoming;
+  return current && Number(current.version || 0) > Number(incoming.version || 0)
+    ? current
+    : incoming;
 }
-export function readStatus(message, members = [], viewerId, pendingIds = new Set(), failedIds = new Set(), queuedIds = new Set()) {
+export function readStatus(
+  message,
+  members = [],
+  viewerId,
+  pendingIds = new Set(),
+  failedIds = new Set(),
+  queuedIds = new Set(),
+) {
   if (!message || message.sender_id !== viewerId) return null;
-  if (failedIds.has(message.id)) return 'failed';
-  if (queuedIds.has(message.id)) return 'queued';
-  if (pendingIds.has(message.id)) return 'pending';
+  if (failedIds.has(message.id)) return "failed";
+  if (queuedIds.has(message.id)) return "queued";
+  if (pendingIds.has(message.id)) return "pending";
 
   const summary = message.receipt_summary;
   if (summary) {
-    if (!summary.history_complete || !summary.recipient_count) return 'sent';
-    if (summary.read_count === summary.recipient_count) return 'read';
-    return summary.delivered_count === summary.recipient_count ? 'delivered' : 'sent';
+    if (!summary.history_complete || !summary.recipient_count) return "sent";
+    if (summary.read_count === summary.recipient_count) return "read";
+    return summary.delivered_count === summary.recipient_count
+      ? "delivered"
+      : "sent";
   }
   // Old caches have no reliable send-time audience. Wait for server metadata.
-  return 'sent';
+  return "sent";
 }

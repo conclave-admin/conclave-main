@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import Button from '@/components/ui/Button';
-import Input from '@/components/ui/Input';
-import Modal from '@/components/ui/Modal';
-import Select from '@/components/ui/Select';
-import Textarea from '@/components/ui/Textarea';
-import { createTask } from '@/services/tasks.service';
+import { useEffect, useMemo, useState } from "react";
+import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
+import Modal from "@/components/ui/Modal";
+import Select from "@/components/ui/Select";
+import Textarea from "@/components/ui/Textarea";
+import { createTask } from "@/services/tasks.service";
 
 /**
  * Flag a message as a task.
@@ -22,13 +22,20 @@ import { createTask } from '@/services/tasks.service';
  * Due date is optional and sent as `YYYY-MM-DD`, the same shape the server
  * returns, so a round trip does not shift a day.
  */
-export default function FlagAsTaskDialog({ open, onClose, message, roomId, members = [], onCreated }) {
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [assigneeId, setAssigneeId] = useState('');
-  const [dueDate, setDueDate] = useState('');
+export default function FlagAsTaskDialog({
+  open,
+  onClose,
+  message,
+  roomId,
+  members = [],
+  onCreated,
+}) {
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [assigneeId, setAssigneeId] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   // Opened from the attach menu rather than from a message: no source message,
   // no prefilled title, so the title field is the only thing that must be
@@ -42,12 +49,12 @@ export default function FlagAsTaskDialog({ open, onClose, message, roomId, membe
 
   useEffect(() => {
     if (!open) return;
-    const text = message?.content || '';
+    const text = message?.content || "";
     setTitle(text.length > 80 ? `${text.slice(0, 77)}…` : text);
-    setBody('');
-    setAssigneeId('');
-    setDueDate('');
-    setError('');
+    setBody("");
+    setAssigneeId("");
+    setDueDate("");
+    setError("");
   }, [open, message]);
 
   const handleSubmit = async (event) => {
@@ -55,7 +62,7 @@ export default function FlagAsTaskDialog({ open, onClose, message, roomId, membe
     if (!title.trim()) return;
 
     setIsSaving(true);
-    setError('');
+    setError("");
     try {
       const task = await createTask({
         roomId,
@@ -70,7 +77,7 @@ export default function FlagAsTaskDialog({ open, onClose, message, roomId, membe
       onCreated?.(task);
       onClose();
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not create this task.');
+      setError(err.response?.data?.message || "Could not create this task.");
     } finally {
       setIsSaving(false);
     }
@@ -80,19 +87,28 @@ export default function FlagAsTaskDialog({ open, onClose, message, roomId, membe
     <Modal
       open={open}
       onClose={onClose}
-      title={manual ? 'New task' : 'Flag as task'}
+      title={manual ? "New task" : "Flag as task"}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} type="button">
             Cancel
           </Button>
-          <Button variant="primary" type="submit" form="flag-task-form" disabled={!title.trim() || isSaving}>
-            {isSaving ? 'Creating…' : 'Create task'}
+          <Button
+            variant="primary"
+            type="submit"
+            form="flag-task-form"
+            disabled={!title.trim() || isSaving}
+          >
+            {isSaving ? "Creating…" : "Create task"}
           </Button>
         </>
       }
     >
-      <form id="flag-task-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <form
+        id="flag-task-form"
+        onSubmit={handleSubmit}
+        className="flex flex-col gap-4"
+      >
         {message?.content && (
           <blockquote className="rounded-lg border-l-2 border-line bg-canvas px-3 py-2 text-metadata text-muted [overflow-wrap:anywhere]">
             {message.content}

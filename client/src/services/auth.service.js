@@ -1,6 +1,11 @@
 import { api } from "../lib/api";
-import { saveSession, clearSession, getRefreshToken, saveSessionUser } from '../lib/session';
-export { getAccessToken, clearSession } from '../lib/session';
+import {
+  saveSession,
+  clearSession,
+  getRefreshToken,
+  saveSessionUser,
+} from "../lib/session";
+export { getAccessToken, clearSession } from "../lib/session";
 export async function login(credentials) {
   const { data } = await api.post("/auth/login", credentials);
   saveSession(data.data);

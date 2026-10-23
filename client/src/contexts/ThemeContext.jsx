@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 /*
   The single owner of light/dark/system.
@@ -16,9 +16,9 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 const ThemeContext = createContext(null);
 
 // Must match the key and the values used by the script in index.html.
-const STORAGE_KEY = 'conclave-theme';
-const THEMES = ['light', 'dark', 'system'];
-const DARK_QUERY = '(prefers-color-scheme: dark)';
+const STORAGE_KEY = "conclave-theme";
+const THEMES = ["light", "dark", "system"];
+const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 // Stored value is an explicit choice only. Absent means system, which is also
 // what the index.html script treats as the default — so a user who has never
@@ -26,9 +26,9 @@ const DARK_QUERY = '(prefers-color-scheme: dark)';
 function readStoredTheme() {
   try {
     const value = localStorage.getItem(STORAGE_KEY);
-    return THEMES.includes(value) ? value : 'system';
+    return THEMES.includes(value) ? value : "system";
   } catch {
-    return 'system';
+    return "system";
   }
 }
 
@@ -51,25 +51,25 @@ export function ThemeProvider({ children }) {
     const query = window.matchMedia?.(DARK_QUERY);
     if (!query || !query.addEventListener) return undefined;
     const onChange = (event) => setSystemDark(event.matches);
-    query.addEventListener('change', onChange);
-    return () => query.removeEventListener('change', onChange);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
   }, []);
 
-  const resolved = theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
+  const resolved = theme === "system" ? (systemDark ? "dark" : "light") : theme;
 
   // Applies (or removes) the class the stylesheet keys off. Toggling rather
   // than assigning keeps this idempotent with the index.html script, which has
   // already run — so a mount in the correct state changes nothing and does not
   // cause a second paint.
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', resolved === 'dark');
+    document.documentElement.classList.toggle("dark", resolved === "dark");
   }, [resolved]);
 
   const setTheme = (next) => {
-    const value = THEMES.includes(next) ? next : 'system';
+    const value = THEMES.includes(next) ? next : "system";
     setThemeState(value);
     try {
-      if (value === 'system') localStorage.removeItem(STORAGE_KEY);
+      if (value === "system") localStorage.removeItem(STORAGE_KEY);
       else localStorage.setItem(STORAGE_KEY, value);
     } catch {
       // Storage unavailable (private mode). The class still applies for the
@@ -77,13 +77,18 @@ export function ThemeProvider({ children }) {
     }
   };
 
-  const value = useMemo(() => ({ theme, resolved, setTheme }), [theme, resolved]);
+  const value = useMemo(
+    () => ({ theme, resolved, setTheme }),
+    [theme, resolved],
+  );
 
-  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+  return (
+    <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
+  );
 }
 
 export function useTheme() {
   const value = useContext(ThemeContext);
-  if (!value) throw new Error('useTheme must be used inside ThemeProvider');
+  if (!value) throw new Error("useTheme must be used inside ThemeProvider");
   return value;
 }

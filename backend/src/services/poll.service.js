@@ -1,5 +1,5 @@
-const { pool, query } = require('../config/db');
-const ApiError = require('../utils/ApiError');
+const { pool, query } = require("../config/db");
+const ApiError = require("../utils/ApiError");
 
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 12;
@@ -12,16 +12,20 @@ const MAX_OPTION_LENGTH = 100;
  * identical choices would split votes between buttons nobody can tell apart.
  */
 function validatePollInput({ question, options, allowMultiple } = {}) {
-  const text = typeof question === 'string' ? question.trim() : '';
-  if (!text) throw new ApiError(400, 'A poll needs a question');
+  const text = typeof question === "string" ? question.trim() : "";
+  if (!text) throw new ApiError(400, "A poll needs a question");
   if (text.length > MAX_QUESTION_LENGTH) {
-    throw new ApiError(400, `The question is too long (max ${MAX_QUESTION_LENGTH} characters)`);
+    throw new ApiError(
+      400,
+      `The question is too long (max ${MAX_QUESTION_LENGTH} characters)`,
+    );
   }
 
-  if (!Array.isArray(options)) throw new ApiError(400, 'options must be an array');
+  if (!Array.isArray(options))
+    throw new ApiError(400, "options must be an array");
 
   const labels = options
-    .map((option) => (typeof option === 'string' ? option.trim() : ''))
+    .map((option) => (typeof option === "string" ? option.trim() : ""))
     .filter(Boolean);
 
   if (labels.length < MIN_OPTIONS) {
@@ -31,20 +35,32 @@ function validatePollInput({ question, options, allowMultiple } = {}) {
     throw new ApiError(400, `A poll can have at most ${MAX_OPTIONS} options`);
   }
   if (labels.some((label) => label.length > MAX_OPTION_LENGTH)) {
-    throw new ApiError(400, `Each option must be ${MAX_OPTION_LENGTH} characters or fewer`);
+    throw new ApiError(
+      400,
+      `Each option must be ${MAX_OPTION_LENGTH} characters or fewer`,
+    );
   }
-  if (new Set(labels.map((label) => label.toLowerCase())).size !== labels.length) {
-    throw new ApiError(400, 'Poll options must be different from each other');
+  if (
+    new Set(labels.map((label) => label.toLowerCase())).size !== labels.length
+  ) {
+    throw new ApiError(400, "Poll options must be different from each other");
   }
 
-  return { question: text, options: labels, allowMultiple: Boolean(allowMultiple) };
+  return {
+    question: text,
+    options: labels,
+    allowMultiple: Boolean(allowMultiple),
+  };
 }
 
 /**
  * Write the poll and its options. Takes the caller's transaction client, so the
  * poll lives or dies with the message it belongs to.
  */
-async function insertPoll(client, { messageId, roomId, userId, question, options, allowMultiple }) {
+async function insertPoll(
+  client,
+  { messageId, roomId, userId, question, options, allowMultiple },
+) {
   const poll = await client.query(
     `INSERT INTO polls (message_id, room_id, created_by, question, allow_multiple)
      VALUES ($1, $2, $3, $4, $5)
@@ -107,7 +123,9 @@ async function attachPolls(messages, { db } = {}) {
       byMessage.set(row.message_id, entry);
     }
 
-    let option = entry.poll.options.find((candidate) => candidate.id === row.option_id);
+    let option = entry.poll.options.find(
+      (candidate) => candidate.id === row.option_id,
+    );
     if (!option) {
       option = { id: row.option_id, label: row.label, voters: [] };
       entry.poll.options.push(option);
@@ -149,16 +167,16 @@ async function getPoll(messageId) {
  */
 async function castVote({ pollId, userId, optionIds }) {
   if (optionIds !== undefined && !Array.isArray(optionIds)) {
-    throw new ApiError(400, 'optionIds must be an array');
+    throw new ApiError(400, "optionIds must be an array");
   }
   const ids = [...new Set(optionIds || [])];
-  if (ids.some((id) => typeof id !== 'string')) {
-    throw new ApiError(400, 'optionIds must be an array of ids');
+  if (ids.some((id) => typeof id !== "string")) {
+    throw new ApiError(400, "optionIds must be an array of ids");
   }
 
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
     const found = await client.query(
       `SELECT p.id, p.message_id, p.room_id, p.allow_multiple, p.closed_at, m.deleted_at
@@ -171,10 +189,10 @@ async function castVote({ pollId, userId, optionIds }) {
     );
     const poll = found.rows[0];
 
-    if (!poll || poll.deleted_at) throw new ApiError(404, 'Poll not found');
-    if (poll.closed_at) throw new ApiError(409, 'This poll is closed');
+    if (!poll || poll.deleted_at) throw new ApiError(404, "Poll not found");
+    if (poll.closed_at) throw new ApiError(409, "This poll is closed");
     if (!poll.allow_multiple && ids.length > 1) {
-      throw new ApiError(400, 'This poll allows only one choice');
+      throw new ApiError(400, "This poll allows only one choice");
     }
 
     if (ids.length > 0) {
@@ -183,11 +201,17 @@ async function castVote({ pollId, userId, optionIds }) {
         [pollId, ids],
       );
       if (valid.rows.length !== ids.length) {
-        throw new ApiError(400, 'One of those options does not belong to this poll');
+        throw new ApiError(
+          400,
+          "One of those options does not belong to this poll",
+        );
       }
     }
 
-    await client.query(`DELETE FROM poll_votes WHERE poll_id = $1 AND user_id = $2`, [pollId, userId]);
+    await client.query(
+      `DELETE FROM poll_votes WHERE poll_id = $1 AND user_id = $2`,
+      [pollId, userId],
+    );
 
     if (ids.length > 0) {
       await client.query(
@@ -197,10 +221,10 @@ async function castVote({ pollId, userId, optionIds }) {
       );
     }
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
     return { messageId: poll.message_id, roomId: poll.room_id };
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     throw err;
   } finally {
     client.release();
@@ -221,12 +245,18 @@ async function closePoll({ pollId, userId }) {
   );
   const poll = found.rows[0];
 
-  if (!poll) throw new ApiError(404, 'Poll not found');
-  if (poll.created_by !== userId && poll.role !== 'admin') {
-    throw new ApiError(403, 'Only the poll creator or a room admin can close it');
+  if (!poll) throw new ApiError(404, "Poll not found");
+  if (poll.created_by !== userId && poll.role !== "admin") {
+    throw new ApiError(
+      403,
+      "Only the poll creator or a room admin can close it",
+    );
   }
 
-  await query(`UPDATE polls SET closed_at = COALESCE(closed_at, NOW()) WHERE id = $1`, [pollId]);
+  await query(
+    `UPDATE polls SET closed_at = COALESCE(closed_at, NOW()) WHERE id = $1`,
+    [pollId],
+  );
   return { messageId: poll.message_id, roomId: poll.room_id };
 }
 

@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
-import IconClose from '@/assets/icons/close.svg?react';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import IconClose from "@/assets/icons/close.svg?react";
 // The trigger opens a menu; close.svg would read as "remove this chip". more.svg
 // is the set's kebab and is what MessageActions already uses for the same job.
-import IconMore from '@/assets/icons/more.svg?react';
-import IconPin from '@/assets/icons/pin.svg?react';
-import IconStar from '@/assets/icons/star.svg?react';
-import { useToast } from '@/contexts/ToastContext';
-import { useRealtime } from '@/contexts/RealtimeContext';
-import { listDecisions, pinDecision, unpinDecision } from '@/services/decisions.service';
-import PopoverMenu from '@/components/ui/PopoverMenu';
+import IconMore from "@/assets/icons/more.svg?react";
+import IconPin from "@/assets/icons/pin.svg?react";
+import IconStar from "@/assets/icons/star.svg?react";
+import { useToast } from "@/contexts/ToastContext";
+import { useRealtime } from "@/contexts/RealtimeContext";
+import {
+  listDecisions,
+  pinDecision,
+  unpinDecision,
+} from "@/services/decisions.service";
+import PopoverMenu from "@/components/ui/PopoverMenu";
 
 /**
  * Decisions pinned to this room, in a strip under the header.
@@ -68,7 +72,8 @@ export default function PinnedDecisionStrip({ roomId }) {
     if (!socket) return undefined;
 
     const onPinned = (payload) => {
-      if (payload?.decision?.room_id === roomId) mergeDecision(payload.decision);
+      if (payload?.decision?.room_id === roomId)
+        mergeDecision(payload.decision);
     };
     const onUnpinned = (payload) => {
       if (payload?.decision?.room_id !== roomId) return;
@@ -76,19 +81,23 @@ export default function PinnedDecisionStrip({ roomId }) {
       const stillPinned =
         decision.pins?.room || (decision.pins?.mine || []).length > 0;
       if (stillPinned) mergeDecision(decision);
-      else setDecisions((prev) => prev.filter((item) => item.id !== decision.id));
+      else
+        setDecisions((prev) => prev.filter((item) => item.id !== decision.id));
     };
 
-    socket.on('decision:pinned', onPinned);
-    socket.on('decision:unpinned', onUnpinned);
+    socket.on("decision:pinned", onPinned);
+    socket.on("decision:unpinned", onUnpinned);
     return () => {
-      socket.off('decision:pinned', onPinned);
-      socket.off('decision:unpinned', onUnpinned);
+      socket.off("decision:pinned", onPinned);
+      socket.off("decision:unpinned", onUnpinned);
     };
   }, [socket, roomId, mergeDecision]);
 
   const pinned = decisions
-    .filter((decision) => decision.pins?.room || (decision.pins?.mine || []).length > 0)
+    .filter(
+      (decision) =>
+        decision.pins?.room || (decision.pins?.mine || []).length > 0,
+    )
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
   if (isLoading || pinned.length === 0) return null;
@@ -97,12 +106,15 @@ export default function PinnedDecisionStrip({ roomId }) {
     try {
       mergeDecision(await pinDecision(decision.id, scope));
     } catch (err) {
-      const message = err.response?.data?.message || 'Could not pin this decision.';
-      toast({ title: 'Pin failed', description: message, tone: 'error' });
+      const message =
+        err.response?.data?.message || "Could not pin this decision.";
+      toast({ title: "Pin failed", description: message, tone: "error" });
       // A 409 means the room pin moved to somebody else. Refetching rather than
       // guessing at the new holder keeps the strip honest when two people race.
       if (err.response?.status === 409) {
-        const { decisions: rows } = await listDecisions({ roomId }).catch(() => ({ decisions: [] }));
+        const { decisions: rows } = await listDecisions({ roomId }).catch(
+          () => ({ decisions: [] }),
+        );
         setDecisions(rows);
       }
     }
@@ -118,12 +130,14 @@ export default function PinnedDecisionStrip({ roomId }) {
       // changed" and the chip is dropped locally instead of being replaced by
       // a row that would render as an empty pill.
       if (updated?.pins) mergeDecision(updated);
-      else setDecisions((prev) => prev.filter((item) => item.id !== decision.id));
+      else
+        setDecisions((prev) => prev.filter((item) => item.id !== decision.id));
     } catch (err) {
       toast({
-        title: 'Unpin failed',
-        description: err.response?.data?.message || 'Could not remove this pin.',
-        tone: 'error',
+        title: "Unpin failed",
+        description:
+          err.response?.data?.message || "Could not remove this pin.",
+        tone: "error",
       });
     }
   };
@@ -136,16 +150,22 @@ export default function PinnedDecisionStrip({ roomId }) {
           {pinned.map((decision) => {
             const isRoomPinned = Boolean(decision.pins?.room);
             const mineScopes = decision.pins?.mine || [];
-            const isMineOnly = !isRoomPinned && mineScopes.includes('user');
-            const canUnpinRoom = mineScopes.includes('room');
+            const isMineOnly = !isRoomPinned && mineScopes.includes("user");
+            const canUnpinRoom = mineScopes.includes("room");
 
             return (
               <li key={decision.id}>
                 <div className="flex items-center gap-1 rounded-full border border-line bg-canvas pl-2.5 pr-1">
                   {isRoomPinned ? (
-                    <IconPin className="h-3.5 w-3.5 shrink-0 text-brand" aria-hidden="true" />
+                    <IconPin
+                      className="h-3.5 w-3.5 shrink-0 text-brand"
+                      aria-hidden="true"
+                    />
                   ) : (
-                    <IconStar className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden="true" />
+                    <IconStar
+                      className="h-3.5 w-3.5 shrink-0 text-muted"
+                      aria-hidden="true"
+                    />
                   )}
 
                   <Link
@@ -159,14 +179,18 @@ export default function PinnedDecisionStrip({ roomId }) {
                   <span className="sr-only">
                     {isRoomPinned
                       ? `Pinned to the room by ${decision.pins.room.display_name}`
-                      : 'Bookmarked by you'}
+                      : "Bookmarked by you"}
                   </span>
 
                   {(isMineOnly || canUnpinRoom || isRoomPinned) && (
                     <button
                       ref={triggerRef}
                       type="button"
-                      onClick={() => setMenuFor((open) => (open === decision.id ? null : decision.id))}
+                      onClick={() =>
+                        setMenuFor((open) =>
+                          open === decision.id ? null : decision.id,
+                        )
+                      }
                       aria-haspopup="menu"
                       aria-expanded={menuFor === decision.id}
                       aria-label={`Pin actions for ${decision.title}`}
@@ -185,67 +209,79 @@ export default function PinnedDecisionStrip({ roomId }) {
                   label={`Pin actions for ${decision.title}`}
                   className="w-52"
                 >
-                    {!isRoomPinned && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          runPin(decision, 'room');
-                          setMenuFor(null);
-                        }}
-                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body text-ink transition-colors hover:bg-canvas"
-                      >
-                        <IconPin className="h-4 w-4 text-muted" aria-hidden="true" />
-                        Pin for everyone
-                      </button>
-                    )}
-                    {!mineScopes.includes('user') && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          runPin(decision, 'user');
-                          setMenuFor(null);
-                        }}
-                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body text-ink transition-colors hover:bg-canvas"
-                      >
-                        <IconStar className="h-4 w-4 text-muted" aria-hidden="true" />
-                        Bookmark for me
-                      </button>
-                    )}
-                    {mineScopes.includes('user') && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          runUnpin(decision, 'user');
-                          setMenuFor(null);
-                        }}
-                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body text-ink transition-colors hover:bg-canvas"
-                      >
-                        <IconClose className="h-4 w-4 text-muted" aria-hidden="true" />
-                        Remove my bookmark
-                      </button>
-                    )}
-                    {canUnpinRoom && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          runUnpin(decision, 'room');
-                          setMenuFor(null);
-                        }}
-                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body text-ink transition-colors hover:bg-canvas"
-                      >
-                        <IconClose className="h-4 w-4 text-muted" aria-hidden="true" />
-                        Unpin for everyone
-                      </button>
-                    )}
-                    <p className="border-t border-line px-2.5 pb-1 pt-2 text-metadata text-muted">
-                      {isRoomPinned && !canUnpinRoom
-                        ? 'Only the pinner or a room admin can unpin this'
-                        : 'Any member can pin'}
-                    </p>
+                  {!isRoomPinned && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        runPin(decision, "room");
+                        setMenuFor(null);
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body text-ink transition-colors hover:bg-canvas"
+                    >
+                      <IconPin
+                        className="h-4 w-4 text-muted"
+                        aria-hidden="true"
+                      />
+                      Pin for everyone
+                    </button>
+                  )}
+                  {!mineScopes.includes("user") && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        runPin(decision, "user");
+                        setMenuFor(null);
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body text-ink transition-colors hover:bg-canvas"
+                    >
+                      <IconStar
+                        className="h-4 w-4 text-muted"
+                        aria-hidden="true"
+                      />
+                      Bookmark for me
+                    </button>
+                  )}
+                  {mineScopes.includes("user") && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        runUnpin(decision, "user");
+                        setMenuFor(null);
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body text-ink transition-colors hover:bg-canvas"
+                    >
+                      <IconClose
+                        className="h-4 w-4 text-muted"
+                        aria-hidden="true"
+                      />
+                      Remove my bookmark
+                    </button>
+                  )}
+                  {canUnpinRoom && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        runUnpin(decision, "room");
+                        setMenuFor(null);
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body text-ink transition-colors hover:bg-canvas"
+                    >
+                      <IconClose
+                        className="h-4 w-4 text-muted"
+                        aria-hidden="true"
+                      />
+                      Unpin for everyone
+                    </button>
+                  )}
+                  <p className="border-t border-line px-2.5 pb-1 pt-2 text-metadata text-muted">
+                    {isRoomPinned && !canUnpinRoom
+                      ? "Only the pinner or a room admin can unpin this"
+                      : "Any member can pin"}
+                  </p>
                 </PopoverMenu>
               </li>
             );

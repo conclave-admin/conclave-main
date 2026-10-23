@@ -1,24 +1,28 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useParams, useOutletContext } from 'react-router-dom';
-import IconArrowLeft from '@/assets/icons/arrow-left.svg?react';
-import IconArrowRight from '@/assets/icons/arrow-right.svg?react';
-import IconClose from '@/assets/icons/close.svg?react';
-import IconPin from '@/assets/icons/pin.svg?react';
-import IconStar from '@/assets/icons/star.svg?react';
-import Spinner from '@/components/ui/Spinner';
-import { useToast } from '@/contexts/ToastContext';
-import { getDecision, pinDecision, unpinDecision } from '@/services/decisions.service';
-import Page from '@/components/layout/Page';
+import { useCallback, useEffect, useState } from "react";
+import { Link, useParams, useOutletContext } from "react-router-dom";
+import IconArrowLeft from "@/assets/icons/arrow-left.svg?react";
+import IconArrowRight from "@/assets/icons/arrow-right.svg?react";
+import IconClose from "@/assets/icons/close.svg?react";
+import IconPin from "@/assets/icons/pin.svg?react";
+import IconStar from "@/assets/icons/star.svg?react";
+import Spinner from "@/components/ui/Spinner";
+import { useToast } from "@/contexts/ToastContext";
+import {
+  getDecision,
+  pinDecision,
+  unpinDecision,
+} from "@/services/decisions.service";
+import Page from "@/components/layout/Page";
 
 function formatDate(value) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
@@ -41,12 +45,12 @@ export default function DecisionDetail() {
 
   const [decision, setDecision] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
     setIsLoading(true);
-    setError('');
+    setError("");
     setDecision(null);
 
     getDecision(decisionId)
@@ -57,7 +61,9 @@ export default function DecisionDetail() {
         // 403 covers both "not in that room" and "does not exist" — the server
         // does not distinguish them, so the message has to be readable either way.
         if (active) {
-          setError(err.response?.data?.message || 'Could not load this decision.');
+          setError(
+            err.response?.data?.message || "Could not load this decision.",
+          );
         }
       })
       .finally(() => {
@@ -70,14 +76,14 @@ export default function DecisionDetail() {
   }, [decisionId]);
 
   useEffect(() => {
-    setRoomHeader(decision ? decision.title : 'Decision');
+    setRoomHeader(decision ? decision.title : "Decision");
     return () => setRoomHeader(null);
   }, [setRoomHeader, decision]);
 
   const isRoomPinned = Boolean(decision?.pins?.room);
   const mineScopes = decision?.pins?.mine || [];
-  const isBookmarked = mineScopes.includes('user');
-  const canUnpinRoom = mineScopes.includes('room');
+  const isBookmarked = mineScopes.includes("user");
+  const canUnpinRoom = mineScopes.includes("room");
 
   const runPin = useCallback(
     async (scope) => {
@@ -86,10 +92,13 @@ export default function DecisionDetail() {
       } catch (err) {
         // A 409 means somebody else took the room pin; the server names them,
         // and the fresher payload below puts the strip and this page back in step.
-        const message = err.response?.data?.message || 'Could not pin this decision.';
-        toast({ title: 'Pin failed', description: message, tone: 'error' });
+        const message =
+          err.response?.data?.message || "Could not pin this decision.";
+        toast({ title: "Pin failed", description: message, tone: "error" });
         if (err.response?.status === 409) {
-          getDecision(decisionId).then(setDecision).catch(() => {});
+          getDecision(decisionId)
+            .then(setDecision)
+            .catch(() => {});
         }
       }
     },
@@ -108,9 +117,10 @@ export default function DecisionDetail() {
         if (updated?.pins) setDecision(updated);
       } catch (err) {
         toast({
-          title: 'Unpin failed',
-          description: err.response?.data?.message || 'Could not remove this pin.',
-          tone: 'error',
+          title: "Unpin failed",
+          description:
+            err.response?.data?.message || "Could not remove this pin.",
+          tone: "error",
         });
       }
     },
@@ -122,8 +132,11 @@ export default function DecisionDetail() {
   if (error || !decision) {
     return (
       <Page width="content">
-        <p role="alert" className="rounded-lg bg-error/10 p-4 text-body text-error">
-          {error || 'Decision not found.'}
+        <p
+          role="alert"
+          className="rounded-lg bg-error/10 p-4 text-body text-error"
+        >
+          {error || "Decision not found."}
         </p>
         <Link
           to="/decisions"
@@ -137,7 +150,7 @@ export default function DecisionDetail() {
   }
 
   return (
-      <Page width="content">
+    <Page width="content">
       <Link
         to="/decisions"
         className="inline-flex items-center gap-2 text-label text-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
@@ -188,7 +201,7 @@ export default function DecisionDetail() {
           {!isRoomPinned && (
             <button
               type="button"
-              onClick={() => runPin('room')}
+              onClick={() => runPin("room")}
               className="inline-flex items-center gap-2 rounded-lg border border-line px-3.5 py-2 text-label text-ink transition-colors hover:border-brand hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
             >
               <IconPin className="h-4 w-4" aria-hidden="true" />
@@ -199,7 +212,7 @@ export default function DecisionDetail() {
           {canUnpinRoom && (
             <button
               type="button"
-              onClick={() => runUnpin('room')}
+              onClick={() => runUnpin("room")}
               className="inline-flex items-center gap-2 rounded-lg border border-line px-3.5 py-2 text-label text-ink transition-colors hover:border-error hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
             >
               <IconClose className="h-4 w-4" aria-hidden="true" />
@@ -210,7 +223,7 @@ export default function DecisionDetail() {
           {isBookmarked ? (
             <button
               type="button"
-              onClick={() => runUnpin('user')}
+              onClick={() => runUnpin("user")}
               className="inline-flex items-center gap-2 rounded-lg border border-line px-3.5 py-2 text-label text-ink transition-colors hover:border-brand hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
             >
               <IconStar className="h-4 w-4" aria-hidden="true" />
@@ -219,7 +232,7 @@ export default function DecisionDetail() {
           ) : (
             <button
               type="button"
-              onClick={() => runPin('user')}
+              onClick={() => runPin("user")}
               className="inline-flex items-center gap-2 rounded-lg border border-line px-3.5 py-2 text-label text-ink transition-colors hover:border-brand hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
             >
               <IconStar className="h-4 w-4" aria-hidden="true" />
@@ -231,9 +244,9 @@ export default function DecisionDetail() {
         <p className="mt-3 text-metadata text-muted">
           {isRoomPinned && !canUnpinRoom
             ? `Pinned for the room by ${decision.pins.room.display_name}. Only they or a room admin can unpin it.`
-            : 'Any member can pin a decision for the room.'}
+            : "Any member can pin a decision for the room."}
         </p>
       </article>
-      </Page>
+    </Page>
   );
 }

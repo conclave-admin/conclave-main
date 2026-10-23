@@ -1,5 +1,11 @@
-import { api } from '../lib/api';
-import { isDevAuthBypass, previewPreferences, previewRooms, previewUser, previewUsers } from '../config/devPreview';
+import { api } from "../lib/api";
+import {
+  isDevAuthBypass,
+  previewPreferences,
+  previewRooms,
+  previewUser,
+  previewUsers,
+} from "../config/devPreview";
 
 /**
  * The people directory and the signed-in user's own account.
@@ -12,15 +18,15 @@ import { isDevAuthBypass, previewPreferences, previewRooms, previewUser, preview
  */
 
 export async function searchUsers(term) {
-  const q = (term || '').trim();
+  const q = (term || "").trim();
   if (isDevAuthBypass) {
     if (!q) return [];
     const needle = q.toLowerCase();
-    return previewUsers.filter(
-      (person) => person.display_name.toLowerCase().includes(needle),
+    return previewUsers.filter((person) =>
+      person.display_name.toLowerCase().includes(needle),
     );
   }
-  const { data } = await api.get('/users/search', { params: { q } });
+  const { data } = await api.get("/users/search", { params: { q } });
   return data.data.users;
 }
 
@@ -34,7 +40,7 @@ export async function updateProfile(updates) {
     Object.assign(previewUser, updates);
     return { ...previewUser };
   }
-  const { data } = await api.patch('/users/me', updates);
+  const { data } = await api.patch("/users/me", updates);
   return data.data;
 }
 
@@ -50,7 +56,7 @@ export async function updateProfile(updates) {
  */
 export async function uploadAvatar(file) {
   if (isDevAuthBypass) return URL.createObjectURL(file);
-  const { data } = await api.post('/upload', uploadForm(file));
+  const { data } = await api.post("/upload", uploadForm(file));
   return data.data.url;
 }
 
@@ -58,16 +64,21 @@ const resolvedAvatarUrls = new Map();
 
 /** Turn an opaque R2 avatar key into a short-lived image URL for <img>. */
 export async function resolveAvatarUrl(value) {
-  if (typeof value !== 'string' || !value.startsWith('r2://')) return value || null;
+  if (typeof value !== "string" || !value.startsWith("r2://"))
+    return value || null;
 
   const cached = resolvedAvatarUrls.get(value);
   if (cached?.expiresAt > Date.now() / 1000 + 60) return cached.url;
   if (cached?.promise) return cached.promise;
 
-  const promise = api.get('/users/avatar-url', { params: { url: value } })
+  const promise = api
+    .get("/users/avatar-url", { params: { url: value } })
     .then(({ data }) => {
       const result = data.data;
-      resolvedAvatarUrls.set(value, { url: result.url, expiresAt: result.expiresAt });
+      resolvedAvatarUrls.set(value, {
+        url: result.url,
+        expiresAt: result.expiresAt,
+      });
       return result.url;
     })
     .catch((error) => {
@@ -83,7 +94,7 @@ export async function resolveAvatarUrl(value) {
 // surfaces as "No file provided" rather than as anything about headers.
 function uploadForm(file) {
   const form = new FormData();
-  form.append('file', file);
+  form.append("file", file);
   return form;
 }
 
@@ -94,14 +105,14 @@ function uploadForm(file) {
  * same address, so callers must confirm first.
  */
 export async function deleteAccount() {
-  if (isDevAuthBypass) return { message: 'Account deleted' };
-  const { data } = await api.delete('/users/me');
+  if (isDevAuthBypass) return { message: "Account deleted" };
+  const { data } = await api.delete("/users/me");
   return data.data;
 }
 
 export async function getPreferences() {
   if (isDevAuthBypass) return { ...previewPreferences };
-  const { data } = await api.get('/users/me/preferences');
+  const { data } = await api.get("/users/me/preferences");
   return data.data;
 }
 
@@ -110,29 +121,34 @@ export async function updatePreferences(updates) {
     Object.assign(previewPreferences, updates);
     return { ...previewPreferences };
   }
-  const { data } = await api.patch('/users/me/preferences', updates);
+  const { data } = await api.patch("/users/me/preferences", updates);
   return data.data;
 }
 
 export async function getSharedRooms(userId) {
   if (isDevAuthBypass) {
-    return previewRooms.filter((room) => room.type !== 'dm' && room.members?.some((m) => m.id === userId));
+    return previewRooms.filter(
+      (room) =>
+        room.type !== "dm" && room.members?.some((m) => m.id === userId),
+    );
   }
   const { data } = await api.get(`/users/${userId}/shared-rooms`);
   return data.data.rooms;
 }
 
 export async function reportUser(userId, payload) {
-  if (isDevAuthBypass) return { id: `report-${Date.now()}`, status: 'open' };
+  if (isDevAuthBypass) return { id: `report-${Date.now()}`, status: "open" };
   const { data } = await api.post(`/users/${userId}/report`, payload);
   return data.data;
 }
 
 export async function blockUser(userId) {
   if (isDevAuthBypass) {
-    const blocked = JSON.parse(localStorage.getItem('conclave:blocked-users') || '[]');
+    const blocked = JSON.parse(
+      localStorage.getItem("conclave:blocked-users") || "[]",
+    );
     if (!blocked.includes(userId)) blocked.push(userId);
-    localStorage.setItem('conclave:blocked-users', JSON.stringify(blocked));
+    localStorage.setItem("conclave:blocked-users", JSON.stringify(blocked));
     return { blocked: true };
   }
   const { data } = await api.post(`/users/${userId}/block`);
@@ -140,15 +156,24 @@ export async function blockUser(userId) {
 }
 
 export async function getBlockStatus(userId) {
-  if (isDevAuthBypass) return { blocked: Boolean(JSON.parse(localStorage.getItem('conclave:blocked-users') || '[]').includes(userId)) };
+  if (isDevAuthBypass)
+    return {
+      blocked: Boolean(
+        JSON.parse(
+          localStorage.getItem("conclave:blocked-users") || "[]",
+        ).includes(userId),
+      ),
+    };
   const { data } = await api.get(`/users/${userId}/block`);
   return data.data;
 }
 
 export async function unblockUser(userId) {
   if (isDevAuthBypass) {
-    const blocked = JSON.parse(localStorage.getItem('conclave:blocked-users') || '[]').filter((id) => id !== userId);
-    localStorage.setItem('conclave:blocked-users', JSON.stringify(blocked));
+    const blocked = JSON.parse(
+      localStorage.getItem("conclave:blocked-users") || "[]",
+    ).filter((id) => id !== userId);
+    localStorage.setItem("conclave:blocked-users", JSON.stringify(blocked));
     return { blocked: false };
   }
   const { data } = await api.delete(`/users/${userId}/block`);

@@ -1,27 +1,32 @@
-import {respondToRequest} from '../services/security.service';
-import { activeReadView } from '../lib/messageReads';
-import MessageInfoDialog from '../components/chat/MessageInfoDialog';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom';
-import ForwardMessageDialog from '../components/chat/ForwardMessageDialog';
-import FlagAsTaskDialog from '../components/chat/FlagAsTaskDialog';
-import CreatePollDialog from '../components/chat/CreatePollDialog';
-import MessageComposer from '../components/chat/MessageComposer';
-import MessageTimeline from '../components/chat/MessageTimeline';
-import PinnedDecisionStrip from '../components/chat/PinnedDecisionStrip';
-import PinnedMessagesPanel from '../components/chat/PinnedMessagesPanel';
-import PromoteToDecisionDialog from '../components/chat/PromoteToDecisionDialog';
-import RoomHeader from '../components/chat/RoomHeader';
-import Button from '../components/ui/Button';
-import Modal from '../components/ui/Modal';
-import Spinner from '../components/ui/Spinner';
-import Textarea from '../components/ui/Textarea';
-import { useAuth } from '../contexts/AuthContext';
-import { useRealtime } from '../contexts/RealtimeContext';
-import { useToast } from '../contexts/ToastContext';
-import useMessages from '../hooks/useMessages';
-import { messageSummary } from '../lib/messageMeta';
-import useRoom from '../hooks/useRoom';
+import { respondToRequest } from "../services/security.service";
+import { activeReadView } from "../lib/messageReads";
+import MessageInfoDialog from "../components/chat/MessageInfoDialog";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useNavigate,
+  useOutletContext,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
+import ForwardMessageDialog from "../components/chat/ForwardMessageDialog";
+import FlagAsTaskDialog from "../components/chat/FlagAsTaskDialog";
+import CreatePollDialog from "../components/chat/CreatePollDialog";
+import MessageComposer from "../components/chat/MessageComposer";
+import MessageTimeline from "../components/chat/MessageTimeline";
+import PinnedDecisionStrip from "../components/chat/PinnedDecisionStrip";
+import PinnedMessagesPanel from "../components/chat/PinnedMessagesPanel";
+import PromoteToDecisionDialog from "../components/chat/PromoteToDecisionDialog";
+import RoomHeader from "../components/chat/RoomHeader";
+import Button from "../components/ui/Button";
+import Modal from "../components/ui/Modal";
+import Spinner from "../components/ui/Spinner";
+import Textarea from "../components/ui/Textarea";
+import { useAuth } from "../contexts/AuthContext";
+import { useRealtime } from "../contexts/RealtimeContext";
+import { useToast } from "../contexts/ToastContext";
+import useMessages from "../hooks/useMessages";
+import { messageSummary } from "../lib/messageMeta";
+import useRoom from "../hooks/useRoom";
 
 /**
  * One conversation.
@@ -42,18 +47,25 @@ export default function Room() {
   const { roomId } = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const anchorId = searchParams.get('message') || null;
+  const anchorId = searchParams.get("message") || null;
   const { isConnected, socket } = useRealtime();
   const { setRoomHeader } = useOutletContext();
   const { user } = useAuth();
   const viewerId = user?.id;
   const { toast } = useToast();
-  const [browserOnline, setBrowserOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine !== false);
-  const { room, isLoading: roomLoading, error: roomError,reload:reloadRoom } = useRoom(roomId);
+  const [browserOnline, setBrowserOnline] = useState(
+    () => typeof navigator === "undefined" || navigator.onLine !== false,
+  );
+  const {
+    room,
+    isLoading: roomLoading,
+    error: roomError,
+    reload: reloadRoom,
+  } = useRoom(roomId);
   const [messageInfo, setMessageInfo] = useState(null);
   const [replyTo, setReplyTo] = useState(null);
   const [editing, setEditing] = useState(null);
-  const [editDraft, setEditDraft] = useState('');
+  const [editDraft, setEditDraft] = useState("");
   const [deleting, setDeleting] = useState(null);
   const [promoting, setPromoting] = useState(null);
   const [flagging, setFlagging] = useState(null);
@@ -68,11 +80,11 @@ export default function Room() {
   useEffect(() => {
     const online = () => setBrowserOnline(true);
     const offline = () => setBrowserOnline(false);
-    window.addEventListener('online', online);
-    window.addEventListener('offline', offline);
+    window.addEventListener("online", online);
+    window.addEventListener("offline", offline);
     return () => {
-      window.removeEventListener('online', online);
-      window.removeEventListener('offline', offline);
+      window.removeEventListener("online", online);
+      window.removeEventListener("offline", offline);
     };
   }, []);
 
@@ -110,19 +122,39 @@ export default function Room() {
 
   useEffect(() => {
     if (!jumpTarget?.id || messagesLoading || roomLoading) return;
-    const node = scrollContainerRef.current?.querySelector(`[data-message-id="${CSS.escape(String(jumpTarget.id))}"]`);
+    const node = scrollContainerRef.current?.querySelector(
+      `[data-message-id="${CSS.escape(String(jumpTarget.id))}"]`,
+    );
     if (!node) {
       if (messagesError || !hasMore) {
         setJumpTarget(null);
-        if (!messagesError) toast({ title: 'Message unavailable', description: 'It may have been deleted or cleared on this device.', tone: 'error' });
+        if (!messagesError)
+          toast({
+            title: "Message unavailable",
+            description: "It may have been deleted or cleared on this device.",
+            tone: "error",
+          });
       } else if (!isLoadingOlder) loadOlder();
       return;
     }
-    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    node.scrollIntoView({ behavior: "smooth", block: "center" });
     setHighlightedId(jumpTarget.id);
-    const timer = setTimeout(() => { setHighlightedId(null); setJumpTarget(null); }, 2200);
+    const timer = setTimeout(() => {
+      setHighlightedId(null);
+      setJumpTarget(null);
+    }, 2200);
     return () => clearTimeout(timer);
-  }, [jumpTarget, messages, hasMore, isLoadingOlder, loadOlder, messagesLoading, roomLoading, messagesError, toast]);
+  }, [
+    jumpTarget,
+    messages,
+    hasMore,
+    isLoadingOlder,
+    loadOlder,
+    messagesLoading,
+    roomLoading,
+    messagesError,
+    toast,
+  ]);
 
   const jumpToMessage = (message) => {
     if (!message?.id) return;
@@ -140,17 +172,30 @@ export default function Room() {
       members.map((member) => ({
         ...member,
         last_seen_at: readPointers.get(member.id) || member.last_seen_at,
-        last_seen_sequence: readSequences.get(member.id) ?? member.last_seen_sequence,
-        last_delivered_sequence: deliveredSequences.get(member.id) ?? member.last_delivered_sequence,
+        last_seen_sequence:
+          readSequences.get(member.id) ?? member.last_seen_sequence,
+        last_delivered_sequence:
+          deliveredSequences.get(member.id) ?? member.last_delivered_sequence,
       })),
     [members, readPointers, readSequences, deliveredSequences],
   );
 
-  const handleMessageVisible = useCallback(async (message) => {
-    if (!socket?.connected || !activeReadView() || !message?.id || message._optimistic) return false;
-    const response = await socket.timeout(6000).emitWithAck('message-read', { roomId, messageId: message.id });
-    return response?.ok === true;
-  }, [socket, roomId]);
+  const handleMessageVisible = useCallback(
+    async (message) => {
+      if (
+        !socket?.connected ||
+        !activeReadView() ||
+        !message?.id ||
+        message._optimistic
+      )
+        return false;
+      const response = await socket
+        .timeout(6000)
+        .emitWithAck("message-read", { roomId, messageId: message.id });
+      return response?.ok === true;
+    },
+    [socket, roomId],
+  );
 
   useEffect(() => {
     if (!room) return undefined;
@@ -159,7 +204,7 @@ export default function Room() {
   }, [room, isConnected, setRoomHeader]);
 
   const handleTyping = () => {
-    if (socket?.connected) socket.emit('typing', { roomId });
+    if (socket?.connected) socket.emit("typing", { roomId });
   };
 
   const handleEdit = async () => {
@@ -170,9 +215,10 @@ export default function Room() {
       setEditing(null);
     } catch (err) {
       toast({
-        title: 'Edit failed',
-        description: err.response?.data?.message || 'Could not save this message.',
-        tone: 'error',
+        title: "Edit failed",
+        description:
+          err.response?.data?.message || "Could not save this message.",
+        tone: "error",
       });
     }
   };
@@ -183,9 +229,10 @@ export default function Room() {
       setDeleting(null);
     } catch (err) {
       toast({
-        title: 'Delete failed',
-        description: err.response?.data?.message || 'Could not delete this message.',
-        tone: 'error',
+        title: "Delete failed",
+        description:
+          err.response?.data?.message || "Could not delete this message.",
+        tone: "error",
       });
     }
   };
@@ -197,19 +244,20 @@ export default function Room() {
     pinMessage(message.id, scope)
       .then(() => {
         toast({
-          title: scope === 'room' ? 'Pinned for everyone' : 'Bookmarked',
+          title: scope === "room" ? "Pinned for everyone" : "Bookmarked",
           description:
-            scope === 'room'
-              ? 'It is now in the pinned messages panel.'
-              : 'Only you can see this bookmark.',
-          tone: 'success',
+            scope === "room"
+              ? "It is now in the pinned messages panel."
+              : "Only you can see this bookmark.",
+          tone: "success",
         });
       })
       .catch((err) => {
         toast({
-          title: 'Pin failed',
-          description: err.response?.data?.message || 'Could not pin this message.',
-          tone: 'error',
+          title: "Pin failed",
+          description:
+            err.response?.data?.message || "Could not pin this message.",
+          tone: "error",
         });
       });
   };
@@ -217,9 +265,10 @@ export default function Room() {
   const handleUnpin = (message, scope) => {
     unpinMessage(message.id, scope).catch((err) => {
       toast({
-        title: 'Unpin failed',
-        description: err.response?.data?.message || 'Could not remove this pin.',
-        tone: 'error',
+        title: "Unpin failed",
+        description:
+          err.response?.data?.message || "Could not remove this pin.",
+        tone: "error",
       });
     });
   };
@@ -227,9 +276,10 @@ export default function Room() {
   const handleToggleReaction = (message, emoji) => {
     toggleReaction(message, emoji).catch((err) => {
       toast({
-        title: 'Reaction failed',
-        description: err.response?.data?.message || 'Could not save that reaction.',
-        tone: 'error',
+        title: "Reaction failed",
+        description:
+          err.response?.data?.message || "Could not save that reaction.",
+        tone: "error",
       });
     });
   };
@@ -239,19 +289,26 @@ export default function Room() {
   // question after "did it work" is "let me read it back", and making the
   // reader find it on the board turns a two-step action into a hunt.
   const handlePromoted = (decision) => {
-    toast({ title: 'Promoted to decision', description: decision.title, tone: 'success' });
+    toast({
+      title: "Promoted to decision",
+      description: decision.title,
+      tone: "success",
+    });
     navigate(`/decisions/${decision.id}`);
   };
 
   const handleTaskCreated = (task) => {
-    toast({ title: 'Task created', description: task.title, tone: 'success' });
+    toast({ title: "Task created", description: task.title, tone: "success" });
   };
 
   if (roomLoading) return <Spinner label="Opening room" />;
 
   if (roomError && !room) {
     return (
-      <p role="alert" className="m-6 rounded-lg bg-error/10 p-4 text-body text-error">
+      <p
+        role="alert"
+        className="m-6 rounded-lg bg-error/10 p-4 text-body text-error"
+      >
         {roomError}
       </p>
     );
@@ -277,23 +334,33 @@ export default function Room() {
           not a grid item, so auto-placement would renumber the rows when either
           strip is empty. */}
       <div className="row-start-1 min-w-0">
-        {anchorId && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2 text-metadata text-muted" role="status">
-          <span>Viewing a shared message</span>
-          <Button variant="ghost" onClick={() => navigate(`/chats/${roomId}`, { replace: true })}>Return to latest</Button>
-        </div>}
+        {anchorId && (
+          <div
+            className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2 text-metadata text-muted"
+            role="status"
+          >
+            <span>Viewing a shared message</span>
+            <Button
+              variant="ghost"
+              onClick={() => navigate(`/chats/${roomId}`, { replace: true })}
+            >
+              Return to latest
+            </Button>
+          </div>
+        )}
         <PinnedMessagesPanel
           roomId={roomId}
-          isAdmin={myRole === 'admin'}
+          isAdmin={myRole === "admin"}
           viewerId={viewerId}
           onJumpToMessage={jumpToMessage}
         />
         <PinnedDecisionStrip roomId={roomId} />
       </div>
 
-        <div
-          ref={scrollContainerRef}
-          className="row-start-2 min-h-0 overflow-y-auto overscroll-contain [overflow-anchor:none]"
-        >
+      <div
+        ref={scrollContainerRef}
+        className="row-start-2 min-h-0 overflow-y-auto overscroll-contain [overflow-anchor:none]"
+      >
         {/* Catch-up belongs to the cross-room digest. Room read pointers move
             as individual messages enter the viewport. */}
         {messagesLoading ? (
@@ -311,7 +378,7 @@ export default function Room() {
             scrollContainerRef={scrollContainerRef}
             viewerId={viewerId}
             members={membersWithPointers}
-            isAdmin={myRole === 'admin'}
+            isAdmin={myRole === "admin"}
             roomId={roomId}
             deliveryIds={deliveryIds}
             typingUserIds={typingUserIds}
@@ -322,78 +389,221 @@ export default function Room() {
             onReply={setReplyTo}
             onEdit={(message) => {
               setEditing(message);
-              setEditDraft(message.content || '');
+              setEditDraft(message.content || "");
             }}
             onDelete={setDeleting}
-            onPromote={room?.encryption_mode==='e2ee-v1'?undefined:setPromoting}
-            onFlagTask={room?.encryption_mode==='e2ee-v1'?undefined:setFlagging}
+            onPromote={
+              room?.encryption_mode === "e2ee-v1" ? undefined : setPromoting
+            }
+            onFlagTask={
+              room?.encryption_mode === "e2ee-v1" ? undefined : setFlagging
+            }
             onToggleReaction={handleToggleReaction}
             onPin={handlePin}
             onUnpin={handleUnpin}
             lastSeenSequence={lastSeenSequence}
             onMessageVisible={handleMessageVisible}
-            readsEnabled={isConnected && !messageInfo && !threadRoot && !editing && !deleting && !promoting && !flagging && !creatingPoll && !forwarding}
+            readsEnabled={
+              isConnected &&
+              !messageInfo &&
+              !threadRoot &&
+              !editing &&
+              !deleting &&
+              !promoting &&
+              !flagging &&
+              !creatingPoll &&
+              !forwarding
+            }
             onMessageInfo={setMessageInfo}
             onOpenThread={setThreadRoot}
-            onForward={room?.encryption_mode==='e2ee-v1'?undefined:setForwarding}
+            onForward={
+              room?.encryption_mode === "e2ee-v1" ? undefined : setForwarding
+            }
             onJumpToMessage={jumpToMessage}
             highlightedId={highlightedId}
           />
         )}
       </div>
 
-      {room?.superseded_by?<div className="row-start-3 border-t border-line p-4"><Button onClick={()=>navigate(`/chats/${room.superseded_by}`)}>Continue in the encrypted conversation</Button><p className="mt-2 text-metadata text-muted">This legacy history remains server-readable.</p></div>:room?.message_request?.status==='declined' ? <p className="row-start-3 border-t border-line p-4 text-body text-muted">This message request was declined.</p> : room?.message_request?.status==='pending'&&(room.message_request.recipient_id===viewerId||messages.some(m=>m.sender_id===viewerId&&!m._optimistic)) ? <div className="row-start-3 space-y-3 border-t border-line p-4"><p className="text-body text-ink">{room.message_request.recipient_id===viewerId?'Message request: accept to reply, or decline. You can report or block this person from conversation details.':'Waiting for this person to accept your message request.'}</p>{room.message_request.recipient_id===viewerId&&<div className="flex gap-2">{['accepted','declined'].map(status=><Button key={status} variant="secondary" onClick={async()=>{try{await respondToRequest(roomId,status);await reloadRoom();}catch(e){toast({title:'Could not update request',description:e.response?.data?.message||e.message,tone:'error'});}}}>{status==='accepted'?'Accept request':'Decline request'}</Button>)}</div>}</div> : <MessageComposer
-        className="row-start-3"
-        onEditLast={() => {
-          const last = [...messages].reverse().find((message) => message.sender_id === viewerId && !message.is_deleted && !message._optimistic);
-          if (last) { setEditing(last); setEditDraft(last.content || ''); }
-        }}
-        onSend={async (payload) => { await sendMessage(payload); if (anchorId) navigate(`/chats/${roomId}`, { replace: true }); }}
-        onSendMedia={async (items) => { await sendMedia(items); if (anchorId) navigate(`/chats/${roomId}`, { replace: true }); }}
-        isOnline={browserOnline && isConnected}
-        onCreatePoll={room?.encryption_mode==='e2ee-v1'?undefined:()=>setCreatingPoll(true)}
-        onCreateDecision={room?.encryption_mode==='e2ee-v1'?undefined:()=>setPromoting({manual:true})}
-        onCreateTask={room?.encryption_mode==='e2ee-v1'?undefined:()=>setFlagging({manual:true})}
-        members={members}
-        activityScope={roomId}
-        onTyping={handleTyping}
-        onStopTyping={stopTyping}
-        onRecording={() => { if (socket?.connected) socket.emit('start-recording', { roomId }); }}
-        onStopRecording={() => { if (socket?.connected) socket.emit('stop-recording', { roomId }); }}
-        replyTo={replyTo}
-        onCancelReply={() => setReplyTo(null)}
-      />}
+      {room?.superseded_by ? (
+        <div className="row-start-3 border-t border-line p-4">
+          <Button onClick={() => navigate(`/chats/${room.superseded_by}`)}>
+            Continue in the encrypted conversation
+          </Button>
+          <p className="mt-2 text-metadata text-muted">
+            This legacy history remains server-readable.
+          </p>
+        </div>
+      ) : room?.message_request?.status === "declined" ? (
+        <p className="row-start-3 border-t border-line p-4 text-body text-muted">
+          This message request was declined.
+        </p>
+      ) : room?.message_request?.status === "pending" &&
+        (room.message_request.recipient_id === viewerId ||
+          messages.some((m) => m.sender_id === viewerId && !m._optimistic)) ? (
+        <div className="row-start-3 space-y-3 border-t border-line p-4">
+          <p className="text-body text-ink">
+            {room.message_request.recipient_id === viewerId
+              ? "Message request: accept to reply, or decline. You can report or block this person from conversation details."
+              : "Waiting for this person to accept your message request."}
+          </p>
+          {room.message_request.recipient_id === viewerId && (
+            <div className="flex gap-2">
+              {["accepted", "declined"].map((status) => (
+                <Button
+                  key={status}
+                  variant="secondary"
+                  onClick={async () => {
+                    try {
+                      await respondToRequest(roomId, status);
+                      await reloadRoom();
+                    } catch (e) {
+                      toast({
+                        title: "Could not update request",
+                        description: e.response?.data?.message || e.message,
+                        tone: "error",
+                      });
+                    }
+                  }}
+                >
+                  {status === "accepted" ? "Accept request" : "Decline request"}
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <MessageComposer
+          className="row-start-3"
+          onEditLast={() => {
+            const last = [...messages]
+              .reverse()
+              .find(
+                (message) =>
+                  message.sender_id === viewerId &&
+                  !message.is_deleted &&
+                  !message._optimistic,
+              );
+            if (last) {
+              setEditing(last);
+              setEditDraft(last.content || "");
+            }
+          }}
+          onSend={async (payload) => {
+            await sendMessage(payload);
+            if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
+          }}
+          onSendMedia={async (items) => {
+            await sendMedia(items);
+            if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
+          }}
+          isOnline={browserOnline && isConnected}
+          onCreatePoll={
+            room?.encryption_mode === "e2ee-v1"
+              ? undefined
+              : () => setCreatingPoll(true)
+          }
+          onCreateDecision={
+            room?.encryption_mode === "e2ee-v1"
+              ? undefined
+              : () => setPromoting({ manual: true })
+          }
+          onCreateTask={
+            room?.encryption_mode === "e2ee-v1"
+              ? undefined
+              : () => setFlagging({ manual: true })
+          }
+          members={members}
+          activityScope={roomId}
+          onTyping={handleTyping}
+          onStopTyping={stopTyping}
+          onRecording={() => {
+            if (socket?.connected) socket.emit("start-recording", { roomId });
+          }}
+          onStopRecording={() => {
+            if (socket?.connected) socket.emit("stop-recording", { roomId });
+          }}
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(null)}
+        />
+      )}
 
-      <MessageInfoDialog message={messageInfo} onClose={() => setMessageInfo(null)} />
+      <MessageInfoDialog
+        message={messageInfo}
+        onClose={() => setMessageInfo(null)}
+      />
 
-      <ForwardMessageDialog message={forwarding} onClose={() => setForwarding(null)} />
+      <ForwardMessageDialog
+        message={forwarding}
+        onClose={() => setForwarding(null)}
+      />
 
       {threadRoot && (
-        <aside role="complementary" aria-label="Message thread" className="fixed inset-x-0 bottom-16 top-16 z-40 flex flex-col border-l border-line bg-surface shadow-modal md:bottom-0 md:left-auto md:w-[min(400px,40vw)]">
+        <aside
+          role="complementary"
+          aria-label="Message thread"
+          className="fixed inset-x-0 bottom-16 top-16 z-40 flex flex-col border-l border-line bg-surface shadow-modal md:bottom-0 md:left-auto md:w-[min(400px,40vw)]"
+        >
           <header className="flex items-center justify-between border-b border-line px-4 py-3">
             <div>
               <h2 className="text-h2 text-ink">Thread</h2>
-              <p className="text-metadata text-muted">{messages.filter((message) => message.reply_to_id === threadRoot.id).length} replies</p>
+              <p className="text-metadata text-muted">
+                {
+                  messages.filter(
+                    (message) => message.reply_to_id === threadRoot.id,
+                  ).length
+                }{" "}
+                replies
+              </p>
             </div>
-            <button type="button" onClick={() => setThreadRoot(null)} aria-label="Close thread" className="rounded-lg px-3 py-2 text-label text-muted hover:bg-canvas">Close</button>
+            <button
+              type="button"
+              onClick={() => setThreadRoot(null)}
+              aria-label="Close thread"
+              className="rounded-lg px-3 py-2 text-label text-muted hover:bg-canvas"
+            >
+              Close
+            </button>
           </header>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             <article className="rounded-xl bg-canvas p-3">
-              <p className="text-metadata font-medium text-muted">{threadRoot.sender_name || 'Member'}</p>
-              <p className="mt-1 whitespace-pre-wrap break-words text-body text-ink">{messageSummary(threadRoot)}</p>
+              <p className="text-metadata font-medium text-muted">
+                {threadRoot.sender_name || "Member"}
+              </p>
+              <p className="mt-1 whitespace-pre-wrap break-words text-body text-ink">
+                {messageSummary(threadRoot)}
+              </p>
             </article>
             <div className="my-4 border-t border-line" />
             <div className="space-y-3">
-              {messages.filter((message) => message.reply_to_id === threadRoot.id).map((message) => (
-                <article key={message.id} className="rounded-xl border border-line p-3">
-                  <p className="text-metadata font-medium text-muted">{message.sender_name || 'Member'}</p>
-                  <p className="mt-1 whitespace-pre-wrap break-words text-body text-ink">{messageSummary(message)}</p>
-                </article>
-              ))}
+              {messages
+                .filter((message) => message.reply_to_id === threadRoot.id)
+                .map((message) => (
+                  <article
+                    key={message.id}
+                    className="rounded-xl border border-line p-3"
+                  >
+                    <p className="text-metadata font-medium text-muted">
+                      {message.sender_name || "Member"}
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-body text-ink">
+                      {messageSummary(message)}
+                    </p>
+                  </article>
+                ))}
             </div>
           </div>
           <div className="border-t border-line p-3">
-            <button type="button" onClick={() => { setReplyTo(threadRoot); setThreadRoot(null); }} className="w-full rounded-lg bg-brand px-4 py-2.5 text-label font-semibold text-surface">Reply in thread</button>
+            <button
+              type="button"
+              onClick={() => {
+                setReplyTo(threadRoot);
+                setThreadRoot(null);
+              }}
+              className="w-full rounded-lg bg-brand px-4 py-2.5 text-label font-semibold text-surface"
+            >
+              Reply in thread
+            </button>
           </div>
         </aside>
       )}
@@ -407,7 +617,11 @@ export default function Room() {
             <Button variant="secondary" onClick={() => setEditing(null)}>
               Cancel
             </Button>
-            <Button variant="primary" onClick={handleEdit} disabled={!editDraft.trim()}>
+            <Button
+              variant="primary"
+              onClick={handleEdit}
+              disabled={!editDraft.trim()}
+            >
               Save
             </Button>
           </>
@@ -419,7 +633,9 @@ export default function Room() {
           rows={4}
           aria-label="Message text"
         />
-        <p className="mt-2 text-metadata text-muted">An edited message keeps its original time.</p>
+        <p className="mt-2 text-metadata text-muted">
+          An edited message keeps its original time.
+        </p>
       </Modal>
 
       <Modal
@@ -439,7 +655,8 @@ export default function Room() {
         }
       >
         <p className="text-body text-ink">
-          This replaces the message with “Message deleted” for everyone in the room.
+          This replaces the message with “Message deleted” for everyone in the
+          room.
         </p>
       </Modal>
 

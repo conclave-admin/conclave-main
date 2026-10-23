@@ -1,10 +1,22 @@
-import {useSyncReconciler} from './SyncContext';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { listRooms, markRoomSeen, updateRoomPreferences } from '@/services/rooms.service';
-import { useRealtime } from './RealtimeContext';
-import { usePresence } from './PresenceContext';
-import { useAuth } from './AuthContext';
-import { readChatList, saveChatList, saveRoomMetadata } from '../lib/fileCache';
+import { useSyncReconciler } from "./SyncContext";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  listRooms,
+  markRoomSeen,
+  updateRoomPreferences,
+} from "@/services/rooms.service";
+import { useRealtime } from "./RealtimeContext";
+import { usePresence } from "./PresenceContext";
+import { useAuth } from "./AuthContext";
+import { readChatList, saveChatList, saveRoomMetadata } from "../lib/fileCache";
 
 const ChatsContext = createContext(null);
 
@@ -31,58 +43,101 @@ export function ChatsProvider({ children }) {
   const userId = user?.id;
   const [rooms, setRooms] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [pinned, setPinned] = useState([]);
   const [muted, setMuted] = useState([]);
   const [archived, setArchived] = useState([]);
   const { typingByRoom, recordingByRoom } = usePresence();
   const revokedRooms = useRef(new Set());
   const membershipEpoch = useRef(0);
-  const refreshGeneration=useRef(0);
+  const refreshGeneration = useRef(0);
   const currentUser = useRef(userId);
   currentUser.current = userId;
-  useEffect(() => { revokedRooms.current.clear(); }, [userId]);
-
-  const refresh = useCallback(async (options={}) => {
-    const epoch = membershipEpoch.current;
-    const version=++refreshGeneration.current;
-    setIsLoading(true);
-    setError('');
-    const apply = (rows) => {
-      if (currentUser.current !== userId || version!==refreshGeneration.current || options?.isCurrent&&!options.isCurrent()) {if(options?.strict)throw new Error('Chat refresh superseded');return;}
-      const loaded = rows.filter((room) => !revokedRooms.current.has(room.id));
-      setRooms(loaded);
-      setPinned(loaded.filter((room) => room.is_pinned).map((room) => room.id));
-      setMuted(loaded.filter((room) => room.is_muted).map((room) => room.id));
-      setArchived(loaded.filter((room) => room.is_archived).map((room) => room.id));
-    };
-    const cached = await readChatList(userId);
-    if (cached.length && !options?.strict) { apply(cached); setIsLoading(false); }
-    if (navigator.onLine === false) {
-      if (!cached.length) setError('No conversations have been saved on this device yet.');
-      setIsLoading(false);
-      return;
-    }
-    try {
-      const loaded = await listRooms();
-      if (currentUser.current === userId && membershipEpoch.current === epoch) {
-        for (const room of loaded) revokedRooms.current.delete(room.id);
-      }
-      apply(loaded);
-    } catch (err) {
-      setError(err.response?.data?.message || 'Could not load chats.');
-      if(options?.strict)throw err;
-    } finally {
-      setIsLoading(false);
-    }
+  useEffect(() => {
+    revokedRooms.current.clear();
   }, [userId]);
 
-  useSyncReconciler(async batch=>{if(batch.reset||batch.changes.some(c=>['message','room','membership','profile','preferences','block'].includes(c.kind)))await refresh({strict:true,isCurrent:batch.isCurrent});},[userId]);
+  const refresh = useCallback(
+    async (options = {}) => {
+      const epoch = membershipEpoch.current;
+      const version = ++refreshGeneration.current;
+      setIsLoading(true);
+      setError("");
+      const apply = (rows) => {
+        if (
+          currentUser.current !== userId ||
+          version !== refreshGeneration.current ||
+          (options?.isCurrent && !options.isCurrent())
+        ) {
+          if (options?.strict) throw new Error("Chat refresh superseded");
+          return;
+        }
+        const loaded = rows.filter(
+          (room) => !revokedRooms.current.has(room.id),
+        );
+        setRooms(loaded);
+        setPinned(
+          loaded.filter((room) => room.is_pinned).map((room) => room.id),
+        );
+        setMuted(loaded.filter((room) => room.is_muted).map((room) => room.id));
+        setArchived(
+          loaded.filter((room) => room.is_archived).map((room) => room.id),
+        );
+      };
+      const cached = await readChatList(userId);
+      if (cached.length && !options?.strict) {
+        apply(cached);
+        setIsLoading(false);
+      }
+      if (navigator.onLine === false) {
+        if (!cached.length)
+          setError("No conversations have been saved on this device yet.");
+        setIsLoading(false);
+        return;
+      }
+      try {
+        const loaded = await listRooms();
+        if (
+          currentUser.current === userId &&
+          membershipEpoch.current === epoch
+        ) {
+          for (const room of loaded) revokedRooms.current.delete(room.id);
+        }
+        apply(loaded);
+      } catch (err) {
+        setError(err.response?.data?.message || "Could not load chats.");
+        if (options?.strict) throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [userId],
+  );
+
+  useSyncReconciler(
+    async (batch) => {
+      if (
+        batch.reset ||
+        batch.changes.some((c) =>
+          [
+            "message",
+            "room",
+            "membership",
+            "profile",
+            "preferences",
+            "block",
+          ].includes(c.kind),
+        )
+      )
+        await refresh({ strict: true, isCurrent: batch.isCurrent });
+    },
+    [userId],
+  );
 
   useEffect(() => {
     refresh();
-    window.addEventListener('online', refresh);
-    return () => window.removeEventListener('online', refresh);
+    window.addEventListener("online", refresh);
+    return () => window.removeEventListener("online", refresh);
   }, [refresh]);
 
   useEffect(() => {
@@ -99,7 +154,12 @@ export function ChatsProvider({ children }) {
       setRooms((current) =>
         current.map((room) =>
           room.id === roomId
-            ? { ...room, last_message: lastMessage, unread_count: unreadCount, has_message: true }
+            ? {
+                ...room,
+                last_message: lastMessage,
+                unread_count: unreadCount,
+                has_message: true,
+              }
             : room,
         ),
       );
@@ -107,23 +167,24 @@ export function ChatsProvider({ children }) {
 
     const onMembers = ({ roomId, userId: targetId, action }) => {
       membershipEpoch.current++;
-      if (targetId === userId && ['removed', 'left'].includes(action)) {
+      if (targetId === userId && ["removed", "left"].includes(action)) {
         revokedRooms.current.add(roomId);
         setRooms((rows) => rows.filter((room) => room.id !== roomId));
-        for (const setter of [setPinned, setMuted, setArchived]) setter((ids) => ids.filter((id) => id !== roomId));
+        for (const setter of [setPinned, setMuted, setArchived])
+          setter((ids) => ids.filter((id) => id !== roomId));
         saveRoomMetadata(userId, roomId, null);
-      } else if (targetId === userId && action === 'joined') {
+      } else if (targetId === userId && action === "joined") {
         revokedRooms.current.delete(roomId);
         refresh();
       }
     };
-    socket.on('connect', refresh);
-    socket.on('room:members', onMembers);
-    socket.on('chat:updated', onChatUpdated);
+    socket.on("connect", refresh);
+    socket.on("room:members", onMembers);
+    socket.on("chat:updated", onChatUpdated);
     return () => {
-      socket.off('connect', refresh);
-      socket.off('room:members', onMembers);
-      socket.off('chat:updated', onChatUpdated);
+      socket.off("connect", refresh);
+      socket.off("room:members", onMembers);
+      socket.off("chat:updated", onChatUpdated);
     };
   }, [socket, userId, refresh]);
 
@@ -139,7 +200,9 @@ export function ChatsProvider({ children }) {
   const markSeen = useCallback(
     async (roomId) => {
       setRooms((current) =>
-        current.map((room) => (room.id === roomId ? { ...room, unread_count: 0 } : room)),
+        current.map((room) =>
+          room.id === roomId ? { ...room, unread_count: 0 } : room,
+        ),
       );
       try {
         await markRoomSeen(roomId);
@@ -150,22 +213,42 @@ export function ChatsProvider({ children }) {
     [refresh],
   );
 
-  const togglePreference = useCallback(async (roomId, key, setter, current) => {
-    const value = !current.includes(roomId);
-    setter((rows) => value ? [...rows, roomId] : rows.filter((id) => id !== roomId));
-    try {
-      await updateRoomPreferences(roomId, { [key]: value });
-      setRooms((rows) => rows.map((room) => room.id === roomId ? { ...room, [`is_${key}`]: value } : room));
-    } catch { refresh(); }
-  }, [refresh]);
+  const togglePreference = useCallback(
+    async (roomId, key, setter, current) => {
+      const value = !current.includes(roomId);
+      setter((rows) =>
+        value ? [...rows, roomId] : rows.filter((id) => id !== roomId),
+      );
+      try {
+        await updateRoomPreferences(roomId, { [key]: value });
+        setRooms((rows) =>
+          rows.map((room) =>
+            room.id === roomId ? { ...room, [`is_${key}`]: value } : room,
+          ),
+        );
+      } catch {
+        refresh();
+      }
+    },
+    [refresh],
+  );
 
-  const togglePin = useCallback((roomId) => togglePreference(roomId, 'pinned', setPinned, pinned), [togglePreference, pinned]);
+  const togglePin = useCallback(
+    (roomId) => togglePreference(roomId, "pinned", setPinned, pinned),
+    [togglePreference, pinned],
+  );
 
-  const toggleMute = useCallback((roomId) => togglePreference(roomId, 'muted', setMuted, muted), [togglePreference, muted]);
-  const toggleArchive = useCallback((roomId) => togglePreference(roomId, 'archived', setArchived, archived), [togglePreference, archived]);
+  const toggleMute = useCallback(
+    (roomId) => togglePreference(roomId, "muted", setMuted, muted),
+    [togglePreference, muted],
+  );
+  const toggleArchive = useCallback(
+    (roomId) => togglePreference(roomId, "archived", setArchived, archived),
+    [togglePreference, archived],
+  );
 
   const sortedRooms = useMemo(() => {
-    const recency = (room) => room.last_message?.created_at || '';
+    const recency = (room) => room.last_message?.created_at || "";
     return [...rooms].sort((a, b) => {
       const aPinned = pinned.includes(a.id);
       const bPinned = pinned.includes(b.id);
@@ -193,7 +276,7 @@ export function ChatsProvider({ children }) {
   );
 
   useEffect(() => {
-    if (typeof navigator === 'undefined') return;
+    if (typeof navigator === "undefined") return;
     if (unreadTotal > 0) navigator.setAppBadge?.(unreadTotal).catch?.(() => {});
     else navigator.clearAppBadge?.().catch?.(() => {});
   }, [unreadTotal]);
@@ -216,14 +299,32 @@ export function ChatsProvider({ children }) {
       toggleMute,
       toggleArchive,
     }),
-    [sortedRooms, rooms, archived, typingByRoom, recordingByRoom, isLoading, error, unreadTotal, pinned, muted, refresh, markSeen, togglePin, toggleMute, toggleArchive],
+    [
+      sortedRooms,
+      rooms,
+      archived,
+      typingByRoom,
+      recordingByRoom,
+      isLoading,
+      error,
+      unreadTotal,
+      pinned,
+      muted,
+      refresh,
+      markSeen,
+      togglePin,
+      toggleMute,
+      toggleArchive,
+    ],
   );
 
-  return <ChatsContext.Provider value={value}>{children}</ChatsContext.Provider>;
+  return (
+    <ChatsContext.Provider value={value}>{children}</ChatsContext.Provider>
+  );
 }
 
 export function useChats() {
   const value = useContext(ChatsContext);
-  if (!value) throw new Error('useChats must be used inside ChatsProvider');
+  if (!value) throw new Error("useChats must be used inside ChatsProvider");
   return value;
 }

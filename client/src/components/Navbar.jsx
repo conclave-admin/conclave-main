@@ -56,9 +56,17 @@ export default function Navbar({
 
   return (
     <header className="border-b border-line bg-surface">
-      <nav className={`relative grid h-16 grid-cols-1 items-center ${inChats ? "md:grid-cols-[var(--list-w)_1fr]" : ""}`}>
-        <div className={`flex min-w-0 items-center justify-between px-3 ${roomOwnsRow ? "hidden md:flex" : ""}`}>
-          <NavLink to="/chats" aria-label="Conclave, home" className="md:hidden">
+      <nav
+        className={`relative grid h-16 grid-cols-1 items-center ${inChats ? "md:grid-cols-[var(--list-w)_1fr]" : ""}`}
+      >
+        <div
+          className={`flex min-w-0 items-center justify-between px-3 ${roomOwnsRow ? "hidden md:flex" : ""}`}
+        >
+          <NavLink
+            to="/chats"
+            aria-label="Conclave, home"
+            className="md:hidden"
+          >
             <img
               src={wordmarkUrl}
               alt=""
@@ -68,9 +76,19 @@ export default function Navbar({
             />
           </NavLink>
 
-          {!inChats && <div className="ml-2 hidden min-w-0 flex-1 truncate text-h2 text-ink md:block">{titleFor(pathname)}</div>}
-          {inChats && <div className="hidden min-w-0 flex-1 truncate text-h2 text-ink md:block">Chats</div>}
-          <div className={`ml-auto flex items-center gap-1 ${inChats ? "md:absolute md:right-2 md:top-1/2 md:z-10 md:-translate-y-1/2" : ""}`}>
+          {!inChats && (
+            <div className="ml-2 hidden min-w-0 flex-1 truncate text-h2 text-ink md:block">
+              {titleFor(pathname)}
+            </div>
+          )}
+          {inChats && (
+            <div className="hidden min-w-0 flex-1 truncate text-h2 text-ink md:block">
+              Chats
+            </div>
+          )}
+          <div
+            className={`ml-auto flex items-center gap-1 ${inChats ? "md:absolute md:right-2 md:top-1/2 md:z-10 md:-translate-y-1/2" : ""}`}
+          >
             <NavLink
               to="/notifications"
               aria-label={
@@ -96,7 +114,6 @@ export default function Navbar({
             >
               <IconMenu className="h-6 w-6" aria-hidden="true" />
             </button>
-
           </div>
         </div>
 

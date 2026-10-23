@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
-import Button from '@/components/ui/Button';
-import Input from '@/components/ui/Input';
-import Modal from '@/components/ui/Modal';
-import Textarea from '@/components/ui/Textarea';
-import { promoteToDecision } from '@/services/decisions.service';
+import { useEffect, useState } from "react";
+import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
+import Modal from "@/components/ui/Modal";
+import Textarea from "@/components/ui/Textarea";
+import { promoteToDecision } from "@/services/decisions.service";
 
 /**
  * Promote a message to a decision.
@@ -20,12 +20,18 @@ import { promoteToDecision } from '@/services/decisions.service';
  * endpoint listing a room's existing tags — offering suggestions that do not
  * exist would be worse than none.
  */
-export default function PromoteToDecisionDialog({ open, onClose, message, roomId, onPromoted }) {
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [tags, setTags] = useState('');
+export default function PromoteToDecisionDialog({
+  open,
+  onClose,
+  message,
+  roomId,
+  onPromoted,
+}) {
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [tags, setTags] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   // Opened from the attach menu rather than from a message: there is no source
   // message, so the body starts empty and the endpoint gets no sourceMessageId.
@@ -36,10 +42,10 @@ export default function PromoteToDecisionDialog({ open, onClose, message, roomId
   // promotion cannot leave its draft sitting in the next one.
   useEffect(() => {
     if (!open) return;
-    setTitle('');
-    setBody(message?.content || '');
-    setTags('');
-    setError('');
+    setTitle("");
+    setBody(message?.content || "");
+    setTags("");
+    setError("");
   }, [open, message]);
 
   const handleSubmit = async (event) => {
@@ -47,7 +53,7 @@ export default function PromoteToDecisionDialog({ open, onClose, message, roomId
     if (!title.trim() || !body.trim()) return;
 
     setIsSaving(true);
-    setError('');
+    setError("");
     try {
       const decision = await promoteToDecision({
         roomId,
@@ -55,14 +61,19 @@ export default function PromoteToDecisionDialog({ open, onClose, message, roomId
         title: title.trim(),
         body: body.trim(),
         tags: tags
-          .split(',')
+          .split(",")
           .map((tag) => tag.trim().toLowerCase())
           .filter(Boolean),
       });
       onPromoted?.(decision);
       onClose();
     } catch (err) {
-      setError(err.response?.data?.message || (manual ? 'Could not create this decision.' : 'Could not promote this message.'));
+      setError(
+        err.response?.data?.message ||
+          (manual
+            ? "Could not create this decision."
+            : "Could not promote this message."),
+      );
     } finally {
       setIsSaving(false);
     }
@@ -72,19 +83,34 @@ export default function PromoteToDecisionDialog({ open, onClose, message, roomId
     <Modal
       open={open}
       onClose={onClose}
-      title={manual ? 'New decision' : 'Promote to decision'}
+      title={manual ? "New decision" : "Promote to decision"}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} type="button">
             Cancel
           </Button>
-          <Button variant="primary" type="submit" form="promote-form" disabled={!title.trim() || !body.trim() || isSaving}>
-            {isSaving ? (manual ? 'Saving…' : 'Promoting…') : manual ? 'Create decision' : 'Promote'}
+          <Button
+            variant="primary"
+            type="submit"
+            form="promote-form"
+            disabled={!title.trim() || !body.trim() || isSaving}
+          >
+            {isSaving
+              ? manual
+                ? "Saving…"
+                : "Promoting…"
+              : manual
+                ? "Create decision"
+                : "Promote"}
           </Button>
         </>
       }
     >
-      <form id="promote-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <form
+        id="promote-form"
+        onSubmit={handleSubmit}
+        className="flex flex-col gap-4"
+      >
         {message?.content && (
           <blockquote className="rounded-lg border-l-2 border-line bg-canvas px-3 py-2 text-metadata text-muted [overflow-wrap:anywhere]">
             {message.content}

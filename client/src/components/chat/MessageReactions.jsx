@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react';
-import IconReaction from '@/assets/icons/reaction.svg?react';
-import { REACTION_EMOJI } from '@/lib/messageMeta';
-import PopoverMenu from '@/components/ui/PopoverMenu';
+import { useRef, useState } from "react";
+import IconReaction from "@/assets/icons/reaction.svg?react";
+import { REACTION_EMOJI } from "@/lib/messageMeta";
+import PopoverMenu from "@/components/ui/PopoverMenu";
 
 /**
  * Reaction chips, and the picker that adds one.

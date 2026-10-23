@@ -25,14 +25,14 @@
 // because a bare ON CONFLICT DO NOTHING would also swallow a genuine duplicate
 // that ought to surface.
 
-const REACTION_EMOJI = ['\u{1F44D}', '\u{1F44E}', '\u{1F389}', '\u{2705}'];
+const REACTION_EMOJI = ["\u{1F44D}", "\u{1F44E}", "\u{1F389}", "\u{2705}"];
 
 // Emojis with a variation-selector variant are excluded on purpose — see the
 // header comment. Keep this list and migration 013 in step.
 const ALLOWED_EMOJI = new Set(REACTION_EMOJI);
 
-const { query } = require('../config/db');
-const ApiError = require('../utils/ApiError');
+const { query } = require("../config/db");
+const ApiError = require("../utils/ApiError");
 
 /**
  * Throw unless `emoji` is in the allowlist.
@@ -44,10 +44,10 @@ const ApiError = require('../utils/ApiError');
  * @returns {string} the emoji, validated
  */
 function assertAllowedEmoji(emoji) {
-  if (typeof emoji !== 'string' || !ALLOWED_EMOJI.has(emoji)) {
+  if (typeof emoji !== "string" || !ALLOWED_EMOJI.has(emoji)) {
     throw new ApiError(
       400,
-      `Unsupported reaction. Allowed: ${REACTION_EMOJI.join(' ')}`,
+      `Unsupported reaction. Allowed: ${REACTION_EMOJI.join(" ")}`,
     );
   }
   return emoji;
@@ -70,16 +70,19 @@ function aggregateReactions(rows, viewerId = null) {
 
   const byEmoji = new Map();
   for (const row of rows) {
-    const current = byEmoji.get(row.emoji) || { emoji: row.emoji, reactor_ids: [] };
+    const current = byEmoji.get(row.emoji) || {
+      emoji: row.emoji,
+      reactor_ids: [],
+    };
     current.reactor_ids.push(row.user_id);
     byEmoji.set(row.emoji, current);
   }
 
   // Ordered by the allowlist, not by row order, so the same message always
   // renders its chips in the same order.
-  const ordered = REACTION_EMOJI
-    .filter((emoji) => byEmoji.has(emoji))
-    .map((emoji) => byEmoji.get(emoji));
+  const ordered = REACTION_EMOJI.filter((emoji) => byEmoji.has(emoji)).map(
+    (emoji) => byEmoji.get(emoji),
+  );
 
   return ordered.map((entry) => ({
     emoji: entry.emoji,

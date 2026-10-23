@@ -20,7 +20,7 @@
 // meant a user named "Al" matched "@Alice". Names are escaped for regex and a
 // non-word character is required after them, which gives a real word boundary.
 function mentionPattern(displayName) {
-  const escaped = displayName.replace(/[.*+?^${}()|[\]\\\-]/g, '\\$&');
+  const escaped = displayName.replace(/[.*+?^${}()|[\]\\\-]/g, "\\$&");
   // Postgres uses POSIX regex, which has no lookahead, so express the boundary
   // as "a non-word character, or end of string".
   return `@${escaped}([^A-Za-z0-9_]|$)`;
@@ -43,7 +43,7 @@ function mentionPattern(displayName) {
  */
 function isMentioned(text, displayName) {
   if (!text || !displayName) return false;
-  return new RegExp(mentionPattern(displayName), 'i').test(text);
+  return new RegExp(mentionPattern(displayName), "i").test(text);
 }
 
 module.exports = { mentionPattern, isMentioned };

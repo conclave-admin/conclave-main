@@ -20,17 +20,17 @@
 //    sockets/index.js. Chat rooms are joined by raw room UUID, so the prefixed name
 //    cannot collide with one.
 
-const { pool } = require('../config/db');
-const ApiError = require('../utils/ApiError');
+const { pool } = require("../config/db");
+const ApiError = require("../utils/ApiError");
 
 // What each notification type points at. Adding a type means adding it here and
 // writing a resolver branch; a type in the database with no entry here is
 // rejected at write time rather than becoming a row nothing can render.
-const MESSAGE_TARGET_TYPES = ['mention', 'new_message', 'file_uploaded'];
-const ROOM_TARGET_TYPES = ['room_invite', 'member_joined'];
+const MESSAGE_TARGET_TYPES = ["mention", "new_message", "file_uploaded"];
+const ROOM_TARGET_TYPES = ["room_invite", "member_joined"];
 // Added in phase 8: flagging a message as a task told nobody. The assignee had
 // no way to learn about it short of opening the board.
-const TASK_TARGET_TYPES = ['task'];
+const TASK_TARGET_TYPES = ["task"];
 
 const NOTIFICATION_TYPES = [
   ...MESSAGE_TARGET_TYPES,
@@ -39,12 +39,12 @@ const NOTIFICATION_TYPES = [
 ];
 
 const TARGET_OF = {
-  mention: 'message',
-  new_message: 'message',
-  file_uploaded: 'message',
-  room_invite: 'room',
-  member_joined: 'room',
-  task: 'task',
+  mention: "message",
+  new_message: "message",
+  file_uploaded: "message",
+  room_invite: "room",
+  member_joined: "room",
+  task: "task",
 };
 
 // Long enough to render a line in the bell, short enough not to dump a whole
@@ -75,7 +75,7 @@ async function createNotification({
   db,
 }) {
   if (!recipientId) {
-    throw new ApiError(400, 'recipientId is required');
+    throw new ApiError(400, "recipientId is required");
   }
   if (!NOTIFICATION_TYPES.includes(type)) {
     throw new ApiError(400, `Unknown notification type "${type}"`);
@@ -83,7 +83,7 @@ async function createNotification({
   if (actorId === recipientId) {
     // A notification you caused yourself is never useful — it would put an
     // unread row in the actor's own bell for their own action.
-    throw new ApiError(400, 'actorId must differ from recipientId');
+    throw new ApiError(400, "actorId must differ from recipientId");
   }
 
   const run = db ? db.query.bind(db) : pool.query.bind(pool);
@@ -91,10 +91,22 @@ async function createNotification({
     `INSERT INTO notifications (recipient_id, type, reference_id, actor_id, dedupe_key)
      VALUES ($1, $2, $3, $4, $5) ON CONFLICT(dedupe_key) DO NOTHING
      RETURNING id, recipient_id, type, reference_id, actor_id, seen, created_at`,
-    [recipientId, type, referenceId, actorId, MESSAGE_TARGET_TYPES.includes(type)&&referenceId?`${recipientId}:${type}:${referenceId}`:null],
+    [
+      recipientId,
+      type,
+      referenceId,
+      actorId,
+      MESSAGE_TARGET_TYPES.includes(type) && referenceId
+        ? `${recipientId}:${type}:${referenceId}`
+        : null,
+    ],
   );
   if (rows.length) return rows[0];
-  return (await run('SELECT * FROM notifications WHERE dedupe_key=$1',[`${recipientId}:${type}:${referenceId}`])).rows[0];
+  return (
+    await run("SELECT * FROM notifications WHERE dedupe_key=$1", [
+      `${recipientId}:${type}:${referenceId}`,
+    ])
+  ).rows[0];
 }
 
 function preview(content) {
@@ -126,9 +138,9 @@ async function presentNotifications(rows, { db } = {}) {
   for (const row of rows) {
     if (row.actor_id) actorIds.add(row.actor_id);
     if (!row.reference_id) continue;
-    if (TARGET_OF[row.type] === 'message') messageIds.push(row.reference_id);
-    else if (TARGET_OF[row.type] === 'room') roomIds.push(row.reference_id);
-    else if (TARGET_OF[row.type] === 'task') taskIds.push(row.reference_id);
+    if (TARGET_OF[row.type] === "message") messageIds.push(row.reference_id);
+    else if (TARGET_OF[row.type] === "room") roomIds.push(row.reference_id);
+    else if (TARGET_OF[row.type] === "task") taskIds.push(row.reference_id);
   }
 
   // A soft-deleted message still resolves — the recipient should still see that
@@ -198,7 +210,7 @@ async function presentNotifications(rows, { db } = {}) {
     };
 
     let senderName = null;
-    if (row.reference_id && TARGET_OF[row.type] === 'message') {
+    if (row.reference_id && TARGET_OF[row.type] === "message") {
       const m = messages.get(row.reference_id);
       if (m) {
         senderName = m.sender_name;
@@ -212,12 +224,17 @@ async function presentNotifications(rows, { db } = {}) {
           message_preview: m.is_deleted ? null : preview(m.content),
         };
       }
-    } else if (row.reference_id && TARGET_OF[row.type] === 'room') {
+    } else if (row.reference_id && TARGET_OF[row.type] === "room") {
       const r = rooms.get(row.reference_id);
       if (r) {
-        context = { ...context, room_id: r.id, room_name: r.name, room_slug: r.slug };
+        context = {
+          ...context,
+          room_id: r.id,
+          room_name: r.name,
+          room_slug: r.slug,
+        };
       }
-    } else if (row.reference_id && TARGET_OF[row.type] === 'task') {
+    } else if (row.reference_id && TARGET_OF[row.type] === "task") {
       const t = tasks.get(row.reference_id);
       if (t) {
         // task_title rather than message_preview. The preview field is
@@ -238,7 +255,8 @@ async function presentNotifications(rows, { db } = {}) {
     // no explicit actor — which is every row written before migration 009. For
     // a mention that fallback is exactly right; for a room_invite it means
     // "Room invite" with no name, which is honest rather than wrong.
-    context.actor_name = (row.actor_id && actors.get(row.actor_id)) || senderName || null;
+    context.actor_name =
+      (row.actor_id && actors.get(row.actor_id)) || senderName || null;
 
     return {
       id: row.id,
@@ -267,10 +285,18 @@ async function presentNotification(row, options) {
  */
 async function emitNotification(io, recipientId, presented) {
   if (!io || !recipientId || !presented) return false;
-  try{
-    const allowed=await pool.query(`SELECT ${require('./notificationPolicy.service').visibleSql()} AS allowed FROM notifications n WHERE n.id=$1 AND n.recipient_id=$2`,[presented.id,recipientId]);
-    if(allowed.rows[0]?.allowed)io.to(personalRoom(recipientId)).emit('notification',{notification:presented});
-  }catch(error){console.error('Notification delivery deferred',{message:error.message});}
+  try {
+    const allowed = await pool.query(
+      `SELECT ${require("./notificationPolicy.service").visibleSql()} AS allowed FROM notifications n WHERE n.id=$1 AND n.recipient_id=$2`,
+      [presented.id, recipientId],
+    );
+    if (allowed.rows[0]?.allowed)
+      io.to(personalRoom(recipientId)).emit("notification", {
+        notification: presented,
+      });
+  } catch (error) {
+    console.error("Notification delivery deferred", { message: error.message });
+  }
   return true;
 }
 
@@ -290,7 +316,7 @@ async function emitNotification(io, recipientId, presented) {
  */
 function emitNotificationsSeen(io, recipientId, updated) {
   if (!io || !recipientId) return false;
-  io.to(personalRoom(recipientId)).emit('notification:seen', { updated });
+  io.to(personalRoom(recipientId)).emit("notification:seen", { updated });
   return true;
 }
 
@@ -298,8 +324,21 @@ function emitNotificationsSeen(io, recipientId, updated) {
  * Create, resolve and push in one call — the common path for a REST handler
  * that wants the recipient told immediately.
  */
-async function notifyAndEmit({ recipientId, type, referenceId, actorId, io, db }) {
-  const row = await createNotification({ recipientId, type, referenceId, actorId, db });
+async function notifyAndEmit({
+  recipientId,
+  type,
+  referenceId,
+  actorId,
+  io,
+  db,
+}) {
+  const row = await createNotification({
+    recipientId,
+    type,
+    referenceId,
+    actorId,
+    db,
+  });
   const presented = await presentNotification(row, { db });
   await emitNotification(io, recipientId, presented);
   return presented;
@@ -406,9 +445,12 @@ async function emitChatUpdated(io, roomId) {
       : null;
 
     for (const member of membersResult.rows) {
-      io.to(personalRoom(member.user_id)).emit('chat:updated', {
+      io.to(personalRoom(member.user_id)).emit("chat:updated", {
         roomId,
-        lastMessage: await require('./privacy.service').present(lastMessage,member.user_id),
+        lastMessage: await require("./privacy.service").present(
+          lastMessage,
+          member.user_id,
+        ),
         unreadCount: member.unread_count,
       });
     }
@@ -416,7 +458,7 @@ async function emitChatUpdated(io, roomId) {
     return membersResult.rows.length;
   } catch (err) {
     // Same contract as notifyMentions: never fail the write that triggered us.
-    console.error('chat:updated emit failed', err.message);
+    console.error("chat:updated emit failed", err.message);
     return 0;
   }
 }

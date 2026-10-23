@@ -10,26 +10,28 @@
  * @param {Date} [now] - injectable for tests
  */
 export function formatRoomTime(value, now = new Date()) {
-  if (!value) return '';
+  if (!value) return "";
 
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
+  if (Number.isNaN(date.getTime())) return "";
 
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
 
-  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, "0");
 
   if (date >= startOfToday) {
     const hours = date.getHours();
-    const suffix = hours >= 12 ? 'PM' : 'AM';
+    const suffix = hours >= 12 ? "PM" : "AM";
     const hour12 = hours % 12 || 12;
     return `${hour12}:${minutes} ${suffix}`;
   }
 
   const sameYear = date.getFullYear() === now.getFullYear();
-  const month = date.toLocaleDateString('en-US', { month: 'short' });
-  return sameYear ? `${month} ${date.getDate()}` : `${month} ${date.getDate()}, ${date.getFullYear()}`;
+  const month = date.toLocaleDateString("en-US", { month: "short" });
+  return sameYear
+    ? `${month} ${date.getDate()}`
+    : `${month} ${date.getDate()}, ${date.getFullYear()}`;
 }
 
 /**
@@ -42,14 +44,14 @@ export function formatRoomTime(value, now = new Date()) {
  * @param {{ content?: string|null, is_deleted?: boolean, has_attachment?: boolean, attachment_type?: string }} message
  */
 export function formatRoomPreview(message) {
-  if (!message) return 'No messages yet';
-  if (message.is_deleted) return 'Message deleted';
+  if (!message) return "No messages yet";
+  if (message.is_deleted) return "Message deleted";
   if (message.content) return message.content;
   if (message.has_attachment) {
-    if (message.attachment_type?.startsWith('image/')) return 'Photo';
-    if (message.attachment_type?.startsWith('video/')) return 'Video';
-    if (message.attachment_type?.startsWith('audio/')) return 'Voice message';
-    return 'Document';
+    if (message.attachment_type?.startsWith("image/")) return "Photo";
+    if (message.attachment_type?.startsWith("video/")) return "Video";
+    if (message.attachment_type?.startsWith("audio/")) return "Voice message";
+    return "Document";
   }
-  return 'No messages yet';
+  return "No messages yet";
 }

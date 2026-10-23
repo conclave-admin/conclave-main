@@ -1,4 +1,12 @@
-const ITEMS = ['Decisions', 'Action items', 'Catch-up digest', 'Mentions', 'Rooms', 'Threads', 'Tasks'];
+const ITEMS = [
+  "Decisions",
+  "Action items",
+  "Catch-up digest",
+  "Mentions",
+  "Rooms",
+  "Threads",
+  "Tasks",
+];
 
 /**
  * The vocabulary strip between sections.
@@ -14,7 +22,10 @@ const ITEMS = ['Decisions', 'Action items', 'Catch-up digest', 'Mentions', 'Room
  */
 export default function Marquee() {
   return (
-    <div className="overflow-hidden border-y border-line bg-surface py-5" aria-hidden="true">
+    <div
+      className="overflow-hidden border-y border-line bg-surface py-5"
+      aria-hidden="true"
+    >
       <div className="flex w-max animate-marquee motion-reduce:animate-none">
         {[0, 1].map((copy) => (
           <div key={copy} className="flex shrink-0">

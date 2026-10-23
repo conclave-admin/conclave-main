@@ -110,7 +110,6 @@ Configure `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and a real public contact in
 See [synchronization and push setup](docs/SYNC_AND_PUSH.md) for key generation,
 privacy policy, subscription lifecycle, and the required live acceptance checks.
 
-
 Import the root `render.yaml` as a Render Blueprint. It explicitly selects the
 free web-service plan and creates only the API service, with these settings:
 
@@ -176,7 +175,6 @@ Cloudinary-backed upload round trips still require configured credentials.
 Exercise discovery/join, private-room denial, message history, and socket events
 with two real accounts before making the service public.
 
-
 ## Albums and resumable media
 
 Apply backend migrations 028 and 029. Review [private media operations](docs/MEDIA_STORAGE.md)
@@ -205,7 +203,6 @@ Redis. Run `cd backend && npm test && npm run test:db`. The database suite inclu
 two Socket.IO servers with a real Redis adapter, multiple devices, join/removal
 races, refresh rotation, logout, and idle expiry. For client removal checks run
 `cd client && npx playwright test --config=playwright.realtime-access.config.js`.
-
 
 ### Phase 2 receipt rollout
 

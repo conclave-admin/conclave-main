@@ -1,5 +1,9 @@
-import { api } from '../lib/api';
-import { isDevAuthBypass, previewDigestItems, previewDigestSummary } from '../config/devPreview';
+import { api } from "../lib/api";
+import {
+  isDevAuthBypass,
+  previewDigestItems,
+  previewDigestSummary,
+} from "../config/devPreview";
 
 /**
  * The catch-up digest, cross-room.
@@ -18,7 +22,7 @@ export async function getUserDigest() {
   if (isDevAuthBypass) {
     return { items: previewDigestItems, summary: previewDigestSummary };
   }
-  const { data } = await api.get('/digest');
+  const { data } = await api.get("/digest");
   return data.data;
 }
 
@@ -31,7 +35,11 @@ export async function getUserDigest() {
  * reloading — would silently discard a backlog you had not finished reading.
  */
 export async function markDigestRead(roomIds) {
-  if (isDevAuthBypass) return { rooms: roomIds || [], digestSeenAt: new Date().toISOString() };
-  const { data } = await api.post('/digest/read', roomIds ? { roomId: roomIds } : {});
+  if (isDevAuthBypass)
+    return { rooms: roomIds || [], digestSeenAt: new Date().toISOString() };
+  const { data } = await api.post(
+    "/digest/read",
+    roomIds ? { roomId: roomIds } : {},
+  );
   return data.data;
 }

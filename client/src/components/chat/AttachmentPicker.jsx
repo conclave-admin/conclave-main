@@ -1,15 +1,15 @@
-import { useRef, useState } from 'react';
-import IconAttach from '@/assets/icons/attach.svg?react';
-import IconCamera from '@/assets/icons/camera.svg?react';
-import IconDecisions from '@/assets/icons/decisions.svg?react';
-import IconDocument from '@/assets/icons/document.svg?react';
-import IconImage from '@/assets/icons/image.svg?react';
-import IconList from '@/assets/icons/list-view.svg?react';
-import IconTasks from '@/assets/icons/tasks.svg?react';
-import PopoverMenu from '@/components/ui/PopoverMenu';
-import Sheet from '@/components/ui/Sheet';
-import useMediaQuery from '@/hooks/useMediaQuery';
-import { DOCUMENT_ACCEPT, PHOTO_ACCEPT } from '@/lib/media';
+import { useRef, useState } from "react";
+import IconAttach from "@/assets/icons/attach.svg?react";
+import IconCamera from "@/assets/icons/camera.svg?react";
+import IconDecisions from "@/assets/icons/decisions.svg?react";
+import IconDocument from "@/assets/icons/document.svg?react";
+import IconImage from "@/assets/icons/image.svg?react";
+import IconList from "@/assets/icons/list-view.svg?react";
+import IconTasks from "@/assets/icons/tasks.svg?react";
+import PopoverMenu from "@/components/ui/PopoverMenu";
+import Sheet from "@/components/ui/Sheet";
+import useMediaQuery from "@/hooks/useMediaQuery";
+import { DOCUMENT_ACCEPT, PHOTO_ACCEPT } from "@/lib/media";
 
 /**
  * The attach button and its menu: a bottom sheet with a grid on phones, a
@@ -29,32 +29,58 @@ import { DOCUMENT_ACCEPT, PHOTO_ACCEPT } from '@/lib/media';
  * @param {() => void} [onDecision]
  * @param {() => void} [onTask]
  */
-export default function AttachmentPicker({ onFiles, disabled, onPoll, onDecision, onTask }) {
+export default function AttachmentPicker({
+  onFiles,
+  disabled,
+  onPoll,
+  onDecision,
+  onTask,
+}) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef(null);
   const photosRef = useRef(null);
   const cameraRef = useRef(null);
   const documentRef = useRef(null);
 
-  const isDesktop = useMediaQuery('(min-width: 768px)');
+  const isDesktop = useMediaQuery("(min-width: 768px)");
   // `(pointer: coarse)` rather than a hover query: a desktop with a touchscreen
   // still has a fine pointer, and a phone has no desktop camera to offer.
-  const hasCamera = useMediaQuery('(pointer: coarse)');
+  const hasCamera = useMediaQuery("(pointer: coarse)");
 
   const handleChange = (compress) => (event) => {
     const files = [...(event.target.files || [])];
     // Reset so picking the same file again still fires a change.
-    event.target.value = '';
+    event.target.value = "";
     if (files.length > 0) onFiles(files, { compress });
   };
 
   const items = [
-    { key: 'photos', label: 'Photos & videos', Icon: IconImage, run: () => photosRef.current?.click() },
-    hasCamera && { key: 'camera', label: 'Camera', Icon: IconCamera, run: () => cameraRef.current?.click() },
-    { key: 'document', label: 'Document', Icon: IconDocument, run: () => documentRef.current?.click() },
-    onPoll && { key: 'poll', label: 'Poll', Icon: IconList, run: onPoll },
-    onDecision && { key: 'decision', label: 'Decision', Icon: IconDecisions, run: onDecision },
-    onTask && { key: 'task', label: 'Task', Icon: IconTasks, run: onTask },
+    {
+      key: "photos",
+      label: "Photos & videos",
+      Icon: IconImage,
+      run: () => photosRef.current?.click(),
+    },
+    hasCamera && {
+      key: "camera",
+      label: "Camera",
+      Icon: IconCamera,
+      run: () => cameraRef.current?.click(),
+    },
+    {
+      key: "document",
+      label: "Document",
+      Icon: IconDocument,
+      run: () => documentRef.current?.click(),
+    },
+    onPoll && { key: "poll", label: "Poll", Icon: IconList, run: onPoll },
+    onDecision && {
+      key: "decision",
+      label: "Decision",
+      Icon: IconDecisions,
+      run: onDecision,
+    },
+    onTask && { key: "task", label: "Task", Icon: IconTasks, run: onTask },
   ].filter(Boolean);
 
   const choose = (run) => {
@@ -62,13 +88,34 @@ export default function AttachmentPicker({ onFiles, disabled, onPoll, onDecision
     run();
   };
 
-  const hidden = { className: 'sr-only', tabIndex: -1, 'aria-hidden': true };
+  const hidden = { className: "sr-only", tabIndex: -1, "aria-hidden": true };
 
   return (
     <>
-      <input ref={photosRef} type="file" multiple accept={PHOTO_ACCEPT} onChange={handleChange(true)} {...hidden} />
-      <input ref={cameraRef} type="file" accept={PHOTO_ACCEPT} capture="environment" onChange={handleChange(true)} {...hidden} />
-      <input ref={documentRef} type="file" multiple accept={DOCUMENT_ACCEPT} onChange={handleChange(false)} {...hidden} />
+      <input
+        ref={photosRef}
+        type="file"
+        multiple
+        accept={PHOTO_ACCEPT}
+        onChange={handleChange(true)}
+        {...hidden}
+      />
+      <input
+        ref={cameraRef}
+        type="file"
+        accept={PHOTO_ACCEPT}
+        capture="environment"
+        onChange={handleChange(true)}
+        {...hidden}
+      />
+      <input
+        ref={documentRef}
+        type="file"
+        multiple
+        accept={DOCUMENT_ACCEPT}
+        onChange={handleChange(false)}
+        {...hidden}
+      />
 
       <button
         ref={triggerRef}

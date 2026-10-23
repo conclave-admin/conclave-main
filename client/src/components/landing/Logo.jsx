@@ -1,4 +1,4 @@
-import logoUrl from '@/assets/brand/logo.svg';
+import logoUrl from "@/assets/brand/logo.svg";
 
 /**
  * The Conclave mark.
@@ -21,12 +21,20 @@ import logoUrl from '@/assets/brand/logo.svg';
  * @param {boolean} [withWordmark]
  * @param {string} [className]
  */
-export default function Logo({ withWordmark = true, className = '' }) {
+export default function Logo({ withWordmark = true, className = "" }) {
   return (
     <span className={`inline-flex items-center gap-2.5 ${className}`}>
-      <img src={logoUrl} alt={withWordmark ? '' : 'Conclave'} width={32} height={32} className="h-8 w-8 shrink-0" />
+      <img
+        src={logoUrl}
+        alt={withWordmark ? "" : "Conclave"}
+        width={32}
+        height={32}
+        className="h-8 w-8 shrink-0"
+      />
       {withWordmark && (
-        <span className="text-lg font-semibold tracking-tight text-ink">Conclave</span>
+        <span className="text-lg font-semibold tracking-tight text-ink">
+          Conclave
+        </span>
       )}
     </span>
   );

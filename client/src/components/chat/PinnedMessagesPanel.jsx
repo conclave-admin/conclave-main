@@ -1,15 +1,15 @@
-import {useSyncReconciler} from '../../contexts/SyncContext';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import Avatar from '@/components/ui/Avatar';
-import PopoverMenu from '@/components/ui/PopoverMenu';
-import IconChevron from '@/assets/icons/chevron-down.svg?react';
-import IconClose from '@/assets/icons/close.svg?react';
-import IconMore from '@/assets/icons/more.svg?react';
-import IconPin from '@/assets/icons/pin.svg?react';
-import { useToast } from '@/contexts/ToastContext';
-import { useRealtime } from '@/contexts/RealtimeContext';
-import { formatClockTime, messageSummary } from '@/lib/messageMeta';
-import { listPinnedMessages, unpinMessage } from '@/services/messages.service';
+import { useSyncReconciler } from "../../contexts/SyncContext";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Avatar from "@/components/ui/Avatar";
+import PopoverMenu from "@/components/ui/PopoverMenu";
+import IconChevron from "@/assets/icons/chevron-down.svg?react";
+import IconClose from "@/assets/icons/close.svg?react";
+import IconMore from "@/assets/icons/more.svg?react";
+import IconPin from "@/assets/icons/pin.svg?react";
+import { useToast } from "@/contexts/ToastContext";
+import { useRealtime } from "@/contexts/RealtimeContext";
+import { formatClockTime, messageSummary } from "@/lib/messageMeta";
+import { listPinnedMessages, unpinMessage } from "@/services/messages.service";
 
 /**
  * Messages pinned to this room, in a panel under the header.
@@ -34,7 +34,12 @@ import { listPinnedMessages, unpinMessage } from '@/services/messages.service';
  * `message:pinned` / `message:unpinned` events, which carry a full message
  * rather than a delta — so an unpin is a replace, not a filter.
  */
-export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId, onJumpToMessage }) {
+export default function PinnedMessagesPanel({
+  roomId,
+  isAdmin = false,
+  viewerId,
+  onJumpToMessage,
+}) {
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
@@ -43,7 +48,22 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
   const { toast } = useToast();
   const { socket } = useRealtime();
 
-  useSyncReconciler(async batch=>{if(batch.reset||batch.changes.some(c=>c.room_id===roomId&&c.kind==='message')){try{setMessages(await listPinnedMessages(roomId));}catch(error){if([403,404].includes(error.response?.status))setMessages([]);else throw error;}}},[roomId]);
+  useSyncReconciler(
+    async (batch) => {
+      if (
+        batch.reset ||
+        batch.changes.some((c) => c.room_id === roomId && c.kind === "message")
+      ) {
+        try {
+          setMessages(await listPinnedMessages(roomId));
+        } catch (error) {
+          if ([403, 404].includes(error.response?.status)) setMessages([]);
+          else throw error;
+        }
+      }
+    },
+    [roomId],
+  );
 
   const merge = useCallback((incoming) => {
     setMessages((prev) => {
@@ -91,11 +111,11 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
       else setMessages((prev) => prev.filter((item) => item.id !== message.id));
     };
 
-    socket.on('message:pinned', onPinned);
-    socket.on('message:unpinned', onUnpinned);
+    socket.on("message:pinned", onPinned);
+    socket.on("message:unpinned", onUnpinned);
     return () => {
-      socket.off('message:pinned', onPinned);
-      socket.off('message:unpinned', onUnpinned);
+      socket.off("message:pinned", onPinned);
+      socket.off("message:unpinned", onUnpinned);
     };
   }, [socket, roomId, merge]);
 
@@ -105,7 +125,8 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
   //               room pin — so the list has to drop it, or the row below reads
   //               pins.room.display_name off a null
   const pinned = messages.filter(
-    (message) => !message.is_deleted && !message.deleted_at && message.pins?.room,
+    (message) =>
+      !message.is_deleted && !message.deleted_at && message.pins?.room,
   );
 
   if (isLoading || pinned.length === 0) return null;
@@ -116,7 +137,7 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
 
   const runUnpin = async (message) => {
     try {
-      const updated = await unpinMessage(message.id, 'room');
+      const updated = await unpinMessage(message.id, "room");
       // A pin that was already gone answers with a sentinel carrying no pins
       // rather than a 404, so a retried unpin does not look like a failure —
       // and that sentinel is not a message, so the row is dropped instead of
@@ -125,9 +146,10 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
       else setMessages((prev) => prev.filter((item) => item.id !== message.id));
     } catch (err) {
       toast({
-        title: 'Unpin failed',
-        description: err.response?.data?.message || 'Could not unpin this message.',
-        tone: 'error',
+        title: "Unpin failed",
+        description:
+          err.response?.data?.message || "Could not unpin this message.",
+        tone: "error",
       });
     }
   };
@@ -148,7 +170,9 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
             chevron was being pushed off the panel by a long message. */}
         <span className="min-w-0 flex-1">
           <span className="block text-metadata text-muted">
-            {pinned.length === 1 ? 'Pinned message' : `Pinned messages · ${pinned.length}`}
+            {pinned.length === 1
+              ? "Pinned message"
+              : `Pinned messages · ${pinned.length}`}
           </span>
           <span className="block truncate text-body text-ink">
             <span className="text-muted">{latest.sender_name}: </span>
@@ -157,23 +181,32 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
         </span>
 
         <IconChevron
-          className={`h-4 w-4 shrink-0 text-muted transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          className={`h-4 w-4 shrink-0 text-muted transition-transform ${isOpen ? "rotate-180" : ""}`}
           aria-hidden="true"
         />
       </button>
 
       {isOpen && (
-        <ul id="pinned-messages-list" className="max-h-72 overflow-y-auto border-t border-line">
+        <ul
+          id="pinned-messages-list"
+          className="max-h-72 overflow-y-auto border-t border-line"
+        >
           {pinned.map((message) => (
             <li
               key={message.id}
               className="flex items-start gap-3 border-b border-line px-4 py-3 last:border-b-0 md:px-7"
             >
-              <Avatar name={message.sender_name} src={message.sender_avatar} size="md" />
+              <Avatar
+                name={message.sender_name}
+                src={message.sender_avatar}
+                size="md"
+              />
 
               <div className="min-w-0 flex-1">
                 <p className="flex items-baseline gap-2">
-                  <span className="truncate text-body text-ink">{message.sender_name}</span>
+                  <span className="truncate text-body text-ink">
+                    {message.sender_name}
+                  </span>
                   <span className="shrink-0 text-metadata text-muted">
                     {formatClockTime(message.created_at)}
                   </span>
@@ -183,11 +216,27 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
                   // and anything longer belongs in the timeline. Deliberately
                   // not line-clamp, which the Tailwind build here has no plugin
                   // for — max-h with overflow-hidden is the same result in core.
-                  <button type="button" onClick={() => { setIsOpen(false); onJumpToMessage?.(message); }} className="mt-1 max-h-[4.5rem] overflow-hidden whitespace-pre-wrap break-words text-left text-body text-muted hover:text-brand">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsOpen(false);
+                      onJumpToMessage?.(message);
+                    }}
+                    className="mt-1 max-h-[4.5rem] overflow-hidden whitespace-pre-wrap break-words text-left text-body text-muted hover:text-brand"
+                  >
                     {message.content}
                   </button>
                 ) : (
-                  <button type="button" onClick={() => { setIsOpen(false); onJumpToMessage?.(message); }} className="mt-1 text-body text-muted">{messageSummary(message)}</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsOpen(false);
+                      onJumpToMessage?.(message);
+                    }}
+                    className="mt-1 text-body text-muted"
+                  >
+                    {messageSummary(message)}
+                  </button>
                 )}
                 <p className="mt-1 text-metadata text-muted">
                   Pinned by {message.pins.room.display_name}
@@ -199,7 +248,11 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
                   <button
                     ref={triggerRef}
                     type="button"
-                    onClick={() => setMenuFor((open) => (open === message.id ? null : message.id))}
+                    onClick={() =>
+                      setMenuFor((open) =>
+                        open === message.id ? null : message.id,
+                      )
+                    }
                     aria-haspopup="menu"
                     aria-expanded={menuFor === message.id}
                     aria-label="Pin actions"
@@ -225,7 +278,10 @@ export default function PinnedMessagesPanel({ roomId, isAdmin = false, viewerId,
                       }}
                       className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body text-ink transition-colors hover:bg-canvas"
                     >
-                      <IconClose className="h-4 w-4 text-muted" aria-hidden="true" />
+                      <IconClose
+                        className="h-4 w-4 text-muted"
+                        aria-hidden="true"
+                      />
                       Unpin for everyone
                     </button>
                     <p className="border-t border-line px-2.5 pb-1 pt-2 text-metadata text-muted">

@@ -1,5 +1,5 @@
-import { api } from '../lib/api';
-import { isDevAuthBypass, previewDecisions } from '../config/devPreview';
+import { api } from "../lib/api";
+import { isDevAuthBypass, previewDecisions } from "../config/devPreview";
 
 // Bypass returns only the preview decisions that belong to the requested room.
 // The other fixtures belong to rooms that do not exist offline, so showing
@@ -21,8 +21,9 @@ function previewFor(roomId) {
  * @returns {{ decisions: Array, nextCursor: string|null }}
  */
 export async function listDecisions({ roomId, before } = {}) {
-  if (isDevAuthBypass) return { decisions: previewFor(roomId), nextCursor: null };
-  const { data } = await api.get('/decisions', {
+  if (isDevAuthBypass)
+    return { decisions: previewFor(roomId), nextCursor: null };
+  const { data } = await api.get("/decisions", {
     params: { roomId, before },
   });
   return data.data;
@@ -48,7 +49,9 @@ export async function searchDecisions(q, roomId) {
         (decision.tags || []).some((tag) => tag.includes(needle)),
     );
   }
-  const { data } = await api.get('/decisions/search', { params: { q, roomId } });
+  const { data } = await api.get("/decisions/search", {
+    params: { q, roomId },
+  });
   return data.data.decisions;
 }
 
@@ -64,8 +67,10 @@ export async function searchDecisions(q, roomId) {
  */
 export async function getDecision(decisionId) {
   if (isDevAuthBypass) {
-    const found = previewDecisions.find((decision) => decision.id === decisionId);
-    if (!found) throw new Error('Decision not found');
+    const found = previewDecisions.find(
+      (decision) => decision.id === decisionId,
+    );
+    if (!found) throw new Error("Decision not found");
     return found;
   }
   const { data } = await api.get(`/decisions/${decisionId}`);
@@ -81,8 +86,14 @@ export async function getDecision(decisionId) {
  *
  * @param {{ roomId: string, sourceMessageId?: string, title: string, body: string, tags?: string[] }} payload
  */
-export async function promoteToDecision({ roomId, sourceMessageId, title, body, tags }) {
-  const { data } = await api.post('/decisions', {
+export async function promoteToDecision({
+  roomId,
+  sourceMessageId,
+  title,
+  body,
+  tags,
+}) {
+  const { data } = await api.post("/decisions", {
     roomId,
     sourceMessageId,
     title,

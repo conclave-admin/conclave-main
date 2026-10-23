@@ -1,17 +1,29 @@
-import { observeMessageReads } from '../../lib/messageReads';
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import IconArrowDown from '@/assets/icons/arrow-down.svg?react';
-import EmptyState from '../ui/EmptyState';
-import Spinner from '../ui/Spinner';
-import { annotateMessages, daySeparatorLabel } from '@/lib/messageMeta';
-import { groupMediaAlbums, viewerItems } from '../../lib/mediaAlbums';
-import { MediaViewerProvider } from './MediaViewer';
-import Message from './Message';
-import TypingIndicator from './TypingIndicator';
+import { observeMessageReads } from "../../lib/messageReads";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import IconArrowDown from "@/assets/icons/arrow-down.svg?react";
+import EmptyState from "../ui/EmptyState";
+import Spinner from "../ui/Spinner";
+import { annotateMessages, daySeparatorLabel } from "@/lib/messageMeta";
+import { groupMediaAlbums, viewerItems } from "../../lib/mediaAlbums";
+import { MediaViewerProvider } from "./MediaViewer";
+import Message from "./Message";
+import TypingIndicator from "./TypingIndicator";
 
 function DaySeparator({ label }) {
   return (
-    <div className="my-4 flex items-center gap-3" role="separator" aria-label={label}>
+    <div
+      className="my-4 flex items-center gap-3"
+      role="separator"
+      aria-label={label}
+    >
       <span className="h-px flex-1 bg-line" aria-hidden="true" />
       <span className="shrink-0 text-metadata text-muted">{label}</span>
       <span className="h-px flex-1 bg-line" aria-hidden="true" />
@@ -86,14 +98,27 @@ export default function MessageTimeline({
     [annotated],
   );
   const firstUnreadId = useMemo(() => {
-    const unread = annotated.find((message) => Number(message.room_sequence || 0) > Number(lastSeenSequence) && message.sender_id !== viewerId);
+    const unread = annotated.find(
+      (message) =>
+        Number(message.room_sequence || 0) > Number(lastSeenSequence) &&
+        message.sender_id !== viewerId,
+    );
     return unread?.id || null;
   }, [annotated, lastSeenSequence, viewerId]);
-  const unreadCount = useMemo(() => annotated.filter((message) =>
-    Number(message.room_sequence || 0) > Number(lastSeenSequence) && message.sender_id !== viewerId,
-  ).length, [annotated, lastSeenSequence, viewerId]);
+  const unreadCount = useMemo(
+    () =>
+      annotated.filter(
+        (message) =>
+          Number(message.room_sequence || 0) > Number(lastSeenSequence) &&
+          message.sender_id !== viewerId,
+      ).length,
+    [annotated, lastSeenSequence, viewerId],
+  );
 
-  const groups = useMemo(() => groupMediaAlbums(annotated, firstUnreadId), [annotated, firstUnreadId]);
+  const groups = useMemo(
+    () => groupMediaAlbums(annotated, firstUnreadId),
+    [annotated, firstUnreadId],
+  );
   const mediaItems = useMemo(() => viewerItems(annotated), [annotated]);
 
   // A Map lookup instead of a scan per row.
@@ -115,7 +140,8 @@ export default function MessageTimeline({
     if (!container) return undefined;
 
     const handleScroll = () => {
-      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const distance =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
       const atBottom = distance <= NEAR_BOTTOM_PX;
       stickRef.current = atBottom;
       setShowJump(!atBottom);
@@ -123,8 +149,8 @@ export default function MessageTimeline({
     };
 
     handleScroll();
-    container.addEventListener('scroll', handleScroll, { passive: true });
-    return () => container.removeEventListener('scroll', handleScroll);
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => container.removeEventListener("scroll", handleScroll);
   }, [scrollContainerRef]);
 
   // Runs before paint, so the reader never sees the top of the room flash by.
@@ -142,18 +168,27 @@ export default function MessageTimeline({
     if (placedRoomRef.current !== roomId) {
       // 1. First paint opens at the unread boundary when one exists.
       placedRoomRef.current = roomId;
-      const target = firstUnreadId && container.querySelector(`[data-message-id="${firstUnreadId}"]`);
+      const target =
+        firstUnreadId &&
+        container.querySelector(`[data-message-id="${firstUnreadId}"]`);
       if (target) {
-        container.scrollTop += target.getBoundingClientRect().top - container.getBoundingClientRect().top;
+        container.scrollTop +=
+          target.getBoundingClientRect().top -
+          container.getBoundingClientRect().top;
         stickRef.current = false;
       } else {
         container.scrollTop = container.scrollHeight;
         stickRef.current = true;
       }
-    } else if (seen.firstId && first.id !== seen.firstId && lastId === seen.lastId) {
+    } else if (
+      seen.firstId &&
+      first.id !== seen.firstId &&
+      lastId === seen.lastId
+    ) {
       // 2. Older page prepended: keep the reader on the message they were on.
       if (heightBeforeOlderRef.current > 0) {
-        container.scrollTop += container.scrollHeight - heightBeforeOlderRef.current;
+        container.scrollTop +=
+          container.scrollHeight - heightBeforeOlderRef.current;
         heightBeforeOlderRef.current = 0;
       }
     } else if (lastId !== seen.lastId) {
@@ -175,16 +210,37 @@ export default function MessageTimeline({
   useEffect(() => {
     const container = scrollContainerRef?.current;
     if (!container || !onMessageVisible) return undefined;
-    return observeMessageReads({ container, confirmed: visibleIds, inFlight: pendingReads, enabled: readsEnabled,
-      messages: new Map(annotated.filter(message => message.sender_id !== viewerId && !message._optimistic).map(message => [message.id, message])), onRead: onMessageVisible });
-  }, [annotated, onMessageVisible, scrollContainerRef, visibleIds, pendingReads, readsEnabled, viewerId]);
+    return observeMessageReads({
+      container,
+      confirmed: visibleIds,
+      inFlight: pendingReads,
+      enabled: readsEnabled,
+      messages: new Map(
+        annotated
+          .filter(
+            (message) => message.sender_id !== viewerId && !message._optimistic,
+          )
+          .map((message) => [message.id, message]),
+      ),
+      onRead: onMessageVisible,
+    });
+  }, [
+    annotated,
+    onMessageVisible,
+    scrollContainerRef,
+    visibleIds,
+    pendingReads,
+    readsEnabled,
+    viewerId,
+  ]);
 
   // Images loading, the composer growing and the mobile keyboard opening all
   // change heights without a message arriving. Stay on the bottom through them.
   useEffect(() => {
     const container = scrollContainerRef?.current;
     const content = contentRef.current;
-    if (!container || !content || typeof ResizeObserver === 'undefined') return undefined;
+    if (!container || !content || typeof ResizeObserver === "undefined")
+      return undefined;
 
     const observer = new ResizeObserver(() => {
       if (stickRef.current) container.scrollTop = container.scrollHeight;
@@ -209,7 +265,7 @@ export default function MessageTimeline({
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) requestOlder();
       },
-      { root: container, rootMargin: '200px' },
+      { root: container, rootMargin: "200px" },
     );
     observer.observe(node);
     return () => observer.disconnect();
@@ -232,68 +288,103 @@ export default function MessageTimeline({
   }
 
   return (
-    <MediaViewerProvider items={mediaItems} onJump={onJumpToMessage}><div
-      ref={contentRef}
-      className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-5 pt-4 md:px-7"
-    >
-      {hasMore && (
-        <div ref={topSentinelRef} className="py-2">
-          {isLoadingOlder && <Spinner label="Loading earlier messages" />}
-        </div>
-      )}
+    <MediaViewerProvider items={mediaItems} onJump={onJumpToMessage}>
+      <div
+        ref={contentRef}
+        className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-5 pt-4 md:px-7"
+      >
+        {hasMore && (
+          <div ref={topSentinelRef} className="py-2">
+            {isLoadingOlder && <Spinner label="Loading earlier messages" />}
+          </div>
+        )}
 
-      {groups.map((group, groupIndex) => <div key={group.messages[0].client_id || group.messages[0].id}
-        className={groupIndex === 0 ? 'mt-auto' : ''}>
-          {group.messages[0].id === firstUnreadId && (
-            <div className="my-4 flex items-center gap-3 text-metadata font-medium text-brand" role="separator" aria-label="Unread messages">
-              <span className="h-px flex-1 bg-brand/40" aria-hidden="true" />
-              <span>{unreadCount} unread messages</span>
-              <span className="h-px flex-1 bg-brand/40" aria-hidden="true" />
-            </div>
-          )}
-          {group.messages[0]._startsDay && (
-            <DaySeparator label={daySeparatorLabel(group.messages[0].created_at)} />
-          )}
-        {group.albumId && group.messages.length > 1 && <p className="mt-3 text-metadata text-muted">{group.messages.length} media items</p>}
-        <div data-album-id={group.albumId || undefined} className={group.albumId && group.messages.length > 1 ? 'grid w-full grid-cols-2 items-start gap-2 rounded-2xl border border-line p-2' : ''}>
-        {group.messages.map((message) => (
-        <Fragment key={message.client_id || message.id}>
-          {/* mt-auto on the first row keeps a short conversation pinned to the
+        {groups.map((group, groupIndex) => (
+          <div
+            key={group.messages[0].client_id || group.messages[0].id}
+            className={groupIndex === 0 ? "mt-auto" : ""}
+          >
+            {group.messages[0].id === firstUnreadId && (
+              <div
+                className="my-4 flex items-center gap-3 text-metadata font-medium text-brand"
+                role="separator"
+                aria-label="Unread messages"
+              >
+                <span className="h-px flex-1 bg-brand/40" aria-hidden="true" />
+                <span>{unreadCount} unread messages</span>
+                <span className="h-px flex-1 bg-brand/40" aria-hidden="true" />
+              </div>
+            )}
+            {group.messages[0]._startsDay && (
+              <DaySeparator
+                label={daySeparatorLabel(group.messages[0].created_at)}
+              />
+            )}
+            {group.albumId && group.messages.length > 1 && (
+              <p className="mt-3 text-metadata text-muted">
+                {group.messages.length} media items
+              </p>
+            )}
+            <div
+              data-album-id={group.albumId || undefined}
+              className={
+                group.albumId && group.messages.length > 1
+                  ? "grid w-full grid-cols-2 items-start gap-2 rounded-2xl border border-line p-2"
+                  : ""
+              }
+            >
+              {group.messages.map((message) => (
+                <Fragment key={message.client_id || message.id}>
+                  {/* mt-auto on the first row keeps a short conversation pinned to the
               bottom of the pane, next to the composer, rather than stranded at
               the top with a void beneath it. */}
-          <div data-message-id={message.id} className={`${group.albumId && group.messages.length > 1 ? 'min-w-0' : message._consecutive ? 'mt-0.5' : 'mt-3'} ${highlightedId === message.id ? 'message-jump-highlight rounded-2xl' : ''}`}>
-            <Message
-              message={message}
-              albumTile={Boolean(group.albumId && group.messages.length > 1)}
-              viewerId={viewerId}
-              members={members}
-              isAdmin={isAdmin}
-              roomId={roomId}
-              replyTarget={replyTargetFor(message)}
-              deliveryIds={deliveryIds}
-              onMessageInfo={onMessageInfo}
-              onReply={onReply}
-              onEdit={onEdit}
-              onDelete={onDelete}
-              onPromote={onPromote}
-              onFlagTask={onFlagTask}
-              onPin={onPin}
-              onUnpin={onUnpin}
-              onToggleReaction={onToggleReaction}
-              onOpenThread={onOpenThread}
-              onForward={onForward}
-              onJumpToMessage={onJumpToMessage}
-            />
+                  <div
+                    data-message-id={message.id}
+                    className={`${group.albumId && group.messages.length > 1 ? "min-w-0" : message._consecutive ? "mt-0.5" : "mt-3"} ${highlightedId === message.id ? "message-jump-highlight rounded-2xl" : ""}`}
+                  >
+                    <Message
+                      message={message}
+                      albumTile={Boolean(
+                        group.albumId && group.messages.length > 1,
+                      )}
+                      viewerId={viewerId}
+                      members={members}
+                      isAdmin={isAdmin}
+                      roomId={roomId}
+                      replyTarget={replyTargetFor(message)}
+                      deliveryIds={deliveryIds}
+                      onMessageInfo={onMessageInfo}
+                      onReply={onReply}
+                      onEdit={onEdit}
+                      onDelete={onDelete}
+                      onPromote={onPromote}
+                      onFlagTask={onFlagTask}
+                      onPin={onPin}
+                      onUnpin={onUnpin}
+                      onToggleReaction={onToggleReaction}
+                      onOpenThread={onOpenThread}
+                      onForward={onForward}
+                      onJumpToMessage={onJumpToMessage}
+                    />
+                  </div>
+                </Fragment>
+              ))}
+            </div>
           </div>
-        </Fragment>
-      ))}</div></div>)}
+        ))}
 
-      <TypingIndicator recordingUserIds={recordingUserIds} typingUserIds={typingUserIds} members={members} />
-      <span className="sr-only" aria-live="polite" aria-atomic="true">
-        {annotated.length ? `${annotated.length} messages loaded. Latest message from ${annotated.at(-1)?.sender_name || 'a member'}.` : ''}
-      </span>
+        <TypingIndicator
+          recordingUserIds={recordingUserIds}
+          typingUserIds={typingUserIds}
+          members={members}
+        />
+        <span className="sr-only" aria-live="polite" aria-atomic="true">
+          {annotated.length
+            ? `${annotated.length} messages loaded. Latest message from ${annotated.at(-1)?.sender_name || "a member"}.`
+            : ""}
+        </span>
 
-      {/*
+        {/*
         `sticky`, not `absolute`. This container is the scroll *content*, so an
         absolutely positioned child anchors to the end of the whole transcript
         — measured 910px below the visible pane, visible only once the reader
@@ -304,18 +395,24 @@ export default function MessageTimeline({
         scroll tick, and an in-flow button would shove the transcript each time
         it appeared or disappeared.
       */}
-      {showJump && (
-        <div className="pointer-events-none sticky bottom-3 z-10 h-0">
-          <button
-            type="button"
-            onClick={scrollToBottom}
-            className="pointer-events-auto absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-surface px-4 py-2 text-label text-ink shadow-modal transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
-          >
-            <IconArrowDown className="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
-            {newBelow > 0 ? `${newBelow} new message${newBelow === 1 ? '' : 's'}` : 'Jump to latest'}
-          </button>
-        </div>
-      )}
-    </div></MediaViewerProvider>
+        {showJump && (
+          <div className="pointer-events-none sticky bottom-3 z-10 h-0">
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="pointer-events-auto absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-surface px-4 py-2 text-label text-ink shadow-modal transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+            >
+              <IconArrowDown
+                className="h-4 w-4 shrink-0 text-muted"
+                aria-hidden="true"
+              />
+              {newBelow > 0
+                ? `${newBelow} new message${newBelow === 1 ? "" : "s"}`
+                : "Jump to latest"}
+            </button>
+          </div>
+        )}
+      </div>
+    </MediaViewerProvider>
   );
 }

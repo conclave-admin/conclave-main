@@ -10,9 +10,19 @@
  * @param {string} [ariaLabel] - required in practice: a tab strip with no
  *   accessible name is an unlabelled group of buttons
  */
-export default function Tabs({ tabs, value, onChange, ariaLabel, className = '' }) {
+export default function Tabs({
+  tabs,
+  value,
+  onChange,
+  ariaLabel,
+  className = "",
+}) {
   return (
-    <div role="tablist" aria-label={ariaLabel} className={`scrollbar-none flex gap-1 overflow-x-auto border-b border-line ${className}`}>
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      className={`scrollbar-none flex gap-1 overflow-x-auto border-b border-line ${className}`}
+    >
       {tabs.map((tab) => {
         const selected = tab.value === value;
         return (
@@ -23,7 +33,9 @@ export default function Tabs({ tabs, value, onChange, ariaLabel, className = '' 
             aria-selected={selected}
             onClick={() => onChange?.(tab.value)}
             className={`min-h-10 shrink-0 border-b-2 px-3 text-label transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
-              selected ? 'border-brand text-ink' : 'border-transparent text-muted hover:text-ink'
+              selected
+                ? "border-brand text-ink"
+                : "border-transparent text-muted hover:text-ink"
             }`}
           >
             {tab.label}

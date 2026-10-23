@@ -1,6 +1,6 @@
-import { Outlet, useOutletContext, useParams } from 'react-router-dom';
-import ChatList from '@/components/chats/ChatList';
-import EmptyState from '@/components/ui/EmptyState';
+import { Outlet, useOutletContext, useParams } from "react-router-dom";
+import ChatList from "@/components/chats/ChatList";
+import EmptyState from "@/components/ui/EmptyState";
 
 /**
  * The chat shell: a list on the left, the open conversation on the right.
@@ -30,7 +30,7 @@ export default function Chats() {
   return (
     <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[var(--list-w)_1fr]">
       <section
-        className={`min-h-0 border-r border-line bg-surface ${roomId ? 'hidden md:block' : ''}`}
+        className={`min-h-0 border-r border-line bg-surface ${roomId ? "hidden md:block" : ""}`}
       >
         <ChatList />
       </section>

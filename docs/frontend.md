@@ -588,18 +588,17 @@ Notifications, Settings and DMs have no Penpot board, as DESIGN_QUESTIONS B1 and
 
 The icon sprite at `client/src/assets/icons/` covers almost everything the redesign calls for. The three below do not, and the repo rule is to stop and ask rather than draw a substitute, so they are listed here for Michael to supply.
 
-| File             | Needed for                                                   | Until it exists                                         |
-| ---------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
-| `sun.svg`        | Light theme indicator                                        | The switch uses the text label "Light" instead          |
-| `moon.svg`       | Dark theme indicator                                         | The switch uses the text label "Dark" instead           |
-| `arrow-down.svg` | The "jump to latest" pill in the conversation — section 6    | The pill has no glyph and cannot be built               |
+| File             | Needed for                                                | Until it exists                                |
+| ---------------- | --------------------------------------------------------- | ---------------------------------------------- |
+| `sun.svg`        | Light theme indicator                                     | The switch uses the text label "Light" instead |
+| `moon.svg`       | Dark theme indicator                                      | The switch uses the text label "Dark" instead  |
+| `arrow-down.svg` | The "jump to latest" pill in the conversation — section 6 | The pill has no glyph and cannot be built      |
 
 **Resolved without a new asset: the message Edit action.** The set has no pencil glyph, and rather than invent one that would break the 90-icon style contract, Edit reuses `compose.svg` — compose and edit are the same gesture, a pen writing on a surface. The row is built; no further action needed unless a dedicated `edit.svg` is supplied, in which case it swaps in at `MessageActions.jsx` and nothing else changes.
 
 **Separately, the logo.** Not a sprite entry. A brand asset for the slot currently drawn as an empty dashed box in `components/landing/Logo.jsx`, which appears in the landing nav, the auth screens and the footer. When it arrives it replaces that slot directly; nothing else in the component changes. There is no `og:image` on the landing either, for the same reason — pointing a share card at a missing image renders worse than shipping a text-only one, so that gets added at the same time.
 
 Everything else the remaining phases need already exists in the sprite: `sent` and `pending` ticks, `reaction`, `pin`, `attach`, `mention`, `reply`, `decisions`, `tasks`, `notify`, `compose`, `menu`, `close`, `chevron-*` and the rest.
-
 
 ## Media outbox — 20 October 2026
 
@@ -631,7 +630,6 @@ while the app is open and recover from persisted drafts on reopening.
 and mobile with mocked R2. `playwright.media-production.config.js` exercises the
 built application and its service worker with a real offline reload.
 
-
 ### Media previews and receiving originals
 
 `mediaMetadata.js` generates bounded JPEG thumbnails (240 px maximum edge,
@@ -658,13 +656,11 @@ rechecks browser storage. Failed cache writes show a temporary-copy notice rathe
 than claiming offline availability. These caches are separate from durable
 unsent Blobs; clearing downloaded media does not clear the outbox.
 
-
 Upload failures require explicit retry and display the cause in the bubble.
 Rate-limited retries respect the server's wait time. A connection event can start
 previously queued work, but cannot silently retry a failed upload. A completed
 upload followed by lost message acknowledgement still uses the safe automatic
 message retry path with its original client ID and uploaded reference.
-
 
 ### Albums and resumable transfers
 
@@ -688,7 +684,6 @@ cache budget and are removed after a successful full-cache write.
 
 Deployment and privacy rules are in [MEDIA_STORAGE.md](MEDIA_STORAGE.md).
 
-
 ### Shared files
 
 `SharedMediaBrowser` on room/DM info pages browses Media, Documents and Audio
@@ -708,12 +703,10 @@ restores ordinary history; sending from a context view also returns to latest.
 Unavailable/deleted or locally cleared targets show a visible error.
 Migration 030 indexes attachment lookups for shared-file queries.
 
-
 The production service worker also claims clients during the ready-page asset
 handshake. This covers navigation during activation, when a ready worker may not
 have taken control of the newly opened document. Asset caching still accepts only
 same-origin `/assets/` URLs; private API responses remain outside the shell cache.
-
 
 ### Media follow-up controls
 

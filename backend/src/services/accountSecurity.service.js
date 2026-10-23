@@ -314,10 +314,10 @@ async function dispatchMail(limit = 10, send) {
   return jobs.rowCount;
 }
 async function sendWithResend(mail, { idempotencyKey }) {
-  const { data, error } = await new Resend(env.mail.apiKey).emails.send(
-    mail,
-    { idempotencyKey, signal: AbortSignal.timeout(15000) },
-  );
+  const { data, error } = await new Resend(env.mail.apiKey).emails.send(mail, {
+    idempotencyKey,
+    signal: AbortSignal.timeout(15000),
+  });
   // The SDK returns API errors rather than throwing them. Never mark a
   // rejected or incomplete response as an accepted email job.
   if (error || !data?.id) {

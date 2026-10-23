@@ -1,7 +1,12 @@
-import { api } from '../lib/api';
+import { api } from "../lib/api";
 
 export async function createPoll({ roomId, question, options, allowMultiple }) {
-  const { data } = await api.post('/polls', { roomId, question, options, allowMultiple });
+  const { data } = await api.post("/polls", {
+    roomId,
+    question,
+    options,
+    allowMultiple,
+  });
   return data.data;
 }
 

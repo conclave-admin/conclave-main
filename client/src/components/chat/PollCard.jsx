@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
-import IconSuccess from '@/assets/icons/success.svg?react';
-import Avatar from '@/components/ui/Avatar';
-import Modal from '@/components/ui/Modal';
-import { useAuth } from '@/contexts/AuthContext';
-import { useToast } from '@/contexts/ToastContext';
-import { closePoll, votePoll } from '@/services/polls.service';
+import { useEffect, useMemo, useState } from "react";
+import IconSuccess from "@/assets/icons/success.svg?react";
+import Avatar from "@/components/ui/Avatar";
+import Modal from "@/components/ui/Modal";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/contexts/ToastContext";
+import { closePoll, votePoll } from "@/services/polls.service";
 
-const sameIds = (a, b) => a.length === b.length && a.every((id) => b.includes(id));
+const sameIds = (a, b) =>
+  a.length === b.length && a.every((id) => b.includes(id));
 
 // What the poll will look like once this person's vote lands. Applied locally
 // so a tap feels instant; the server's own copy replaces it a moment later.
@@ -14,18 +15,27 @@ function withMyChoice(poll, viewer, ids) {
   const chosen = new Set(ids);
   const options = poll.options.map((option) => {
     const others = option.voters.filter((voter) => voter.id !== viewer.id);
-    return { ...option, voters: chosen.has(option.id) ? [...others, viewer] : others };
+    return {
+      ...option,
+      voters: chosen.has(option.id) ? [...others, viewer] : others,
+    };
   });
-  const voters = new Set(options.flatMap((option) => option.voters.map((voter) => voter.id)));
+  const voters = new Set(
+    options.flatMap((option) => option.voters.map((voter) => voter.id)),
+  );
   return { ...poll, options, voter_count: voters.size };
 }
 
 function voterSummary(voters, viewerId) {
   const names = voters
-    .map((voter) => (voter.id === viewerId ? 'You' : (voter.display_name || 'Someone').split(' ')[0]))
-    .sort((a, b) => (a === 'You' ? -1 : b === 'You' ? 1 : 0));
-  if (names.length <= 3) return names.join(', ');
-  return `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
+    .map((voter) =>
+      voter.id === viewerId
+        ? "You"
+        : (voter.display_name || "Someone").split(" ")[0],
+    )
+    .sort((a, b) => (a === "You" ? -1 : b === "You" ? 1 : 0));
+  if (names.length <= 3) return names.join(", ");
+  return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
 }
 
 /**
@@ -47,14 +57,20 @@ export default function PollCard({ message, viewerId, canClose }) {
   const [confirmClose, setConfirmClose] = useState(false);
 
   const viewer = useMemo(
-    () => ({ id: viewerId, display_name: user?.display_name || 'You', avatar_url: user?.avatar_url || null }),
+    () => ({
+      id: viewerId,
+      display_name: user?.display_name || "You",
+      avatar_url: user?.avatar_url || null,
+    }),
     [viewerId, user],
   );
 
   const serverMine = useMemo(
     () =>
       serverPoll.options
-        .filter((option) => option.voters.some((voter) => voter.id === viewerId))
+        .filter((option) =>
+          option.voters.some((voter) => voter.id === viewerId),
+        )
         .map((option) => option.id),
     [serverPoll, viewerId],
   );
@@ -78,7 +94,9 @@ export default function PollCard({ message, viewerId, canClose }) {
     if (closed || busy) return;
     let next;
     if (poll.allow_multiple) {
-      next = myIds.includes(optionId) ? myIds.filter((id) => id !== optionId) : [...myIds, optionId];
+      next = myIds.includes(optionId)
+        ? myIds.filter((id) => id !== optionId)
+        : [...myIds, optionId];
     } else {
       next = myIds.includes(optionId) ? [] : [optionId];
     }
@@ -90,9 +108,9 @@ export default function PollCard({ message, viewerId, canClose }) {
     } catch (err) {
       setChoice(null);
       toast({
-        title: 'Vote not saved',
-        description: err.response?.data?.message || 'Please try again.',
-        tone: 'error',
+        title: "Vote not saved",
+        description: err.response?.data?.message || "Please try again.",
+        tone: "error",
       });
     } finally {
       setBusy(false);
@@ -108,9 +126,9 @@ export default function PollCard({ message, viewerId, canClose }) {
       await closePoll(poll.id);
     } catch (err) {
       toast({
-        title: 'Could not close the poll',
-        description: err.response?.data?.message || 'Please try again.',
-        tone: 'error',
+        title: "Could not close the poll",
+        description: err.response?.data?.message || "Please try again.",
+        tone: "error",
       });
     } finally {
       setConfirmClose(false);
@@ -121,20 +139,26 @@ export default function PollCard({ message, viewerId, canClose }) {
     <div className="w-72 max-w-full rounded-2xl bg-canvas p-3 text-ink">
       <p className="text-label [overflow-wrap:anywhere]">{poll.question}</p>
       <p className="mt-0.5 text-metadata text-muted">
-        {closed ? 'Poll closed' : poll.allow_multiple ? 'Select one or more' : 'Select one'}
+        {closed
+          ? "Poll closed"
+          : poll.allow_multiple
+            ? "Select one or more"
+            : "Select one"}
       </p>
 
       <ul className="mt-3 flex flex-col gap-2">
         {poll.options.map((option) => {
           const selected = myIds.includes(option.id);
           const count = option.voters.length;
-          const percent = poll.voter_count ? Math.round((count / poll.voter_count) * 100) : 0;
+          const percent = poll.voter_count
+            ? Math.round((count / poll.voter_count) * 100)
+            : 0;
 
           return (
             <li key={option.id}>
               <button
                 type="button"
-                role={poll.allow_multiple ? 'checkbox' : 'radio'}
+                role={poll.allow_multiple ? "checkbox" : "radio"}
                 aria-checked={selected}
                 disabled={closed}
                 onClick={() => toggle(option.id)}
@@ -148,13 +172,21 @@ export default function PollCard({ message, viewerId, canClose }) {
                 <span className="relative flex items-center gap-2.5">
                   <span
                     className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${
-                      selected ? 'border-brand bg-brand text-surface' : 'border-line'
+                      selected
+                        ? "border-brand bg-brand text-surface"
+                        : "border-line"
                     }`}
                   >
-                    {selected && <IconSuccess className="h-3 w-3" aria-hidden="true" />}
+                    {selected && (
+                      <IconSuccess className="h-3 w-3" aria-hidden="true" />
+                    )}
                   </span>
-                  <span className="min-w-0 flex-1 text-body [overflow-wrap:anywhere]">{option.label}</span>
-                  <span className="shrink-0 text-metadata text-muted">{count}</span>
+                  <span className="min-w-0 flex-1 text-body [overflow-wrap:anywhere]">
+                    {option.label}
+                  </span>
+                  <span className="shrink-0 text-metadata text-muted">
+                    {count}
+                  </span>
                 </span>
               </button>
               {count > 0 && (
@@ -174,8 +206,8 @@ export default function PollCard({ message, viewerId, canClose }) {
           disabled={!poll.voter_count}
           className="text-metadata text-brand hover:underline disabled:text-muted disabled:no-underline"
         >
-          {poll.voter_count} {poll.voter_count === 1 ? 'vote' : 'votes'}
-          {poll.voter_count > 0 ? ' · View votes' : ''}
+          {poll.voter_count} {poll.voter_count === 1 ? "vote" : "votes"}
+          {poll.voter_count > 0 ? " · View votes" : ""}
         </button>
 
         {canClose && !closed && (
@@ -185,7 +217,7 @@ export default function PollCard({ message, viewerId, canClose }) {
             onBlur={() => setConfirmClose(false)}
             className="text-metadata text-muted transition-colors hover:text-ink"
           >
-            {confirmClose ? 'Tap again to close' : 'Close poll'}
+            {confirmClose ? "Tap again to close" : "Close poll"}
           </button>
         )}
       </div>
@@ -195,8 +227,12 @@ export default function PollCard({ message, viewerId, canClose }) {
           {poll.options.map((option) => (
             <section key={option.id}>
               <h3 className="flex items-baseline justify-between gap-3 text-label text-ink">
-                <span className="min-w-0 [overflow-wrap:anywhere]">{option.label}</span>
-                <span className="shrink-0 text-metadata text-muted">{option.voters.length}</span>
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  {option.label}
+                </span>
+                <span className="shrink-0 text-metadata text-muted">
+                  {option.voters.length}
+                </span>
               </h3>
               {option.voters.length === 0 ? (
                 <p className="mt-1 text-metadata text-muted">No votes</p>
@@ -204,9 +240,15 @@ export default function PollCard({ message, viewerId, canClose }) {
                 <ul className="mt-2 flex flex-col gap-2">
                   {option.voters.map((voter) => (
                     <li key={voter.id} className="flex items-center gap-2.5">
-                      <Avatar name={voter.display_name || ''} src={voter.avatar_url} size="sm" />
+                      <Avatar
+                        name={voter.display_name || ""}
+                        src={voter.avatar_url}
+                        size="sm"
+                      />
                       <span className="min-w-0 truncate text-body text-ink">
-                        {voter.id === viewerId ? 'You' : voter.display_name || 'Someone'}
+                        {voter.id === viewerId
+                          ? "You"
+                          : voter.display_name || "Someone"}
                       </span>
                     </li>
                   ))}
