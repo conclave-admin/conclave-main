@@ -183,7 +183,7 @@ async function castVote({ pollId, userId, optionIds }) {
          FROM polls p
          INNER JOIN messages m ON m.id = p.message_id
          INNER JOIN room_members rm ON rm.room_id = p.room_id AND rm.user_id = $2
-        WHERE p.id = $1
+        WHERE p.id = $1 AND message_visible(m.id,$2)
           FOR UPDATE OF p`,
       [pollId, userId],
     );
@@ -240,7 +240,7 @@ async function closePoll({ pollId, userId }) {
     `SELECT p.message_id, p.room_id, p.created_by, rm.role
        FROM polls p
        INNER JOIN room_members rm ON rm.room_id = p.room_id AND rm.user_id = $2
-      WHERE p.id = $1`,
+      WHERE p.id = $1 AND message_visible(p.message_id,$2)`,
     [pollId, userId],
   );
   const poll = found.rows[0];

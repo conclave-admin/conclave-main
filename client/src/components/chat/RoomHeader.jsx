@@ -1,3 +1,6 @@
+import { useState } from "react";
+import ConversationSearch from "./ConversationSearch";
+import IconSearch from "@/assets/icons/search.svg?react";
 import { useRealtime } from "../../contexts/RealtimeContext";
 import { Link } from "react-router-dom";
 import IconArrowLeft from "@/assets/icons/arrow-left.svg?react";
@@ -26,6 +29,7 @@ import { usePresence } from "@/contexts/PresenceContext";
  * @param {boolean} isConnected
  */
 export default function RoomHeader({ room, isConnected }) {
+  const [searchOpen, setSearchOpen] = useState(false);
   const { isOnline } = useRealtime();
   const title = room.display_name || room.name;
   const { user } = useAuth();
@@ -70,6 +74,7 @@ export default function RoomHeader({ room, isConnected }) {
           {isDm
             ? labelFor(room.id, peer?.id)
             : `${room.members?.length || 0} members`}
+          {isDm && peer?.custom_status && <span> · {peer.custom_status}</span>}
           <span hidden={isOnline && isConnected}>
             {" "}
             ·{" "}
@@ -82,6 +87,19 @@ export default function RoomHeader({ room, isConnected }) {
         </p>
       </div>
 
+      <button
+        type="button"
+        aria-label="Search conversation"
+        className="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-muted hover:bg-canvas"
+        onClick={() => setSearchOpen(true)}
+      >
+        <IconSearch className="h-5 w-5" />
+      </button>
+      <ConversationSearch
+        room={room}
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+      />
       <Link
         to={`/chats/${room.id}/info`}
         aria-label={isDm ? "Conversation details" : "Room information"}

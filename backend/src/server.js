@@ -45,6 +45,7 @@ async function shutdown(signal) {
     await storageCleanup.stopStorageCleanup();
     await require("./services/sync.service").stop();
     await require("./services/push.service").stop();
+    await require("./services/experienceWorker.service").stop();
     await require("./services/accountSecurity.service").stop();
 
     // io.close() disconnects every socket and, because the server was attached,
@@ -105,6 +106,7 @@ async function main() {
   require("./services/sync.service").start(io);
   require("./services/push.service").start();
   require("./services/accountSecurity.service").start();
+  require("./services/experienceWorker.service").start(io);
 
   httpServer.listen(env.port, () => {
     console.log(`API + Socket.IO listening on http://localhost:${env.port}`);

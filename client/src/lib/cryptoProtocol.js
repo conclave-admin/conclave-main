@@ -178,6 +178,7 @@ export function sealMessage(
     nonce = sodium.randombytes_buf(24);
   const body = {
     content: payload.content || "",
+    ...(payload.threadRootId ? { threadRootId: payload.threadRootId } : {}),
     ...(file ? { file } : {}),
     roomId: payload.roomId,
     clientId: payload.clientId,
@@ -301,6 +302,11 @@ export function openMessage(vault, message) {
     typeof body.content !== "string"
   )
     throw new Error("Invalid encrypted message body.");
+  if (
+    body.threadRootId !== undefined &&
+    body.threadRootId !== message.thread_root_id
+  )
+    throw new Error("Encrypted thread context does not match");
   const attachments = (message.attachments || []).map((attachment) => {
     if (!body.file || body.file.url !== attachment.url)
       throw new Error("Encrypted attachment does not match this message.");

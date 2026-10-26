@@ -56,6 +56,12 @@ function useObjectUrl(blob) {
 
 function DownloadState({ download, attachment }) {
   const { status, progress, persisted, error, start, cancel } = download;
+  if (
+    status === "available" ||
+    status === "not-downloaded" ||
+    status === "idle"
+  )
+    return null;
   return (
     <div
       data-download-state={status}
@@ -70,7 +76,7 @@ function DownloadState({ download, attachment }) {
               : "Available this visit · could not save offline"
             : status === "failed"
               ? "Download failed"
-              : "Original not downloaded"}
+              : "Tap the attachment to download"}
       </p>
       {status === "downloading" && (
         <>

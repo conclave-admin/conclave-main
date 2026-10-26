@@ -1,3 +1,4 @@
+import useExpiryClock from "./useExpiryClock";
 import { decryptMessage } from "../lib/encryption";
 import { useSyncReconciler } from "../contexts/SyncContext";
 import { mergeServerMessages } from "../lib/synchronization";
@@ -507,6 +508,8 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     ({
       content,
       replyToId,
+      threadRootId,
+      broadcastMention,
       attachments = [],
       albumId,
       mentionedUserIds = [],
@@ -514,7 +517,15 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
       const text = (content || "").trim();
       if (!text && !attachments.length) return Promise.resolve();
       return outbox.enqueue(roomId, [
-        { content: text, replyToId, attachments, albumId, mentionedUserIds },
+        {
+          content: text,
+          replyToId,
+          threadRootId,
+          broadcastMention,
+          attachments,
+          albumId,
+          mentionedUserIds,
+        },
       ]);
     },
     [roomId, outbox.enqueue],
@@ -629,6 +640,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     }),
     [roomDrafts, outbox.retry, outbox.cancel],
   );
+  const expiryClock = useExpiryClock(messages);
   const visibleMessages = useMemo(() => {
     const known = new Set(
       messages.map((message) => message.client_id).filter(Boolean),
@@ -662,6 +674,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     user?.display_name,
     receiptUpdates,
     retiredIds,
+    expiryClock,
   ]);
 
   // Both scopes. The panel and the message menu call these same two functions,

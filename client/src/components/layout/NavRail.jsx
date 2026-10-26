@@ -14,6 +14,7 @@ import IconPublic from "@/assets/icons/public.svg?react";
 
 const primaryNav = [
   { to: "/chats", label: "Chats", Icon: IconHome, end: false },
+  { to: "/activity", label: "Message activity", Icon: IconRecent },
   { to: "/tasks", label: "Tasks", Icon: IconTasks },
   { to: "/decisions", label: "Decisions", Icon: IconDecisions },
   { to: "/digest", label: "Catch up", Icon: IconRecent },

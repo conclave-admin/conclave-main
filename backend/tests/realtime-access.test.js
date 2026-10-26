@@ -3048,3 +3048,566 @@ test("phase6: active invitations stay manageable after many links are revoked", 
     200,
   );
 });
+
+test("ux: expanded reactions accept catalog emoji and reject arbitrary text", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b);
+  const sent = (
+    await request("/messages", a.token, "POST", {
+      roomId: id,
+      content: "React to this",
+    })
+  ).body.data;
+  assert.equal(
+    (
+      await request(`/messages/${sent.id}/reactions`, b.token, "PUT", {
+        emoji: "❤️",
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await request(`/messages/${sent.id}/reactions`, b.token, "PUT", {
+        emoji: "javascript:bad",
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await request(`/messages/${sent.id}/reactions`, b.token, "PUT", {
+        emoji: "🚀",
+      })
+    ).status,
+    200,
+  );
+});
+test("ux: threads paginate persisted replies, have unread positions, and enforce membership", async () => {
+  const a = await account(),
+    b = await account(),
+    c = await account(),
+    id = await room(a, b);
+  const root = (
+    await request("/messages", a.token, "POST", {
+      roomId: id,
+      content: "Root topic",
+    })
+  ).body.data;
+  const reply = (
+    await request("/messages", a.token, "POST", {
+      roomId: id,
+      threadRootId: root.id,
+      replyToId: root.id,
+      content: "Persistent reply",
+    })
+  ).body.data;
+  assert.equal(reply.thread_root_id, root.id);
+  const inbox = (await request("/experience/threads", b.token)).body.data;
+  const topic = inbox.threads.find((t) => t.id === root.id);
+  assert.equal(topic.reply_count, 1);
+  assert.equal(topic.unread_count, 1);
+  const page = (await request(`/experience/threads/${root.id}`, b.token)).body
+    .data;
+  assert.equal(page.messages.length, 2);
+  assert.equal(
+    (await request(`/experience/threads/${root.id}`, c.token)).status,
+    404,
+  );
+  assert.equal(
+    (
+      await request(`/experience/threads/${root.id}/read`, b.token, "POST", {
+        sequence: reply.room_sequence,
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (await request("/experience/threads", b.token)).body.data.threads.find(
+      (t) => t.id === root.id,
+    ).unread_count,
+    0,
+  );
+  assert.equal(
+    (
+      await request("/messages", b.token, "POST", {
+        roomId: id,
+        threadRootId: reply.id,
+        content: "Nested invalid root",
+      })
+    ).status,
+    404,
+  );
+});
+test("ux: scheduled text publishes once across competing workers and respects cancellation", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b),
+    clientId = randomUUID();
+  const created = await request("/experience/schedules", a.token, "POST", {
+    roomId: id,
+    payload: { roomId: id, clientId, content: "Durable schedule" },
+    dueAt: new Date(Date.now() + 60000).toISOString(),
+  });
+  assert.equal(created.status, 200);
+  const schedule = created.body.data;
+  assert.equal(
+    (await request(`/experience/schedules/${schedule.id}`, b.token, "DELETE"))
+      .status,
+    409,
+  );
+  await query(
+    "UPDATE scheduled_messages SET due_at=NOW()-INTERVAL '1 second' WHERE id=$1",
+    [schedule.id],
+  );
+  const worker = require("../src/services/experienceWorker.service");
+  await Promise.all([worker.run(servers[0].io), worker.run(servers[1].io)]);
+  assert.equal(
+    (
+      await query(
+        "SELECT COUNT(*)::int AS n FROM messages WHERE room_id=$1 AND client_id=$2",
+        [id, clientId],
+      )
+    ).rows[0].n,
+    1,
+  );
+  assert.equal(
+    (
+      await query("SELECT status,payload FROM scheduled_messages WHERE id=$1", [
+        schedule.id,
+      ])
+    ).rows[0].status,
+    "sent",
+  );
+  const other = await request("/experience/schedules", a.token, "POST", {
+    roomId: id,
+    payload: {
+      roomId: id,
+      clientId: randomUUID(),
+      content: "Cancelled schedule",
+    },
+    dueAt: new Date(Date.now() + 60000).toISOString(),
+  });
+  assert.equal(
+    (
+      await request(
+        `/experience/schedules/${other.body.data.id}`,
+        a.token,
+        "DELETE",
+      )
+    ).status,
+    200,
+  );
+  await worker.run();
+  assert.equal(
+    (
+      await query(
+        "SELECT 1 FROM messages WHERE room_id=$1 AND content='Cancelled schedule'",
+        [id],
+      )
+    ).rowCount,
+    0,
+  );
+});
+test("ux: encrypted schedules contain no plaintext and stop when trusted recipients change", async () => {
+  const { protocol, a, b, av, bv } = await cryptoFixture();
+  const created = await request("/rooms", a.token, "POST", {
+    type: "private",
+    name: "Private scheduled",
+    memberIds: [b.userId],
+  });
+  const id = created.body.data.id;
+  const roster = (await request(`/encryption/rooms/${id}`, a.token)).body.data,
+    clientId = randomUUID();
+  const encryptedPayload = protocol.sealMessage(av, roster, {
+    roomId: id,
+    clientId,
+    content: "SECRET SCHEDULE",
+  });
+  const job = (
+    await request("/experience/schedules", a.token, "POST", {
+      roomId: id,
+      payload: { roomId: id, clientId, encryptedPayload },
+      dueAt: new Date(Date.now() + 60000).toISOString(),
+    })
+  ).body.data;
+  assert.ok(job.id);
+  assert.ok(
+    !JSON.stringify(
+      (
+        await query("SELECT payload FROM scheduled_messages WHERE id=$1", [
+          job.id,
+        ])
+      ).rows,
+    ).includes("SECRET SCHEDULE"),
+  );
+  await query(
+    "UPDATE encryption_devices SET revoked_at=NOW() WHERE user_id=$1",
+    [b.userId],
+  );
+  await query(
+    "UPDATE scheduled_messages SET due_at=NOW()-INTERVAL '1 second' WHERE id=$1",
+    [job.id],
+  );
+  await require("../src/services/experienceWorker.service").run();
+  assert.equal(
+    (await query("SELECT status FROM scheduled_messages WHERE id=$1", [job.id]))
+      .rows[0].status,
+    "needs_review",
+  );
+  assert.equal(
+    (
+      await query("SELECT 1 FROM messages WHERE room_id=$1 AND client_id=$2", [
+        id,
+        clientId,
+      ])
+    ).rowCount,
+    0,
+  );
+  assert.equal(
+    (await request(`/experience/schedules/${job.id}`, b.token)).status,
+    404,
+  );
+  const rotated = protocol.rotateDevice(bv);
+  assert.equal(
+    (
+      await request(
+        "/encryption/devices",
+        b.token,
+        "POST",
+        protocol.publicDevice(rotated),
+      )
+    ).status,
+    201,
+  );
+  const updatedRoster = (await request(`/encryption/rooms/${id}`, a.token)).body
+    .data;
+  const replacement = protocol.sealMessage(av, updatedRoster, {
+    roomId: id,
+    clientId,
+    content: "REVIEWED SECRET",
+  });
+  const reviewed = await request(
+    `/experience/schedules/${job.id}/review`,
+    a.token,
+    "POST",
+    {
+      roomId: id,
+      payload: { roomId: id, clientId, encryptedPayload: replacement },
+      dueAt: new Date(Date.now() + 60000).toISOString(),
+    },
+  );
+  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  await query(
+    "UPDATE scheduled_messages SET due_at=NOW()-INTERVAL '1 second' WHERE id=$1",
+    [job.id],
+  );
+  await require("../src/services/experienceWorker.service").run();
+  assert.equal(
+    (await query("SELECT status FROM scheduled_messages WHERE id=$1", [job.id]))
+      .rows[0].status,
+    "sent",
+  );
+  const delivered = (await request(`/messages/room/${id}`, b.token)).body.data
+    .messages[0];
+  assert.equal(
+    protocol.openMessage(rotated, delivered).content,
+    "REVIEWED SECRET",
+  );
+});
+test("ux: private saved notes cannot admit anyone else and bookmarks are personal", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b);
+  const personal = (await request("/experience/saved-room", a.token, "POST"))
+    .body.data;
+  assert.equal(
+    (
+      await request(`/rooms/${personal.id}/members`, a.token, "POST", {
+        userId: b.userId,
+      })
+    ).status >= 400,
+    true,
+  );
+  assert.equal((await request(`/rooms/${personal.id}`, b.token)).status, 403);
+  assert.equal(
+    (await request("/experience/saved-room", a.token, "POST")).body.data.id,
+    personal.id,
+  );
+  const msg = (
+    await request("/messages", a.token, "POST", {
+      roomId: id,
+      content: "Saved privately",
+    })
+  ).body.data;
+  assert.equal(
+    (
+      await request(`/messages/${msg.id}/pin`, a.token, "PUT", {
+        scope: "user",
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (await request("/experience/saved", a.token)).body.data.messages.length,
+    1,
+  );
+  assert.equal(
+    (await request("/experience/saved", b.token)).body.data.messages.length,
+    0,
+  );
+  await request(`/rooms/${id}/clear`, a.token, "POST");
+  assert.equal(
+    (await request("/experience/saved", a.token)).body.data.messages.length,
+    0,
+  );
+});
+test("ux: reminders create a durable private notification exactly once", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b);
+  const msg = (
+    await request("/messages", a.token, "POST", {
+      roomId: id,
+      content: "Remember me",
+    })
+  ).body.data;
+  const reminder = (
+    await request("/experience/reminders", b.token, "POST", {
+      messageId: msg.id,
+      dueAt: new Date(Date.now() + 60000).toISOString(),
+    })
+  ).body.data;
+  assert.ok(reminder.id);
+  await query(
+    "UPDATE message_reminders SET due_at=NOW()-INTERVAL '1 second' WHERE id=$1",
+    [reminder.id],
+  );
+  const worker = require("../src/services/experienceWorker.service");
+  await Promise.all([worker.run(), worker.run()]);
+  assert.equal(
+    (
+      await query(
+        "SELECT COUNT(*)::int AS n FROM notifications WHERE recipient_id=$1 AND type='reminder' AND reference_id=$2",
+        [b.userId, msg.id],
+      )
+    ).rows[0].n,
+    1,
+  );
+  assert.equal(
+    (await request("/experience/reminders", a.token)).body.data.length,
+    0,
+  );
+});
+test("ux: disappearing messages obey admin policy and expire before cleanup runs", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b);
+  assert.equal(
+    (
+      await request(`/experience/rooms/${id}/retention`, b.token, "PATCH", {
+        seconds: 86400,
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(`/experience/rooms/${id}/retention`, a.token, "PATCH", {
+        seconds: 86400,
+      })
+    ).status,
+    200,
+  );
+  const clientId = randomUUID();
+  const msg = (
+    await request("/messages", a.token, "POST", {
+      roomId: id,
+      content: "Temporary body",
+      clientId,
+    })
+  ).body.data;
+  assert.ok(msg.expires_at);
+  const attachmentId = randomUUID(),
+    objectKey = `expiry/${randomUUID()}`;
+  await query(
+    "INSERT INTO attachments(id,message_id,filename,file_url,file_type,size_bytes,public_id,resource_type) VALUES($1,$2,'expiry.txt',$3,'text/plain',4,$4,'r2')",
+    [attachmentId, msg.id, `r2://fixture/${objectKey}`, objectKey],
+  );
+  await query(
+    "UPDATE messages SET expires_at=NOW()-INTERVAL '1 second' WHERE id=$1",
+    [msg.id],
+  );
+  assert.equal(
+    (await request(`/messages/room/${id}`, b.token)).body.data.messages.length,
+    0,
+  );
+  assert.equal(
+    (await request(`/messages/room/${id}?ids=${msg.id}`, b.token)).body.data
+      .missingIds[0],
+    msg.id,
+  );
+  assert.equal(
+    (
+      await request(`/messages/${msg.id}`, a.token, "PATCH", {
+        content: "Reappearing body",
+      })
+    ).status,
+    404,
+  );
+  assert.equal(
+    (
+      await request(`/messages/${msg.id}/reactions`, b.token, "PUT", {
+        emoji: "🚀",
+      })
+    ).status,
+    404,
+  );
+  assert.equal(
+    (await request(`/attachments/${attachmentId}`, b.token)).status,
+    404,
+  );
+  assert.equal(
+    (
+      await request(`/messages/${msg.id}/pin`, a.token, "PUT", {
+        scope: "user",
+      })
+    ).status,
+    404,
+  );
+  const retry = await request("/messages", a.token, "POST", {
+    roomId: id,
+    clientId,
+    content: "Temporary body",
+  });
+  assert.equal(retry.status, 201);
+  assert.equal(retry.body.data.id, msg.id);
+  assert.equal(retry.body.data.content, null);
+  const pollResponse = await request("/polls", a.token, "POST", {
+    roomId: id,
+    question: "Temporary poll",
+    options: ["A", "B"],
+  });
+  assert.equal(pollResponse.status, 201);
+  const pollMessage = pollResponse.body.data;
+  await query(
+    "UPDATE messages SET expires_at=NOW()-INTERVAL '1 second' WHERE id=$1",
+    [pollMessage.id],
+  );
+  assert.equal(
+    (
+      await request(`/polls/${pollMessage.poll.id}/vote`, b.token, "PUT", {
+        optionIds: [],
+      })
+    ).status,
+    404,
+  );
+  assert.equal(
+    (await request(`/polls/${pollMessage.poll.id}/close`, a.token, "POST"))
+      .status,
+    404,
+  );
+  await require("../src/services/experienceWorker.service").run();
+  assert.equal(
+    (await query("SELECT 1 FROM polls WHERE message_id=$1", [pollMessage.id]))
+      .rowCount,
+    0,
+  );
+
+  assert.equal(
+    (
+      await query("SELECT 1 FROM storage_deletion_jobs WHERE object_key=$1", [
+        objectKey,
+      ])
+    ).rowCount,
+    1,
+  );
+  const row = (
+    await query(
+      "SELECT content,encrypted_payload,deleted_at FROM messages WHERE id=$1",
+      [msg.id],
+    )
+  ).rows[0];
+  assert.equal(row.content, null);
+  assert.ok(row.deleted_at);
+});
+test("ux: duration, mention levels, DND and admin broadcast mentions are enforced", async () => {
+  const a = await account(),
+    b = await account(),
+    id = await room(a, b);
+  const prefs = await request(
+    `/experience/rooms/${id}/notifications`,
+    b.token,
+    "PATCH",
+    { level: "mentions", mute: "hour" },
+  );
+  assert.equal(prefs.status, 200);
+  assert.ok(prefs.body.data.mute_until);
+  const kept = await request(
+    `/experience/rooms/${id}/notifications`,
+    b.token,
+    "PATCH",
+    { level: "all", mute: "keep" },
+  );
+  assert.equal(kept.body.data.mute_until, prefs.body.data.mute_until);
+  const policy = require("../src/services/notificationPolicy.service");
+  assert.equal(
+    policy.allowsInterruption(
+      { notification_level: "mentions" },
+      "new_message",
+    ),
+    false,
+  );
+  assert.equal(
+    policy.allowsInterruption({ notification_level: "mentions" }, "mention"),
+    true,
+  );
+  assert.equal(
+    policy.allowsInterruption(
+      { dnd_until: new Date(Date.now() + 60000).toISOString() },
+      "mention",
+    ),
+    false,
+  );
+  const focus = await request(
+    "/experience/personal-settings",
+    b.token,
+    "PATCH",
+    { status: "Focused", dnd: "hour" },
+  );
+  assert.equal(focus.status, 200);
+  assert.equal(focus.body.data.custom_status, "Focused");
+  const keptFocus = await request(
+    "/experience/personal-settings",
+    b.token,
+    "PATCH",
+    { status: "Still focused", dnd: "keep" },
+  );
+  assert.equal(keptFocus.body.data.dnd_until, focus.body.data.dnd_until);
+  assert.equal(
+    (
+      await request("/messages", b.token, "POST", {
+        roomId: id,
+        content: "@channel attention",
+        broadcastMention: "channel",
+      })
+    ).status,
+    403,
+  );
+  const mention = await request("/messages", a.token, "POST", {
+    roomId: id,
+    content: "@channel attention",
+    broadcastMention: "channel",
+  });
+  assert.equal(mention.status, 201);
+  assert.equal(
+    (
+      await query(
+        "SELECT 1 FROM message_mentions WHERE message_id=$1 AND user_id=$2",
+        [mention.body.data.id, b.userId],
+      )
+    ).rowCount,
+    1,
+  );
+});

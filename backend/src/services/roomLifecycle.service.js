@@ -38,7 +38,7 @@ async function state(roomId, userId) {
     cleared_at: member.cleared_at,
     preferences: (
       await db.query(
-        "SELECT pinned,muted,archived FROM room_member_preferences WHERE room_id=$1 AND user_id=$2",
+        "SELECT pinned,(muted OR COALESCE(mute_until>NOW(),FALSE) OR notification_level='none') AS muted,archived FROM room_member_preferences WHERE room_id=$1 AND user_id=$2",
         [roomId, userId],
       )
     ).rows[0] || { pinned: false, muted: false, archived: false },
@@ -104,6 +104,7 @@ async function invite(roomId, userId, values) {
   return locked(roomId, userId, async (db, room, member) => {
     if (
       room.type === "dm" ||
+      room.personal_for ||
       (member.role !== "admin" && !room.member_can_invite)
     )
       throw new ApiError(403, "You cannot create room invitations");
@@ -188,7 +189,7 @@ async function enter({ roomId, token, userId }) {
     const room = (
       await db.query("SELECT * FROM rooms WHERE id=$1 FOR UPDATE", [roomId])
     ).rows[0];
-    if (!room || room.type === "dm" || room.superseded_by)
+    if (!room || room.type === "dm" || room.personal_for || room.superseded_by)
       throw new ApiError(404, "Room is not available to join");
     let link;
     if (token) {

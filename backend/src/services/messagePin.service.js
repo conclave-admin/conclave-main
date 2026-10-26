@@ -101,7 +101,7 @@ async function getMessageWithPins(messageId, viewerId) {
        FROM messages m
        INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
        INNER JOIN users u ON u.id = m.sender_id
-      WHERE m.id = $1`,
+      WHERE m.id = $1 AND message_visible(m.id,$2)`,
     [messageId, viewerId],
   );
 
@@ -135,6 +135,7 @@ async function pinMessage({ messageId, userId, scope, io }) {
     throw new ApiError(403, "You are not a member of this room");
   }
 
+  await getMessageWithPins(messageId, userId);
   if (scope === "room") {
     const existing = await query(
       `SELECT mp.user_id, u.display_name

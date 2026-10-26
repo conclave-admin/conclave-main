@@ -1,3 +1,7 @@
+import useExpiryClock from "../../hooks/useExpiryClock";
+import { readDraft } from "../../lib/drafts";
+import Modal from "../ui/Modal";
+import Button from "../ui/Button";
 import { api } from "@/lib/api";
 import { useRealtime } from "@/contexts/RealtimeContext";
 import { subscribeToRoom } from "@/lib/roomSubscriptions";
@@ -43,6 +47,18 @@ export default function ChatRow({ room }) {
     toggleArchive,
   } = useChats();
   const { user } = useAuth();
+  const [draft, setDraft] = useState(() => readDraft(user?.id, room.id));
+  useEffect(() => {
+    const update = () => setDraft(readDraft(user?.id, room.id));
+    update();
+    window.addEventListener("conclave:drafts-changed", update);
+    window.addEventListener("storage", update);
+    return () => {
+      window.removeEventListener("conclave:drafts-changed", update);
+      window.removeEventListener("storage", update);
+    };
+  }, [user?.id, room.id]);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const navigate = useNavigate();
   const { socket } = useRealtime();
   const [actionError, setActionError] = useState("");
@@ -57,6 +73,12 @@ export default function ChatRow({ room }) {
   const isPinned = pinned.includes(room.id);
   const isMuted = muted.includes(room.id);
   const isArchived = archived.includes(room.id);
+  useExpiryClock([room.last_message]);
+  const lastMessage =
+    room.last_message?.expires_at &&
+    new Date(room.last_message.expires_at) <= new Date()
+      ? null
+      : room.last_message;
   const unread = room.unread_count || 0;
 
   return (
@@ -96,15 +118,22 @@ export default function ChatRow({ room }) {
                 room.has_message ? "text-muted" : "text-muted/70"
               }`}
             >
-              {recordingByRoom.get(room.id)?.size
-                ? "recording a voice message…"
-                : typingByRoom.get(room.id)?.size
-                  ? "typing…"
-                  : room.type !== "dm" &&
-                      room.last_message?.sender_id !== user?.id &&
-                      room.last_message?.sender_name
-                    ? `${room.last_message.sender_name}: ${formatRoomPreview(room.last_message)}`
-                    : formatRoomPreview(room.last_message)}
+              {draft.text ? (
+                <>
+                  <strong className="text-brand">Draft: </strong>
+                  {draft.text}
+                </>
+              ) : recordingByRoom.get(room.id)?.size ? (
+                "recording a voice message…"
+              ) : typingByRoom.get(room.id)?.size ? (
+                "typing…"
+              ) : room.type !== "dm" &&
+                room.last_message?.sender_id !== user?.id &&
+                room.last_message?.sender_name ? (
+                `${room.last_message.sender_name}: ${formatRoomPreview(lastMessage)}`
+              ) : (
+                formatRoomPreview(lastMessage)
+              )}
             </span>
 
             <span className="flex shrink-0 items-center gap-1.5">
@@ -146,6 +175,55 @@ export default function ChatRow({ room }) {
         <IconMore className="h-4 w-4" aria-hidden="true" />
       </button>
 
+      <Modal
+        open={confirmDelete}
+        title="Delete this chat?"
+        onClose={() => !deleting && setConfirmDelete(false)}
+        closeDisabled={deleting}
+      >
+        <p className="text-body text-muted">
+          This clears your existing history and hides this chat on your devices.
+          Other people keep their messages. New messages bring it back. Group
+          membership and pending sends are kept.
+        </p>
+        {actionError && (
+          <p role="alert" className="mt-3 text-error">
+            {actionError}
+          </p>
+        )}
+        <div className="mt-5 flex gap-3">
+          <Button
+            variant="secondary"
+            disabled={deleting}
+            onClick={() => setConfirmDelete(false)}
+          >
+            Keep chat
+          </Button>
+          <Button
+            disabled={deleting}
+            onClick={async () => {
+              setDeleting(true);
+              setActionError("");
+              try {
+                await api.delete(`/rooms/${room.id}/chat`);
+                await refresh();
+                setConfirmDelete(false);
+                navigate("/chats");
+              } catch (e) {
+                setActionError(
+                  e.response?.data?.message ||
+                    "Could not delete chat. Try again when connected.",
+                );
+              } finally {
+                setDeleting(false);
+                setMenuOpen(false);
+              }
+            }}
+          >
+            {deleting ? "Deleting…" : "Delete chat for me"}
+          </Button>
+        </div>
+      </Modal>
       <PopoverMenu
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
@@ -154,33 +232,32 @@ export default function ChatRow({ room }) {
         label={`Actions for ${room.display_name}`}
         className="w-44"
       >
+        {room.last_message?._previewState && (
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full px-3 py-2 text-left text-body text-brand"
+            onClick={() => {
+              setMenuOpen(false);
+              room.last_message._previewState === "keys"
+                ? navigate("/settings#security-recovery")
+                : refresh();
+            }}
+          >
+            {room.last_message._previewState === "keys"
+              ? "Restore message access"
+              : "Retry message preview"}
+          </button>
+        )}
         <button
           type="button"
           role="menuitem"
           disabled={deleting}
           className="w-full rounded-md px-2.5 py-2 text-left text-body text-error"
-          onClick={async () => {
-            if (
-              !window.confirm(
-                "Delete this chat for your account? Other people keep their messages. New messages will bring the chat back. Group membership and pending sends are kept.",
-              )
-            )
-              return;
-            setDeleting(true);
+          onClick={() => {
+            setMenuOpen(false);
             setActionError("");
-            try {
-              await api.delete(`/rooms/${room.id}/chat`);
-              await refresh();
-              navigate("/chats");
-            } catch (e) {
-              setActionError(
-                e.response?.data?.message ||
-                  "Could not delete chat. Try again when connected.",
-              );
-            } finally {
-              setDeleting(false);
-              setMenuOpen(false);
-            }
+            setConfirmDelete(true);
           }}
         >
           Delete chat

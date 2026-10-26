@@ -1,3 +1,4 @@
+import AttentionSettings from "../components/settings/AttentionSettings";
 import { usePush } from "../contexts/PushContext";
 import PrivacySecuritySettings from "../components/settings/PrivacySecuritySettings";
 import EncryptionSettings from "../components/settings/EncryptionSettings";
@@ -142,7 +143,12 @@ export default function Settings() {
       </p>
 
       <PrivacySecuritySettings />
-      <details className="mt-6 rounded-xl border border-line p-4">
+      <AttentionSettings />
+      <details
+        id="security-recovery"
+        className="mt-6 rounded-xl border border-line p-4"
+        open={window.location.hash === "#security-recovery"}
+      >
         <summary className="cursor-pointer text-label text-ink">
           Security and recovery
         </summary>

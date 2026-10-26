@@ -1,3 +1,4 @@
+import { containDialog, isTopDialog } from "../../lib/dialogFocus";
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import IconClose from "@/assets/icons/close.svg?react";
@@ -60,14 +61,24 @@ export default function Modal({
     if (!open) return undefined;
     restoreFocusTo.current = document.activeElement;
     dialogRef.current?.focus();
-    return () => restoreFocusTo.current?.focus?.();
+    const release = containDialog(dialogRef.current);
+    return () => {
+      release();
+      restoreFocusTo.current?.focus?.();
+    };
   }, [open]);
 
   useEffect(() => {
     if (!open) return undefined;
 
     const onKeyDown = (event) => {
-      if (event.key === "Escape" && !closeDisabled) onClose?.();
+      if (
+        isTopDialog(dialogRef.current) &&
+        !dialogRef.current?.querySelector('[role="menu"]') &&
+        event.key === "Escape" &&
+        !closeDisabled
+      )
+        onClose?.();
     };
     document.addEventListener("keydown", onKeyDown);
 

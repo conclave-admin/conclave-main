@@ -26,7 +26,12 @@ const ApiError = require("../utils/ApiError");
 // What each notification type points at. Adding a type means adding it here and
 // writing a resolver branch; a type in the database with no entry here is
 // rejected at write time rather than becoming a row nothing can render.
-const MESSAGE_TARGET_TYPES = ["mention", "new_message", "file_uploaded"];
+const MESSAGE_TARGET_TYPES = [
+  "mention",
+  "new_message",
+  "file_uploaded",
+  "reminder",
+];
 const ROOM_TARGET_TYPES = ["room_invite", "member_joined"];
 // Added in phase 8: flagging a message as a task told nobody. The assignee had
 // no way to learn about it short of opening the board.
@@ -39,6 +44,7 @@ const NOTIFICATION_TYPES = [
 ];
 
 const TARGET_OF = {
+  reminder: "message",
   mention: "message",
   new_message: "message",
   file_uploaded: "message",
@@ -72,6 +78,7 @@ async function createNotification({
   type,
   referenceId = null,
   actorId = null,
+  dedupeKey,
   db,
 }) {
   if (!recipientId) {
@@ -96,15 +103,16 @@ async function createNotification({
       type,
       referenceId,
       actorId,
-      MESSAGE_TARGET_TYPES.includes(type) && referenceId
-        ? `${recipientId}:${type}:${referenceId}`
-        : null,
+      dedupeKey ||
+        (MESSAGE_TARGET_TYPES.includes(type) && referenceId
+          ? `${recipientId}:${type}:${referenceId}`
+          : null),
     ],
   );
   if (rows.length) return rows[0];
   return (
     await run("SELECT * FROM notifications WHERE dedupe_key=$1", [
-      `${recipientId}:${type}:${referenceId}`,
+      dedupeKey || `${recipientId}:${type}:${referenceId}`,
     ])
   ).rows[0];
 }

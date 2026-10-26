@@ -68,3 +68,54 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+  browser:
+    needs: [backend, client]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://app:app@127.0.0.1:5432/postgres
+      REDIS_URL: redis://127.0.0.1:6379
+      PLAYWRIGHT_WORKERS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            client/package-lock.json
+      - run: npm ci --prefix backend
+      - run: npm ci --prefix client
+      - run: npx playwright install --with-deps chromium
+        working-directory: client
+      - name: Messaging recovery and responsive regressions
+        run: npx playwright test --config playwright.recovery.config.js
+        working-directory: client
+      - name: Encryption, media, permissions and experience checks
+        run: npx playwright test --config playwright.security.config.js
+        working-directory: client
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-failures
+          path: client/e2e/test-results
+          retention-days: 7
+          if-no-files-found: ignore

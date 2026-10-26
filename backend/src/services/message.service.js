@@ -67,6 +67,8 @@ async function createMessage({
   clientId,
   content,
   replyToId,
+  threadRootId,
+  broadcastMention,
   attachments,
   albumId,
   mentionedUserIds,
@@ -172,6 +174,8 @@ async function createMessage({
 
   // 3. Work out who is mentioned, before the insert, so the rows can be written
   //    in the same transaction as the message.
+  if (broadcastMention && !["here", "channel"].includes(broadcastMention))
+    throw new ApiError(400, "Invalid broadcast mention");
   let mentionedIds = forwardSource
     ? []
     : await resolveMentionIds({
@@ -200,7 +204,7 @@ async function createMessage({
 
     if (clientId) {
       const existing = await client.query(
-        `SELECT id, room_id, sender_id, client_id, room_sequence, content, reply_to_id, album_id, forwarded,
+        `SELECT id, room_id, sender_id, client_id, room_sequence, content, reply_to_id, thread_root_id, expires_at, album_id, forwarded,
                 edited_at, deleted_at, created_at
            FROM messages WHERE room_id = $1 AND sender_id = $2 AND client_id = $3`,
         [roomId, senderId, clientId],
@@ -217,6 +221,15 @@ async function createMessage({
     }
 
     if (!isRetry) {
+      if (threadRootId) {
+        if (!/^[0-9a-f-]{36}$/i.test(threadRootId))
+          throw new ApiError(400, "Invalid thread root");
+        const root = await client.query(
+          "SELECT 1 FROM messages WHERE id=$1 AND room_id=$2 AND thread_root_id IS NULL AND deleted_at IS NULL AND message_visible(id,$3)",
+          [threadRootId, roomId, senderId],
+        );
+        if (!root.rowCount) throw new ApiError(404, "Thread is unavailable");
+      }
       const activeMember = (
         await client.query(
           "SELECT role FROM room_members WHERE room_id=$1 AND user_id=$2",
@@ -225,6 +238,23 @@ async function createMessage({
       ).rows[0];
       if (!activeMember)
         throw new ApiError(403, "You are not a member of this room");
+      if (broadcastMention) {
+        if (activeMember.role !== "admin")
+          throw new ApiError(403, "Only admins may notify a whole room");
+        let audience = (
+          await client.query(
+            "SELECT user_id FROM room_members WHERE room_id=$1 AND user_id<>$2",
+            [roomId, senderId],
+          )
+        ).rows.map((r) => r.user_id);
+        if (broadcastMention === "here") {
+          const online = new Set(
+            await require("./presence.service").getRoomOnlineUsers(roomId),
+          );
+          audience = audience.filter((id) => online.has(id));
+        }
+        mentionedIds = [...new Set([...mentionedIds, ...audience])];
+      }
       if (lockedRoom.member_can_send === false && activeMember.role !== "admin")
         throw new ApiError(403, "Only admins can send messages in this room");
       if (lockedRoom.superseded_by)
@@ -354,10 +384,10 @@ async function createMessage({
       );
 
       const result = await client.query(
-        `INSERT INTO messages (room_id, sender_id, client_id, room_sequence, content, reply_to_id, album_id, forwarded,encrypted_payload)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8,$9)
+        `INSERT INTO messages (room_id, sender_id, client_id, room_sequence, content, reply_to_id, album_id, forwarded,encrypted_payload,thread_root_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8,$9,$10)
          RETURNING id, room_id, sender_id, client_id, room_sequence, content, reply_to_id,
-                   album_id, forwarded, edited_at, deleted_at, created_at`,
+                   album_id, forwarded, thread_root_id, expires_at, edited_at, deleted_at, created_at`,
         [
           roomId,
           senderId,
@@ -372,6 +402,7 @@ async function createMessage({
           albumId || null,
           Boolean(forwardSource),
           encrypted,
+          threadRootId || null,
         ],
       );
       message = result.rows[0];
@@ -533,7 +564,22 @@ async function createMessage({
     senderId,
     [message.id],
   );
-  const payload = result.messages[0];
+  // A lost acknowledgement can be retried after the message expired or was
+  // personally cleared. Acknowledge the existing ID without reviving its body.
+  const payload = result.messages[0] || {
+    id: message.id,
+    room_id: roomId,
+    sender_id: senderId,
+    client_id: clientId,
+    room_sequence: message.room_sequence,
+    created_at: message.created_at,
+    expires_at: message.expires_at,
+    content: null,
+    encrypted_payload: null,
+    is_deleted: true,
+    deleted_at: message.deleted_at || new Date().toISOString(),
+    attachments: [],
+  };
   payload._idempotentRetry = isRetry;
 
   return payload;
@@ -731,7 +777,7 @@ async function loadMessageForAction({
             (rm.role = 'admin') AS is_room_admin
      FROM messages m
      INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-     WHERE m.id = $1`,
+     WHERE m.id = $1 AND message_visible(m.id,$2)`,
     [messageId, userId],
   );
 
@@ -938,7 +984,7 @@ async function addReaction({ messageId, userId, emoji }) {
     `SELECT 1
      FROM messages m
      INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
-     WHERE m.id = $1 AND m.deleted_at IS NULL`,
+     WHERE m.id = $1 AND m.deleted_at IS NULL AND message_visible(m.id,$2)`,
     [messageId, userId],
   );
   if (membership.rows.length === 0) {

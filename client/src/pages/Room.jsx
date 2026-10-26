@@ -1,3 +1,10 @@
+import { useSyncReconciler } from "../contexts/SyncContext";
+import { api } from "../lib/api";
+import ConversationPolicyNotice from "../components/chat/ConversationPolicyNotice";
+import ThreadPanel from "../components/chat/ThreadPanel";
+import { readPosition, savePosition } from "../lib/readingPosition";
+import { readDraft } from "../lib/drafts";
+import { conversationMessageVisible } from "../lib/clearedConversations";
 import { respondToRequest } from "../services/security.service";
 import { activeReadView } from "../lib/messageReads";
 import MessageInfoDialog from "../components/chat/MessageInfoDialog";
@@ -46,12 +53,29 @@ import useRoom from "../hooks/useRoom";
 export default function Room() {
   const { roomId } = useParams();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const anchorId = searchParams.get("message") || null;
   const { isConnected, socket } = useRealtime();
   const { setRoomHeader } = useOutletContext();
   const { user } = useAuth();
   const viewerId = user?.id;
+  const positionScope = `${viewerId}:${roomId}`;
+  const [positionState, setPositionState] = useState(() => ({
+    scope: positionScope,
+    value: readPosition(viewerId, roomId),
+  }));
+  const storedPosition =
+    positionState.scope === positionScope
+      ? positionState.value
+      : readPosition(viewerId, roomId);
+  const setStoredPosition = (value) =>
+    setPositionState({ scope: positionScope, value });
+  useEffect(
+    () => setStoredPosition(readPosition(viewerId, roomId)),
+    [viewerId, roomId],
+  );
+  const historyAnchor =
+    anchorId || (!storedPosition?.atBottom ? storedPosition?.id : null);
   const { toast } = useToast();
   const [browserOnline, setBrowserOnline] = useState(
     () => typeof navigator === "undefined" || navigator.onLine !== false,
@@ -63,7 +87,24 @@ export default function Room() {
     reload: reloadRoom,
   } = useRoom(roomId);
   const [messageInfo, setMessageInfo] = useState(null);
+  const [threadCounts, setThreadCounts] = useState({});
+  const [threadCountsRevision, setThreadCountsRevision] = useState(0);
+  useSyncReconciler(
+    async (batch) => {
+      if (batch.reset || batch.changes.some((c) => c.kind === "preferences"))
+        setThreadCountsRevision((v) => v + 1);
+    },
+    [roomId],
+  );
   const [replyTo, setReplyTo] = useState(null);
+  useEffect(() => {
+    const draft = readDraft(viewerId, roomId);
+    setReplyTo(
+      draft.reply && conversationMessageVisible(draft.reply, viewerId, roomId)
+        ? draft.reply
+        : null,
+    );
+  }, [viewerId, roomId]);
   const [editing, setEditing] = useState(null);
   const [editDraft, setEditDraft] = useState("");
   const [deleting, setDeleting] = useState(null);
@@ -72,6 +113,9 @@ export default function Room() {
   const [creatingPoll, setCreatingPoll] = useState(false);
   const [forwarding, setForwarding] = useState(null);
   const [threadRoot, setThreadRoot] = useState(null);
+  useEffect(() => {
+    setThreadRoot(null);
+  }, [roomId]);
   const [jumpTarget, setJumpTarget] = useState(null);
   const [highlightedId, setHighlightedId] = useState(null);
 
@@ -84,6 +128,8 @@ export default function Room() {
       // Selected objects can outlive the filtered timeline. Drop their old text
       // without touching the composer's draft or the durable pending outbox.
       setReplyTo(null);
+      savePosition(viewerId, roomId, null);
+      setStoredPosition(null);
       setThreadRoot(null);
       setMessageInfo(null);
       setEditing(null);
@@ -131,7 +177,44 @@ export default function Room() {
     deliveredSequences,
     deliveryIds,
     lastSeenSequence,
-  } = useMessages(roomError && !room ? null : roomId, members, anchorId);
+  } = useMessages(roomError && !room ? null : roomId, members, historyAnchor);
+
+  useEffect(() => {
+    if (messagesError && !anchorId && storedPosition?.id) {
+      savePosition(viewerId, roomId, null);
+      setStoredPosition(null);
+    }
+  }, [messagesError, anchorId, viewerId, roomId, storedPosition?.id]);
+  const threadCountKey = messages
+    .map((m) => `${m.id}:${m.thread_root_id || ""}:${m.deleted_at || ""}`)
+    .join("|");
+  useEffect(() => {
+    let active = true;
+    const ids = [
+      ...new Set(
+        messages
+          .map((m) => m.thread_root_id || m.id)
+          .filter((id) => /^[0-9a-f-]{36}$/i.test(id)),
+      ),
+    ];
+    (async () => {
+      const counts = {};
+      for (let i = 0; i < ids.length; i += 200) {
+        try {
+          const result = (
+            await api.get(`/experience/rooms/${roomId}/thread-counts`, {
+              params: { ids: ids.slice(i, i + 200).join(",") },
+            })
+          ).data.data;
+          for (const row of result.threads) counts[row.id] = row;
+        } catch {}
+      }
+      if (active) setThreadCounts(counts);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [roomId, threadCountKey, threadCountsRevision]);
 
   useEffect(() => {
     setHighlightedId(null);
@@ -173,6 +256,12 @@ export default function Room() {
     messagesError,
     toast,
   ]);
+
+  useEffect(() => {
+    const id = searchParams.get("thread");
+    const root = messages.find((m) => m.id === id);
+    if (root) setThreadRoot(root);
+  }, [searchParams, messages]);
 
   const jumpToMessage = (message) => {
     if (!message?.id) return;
@@ -352,6 +441,7 @@ export default function Room() {
           not a grid item, so auto-placement would renumber the rows when either
           strip is empty. */}
       <div className="row-start-1 min-w-0">
+        <ConversationPolicyNotice room={room} />
         {anchorId && (
           <div
             className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2 text-metadata text-muted"
@@ -377,6 +467,7 @@ export default function Room() {
 
       <div
         ref={scrollContainerRef}
+        data-message-scroll
         className="row-start-2 min-h-0 overflow-y-auto overscroll-contain [overflow-anchor:none]"
       >
         {/* Catch-up belongs to the cross-room digest. Room read pointers move
@@ -392,7 +483,19 @@ export default function Room() {
           </p>
         ) : (
           <MessageTimeline
-            messages={messages}
+            messages={messages.map((m) => ({
+              ...m,
+              thread_count: threadCounts[m.thread_root_id || m.id]?.reply_count,
+              thread_unread:
+                threadCounts[m.thread_root_id || m.id]?.unread_count,
+              ...(m.id === anchorId
+                ? {
+                    _searchMatch: true,
+                    _searchQuery: searchParams.get("q") || "",
+                  }
+                : {}),
+            }))}
+            initialPosition={!anchorId ? storedPosition : null}
             scrollContainerRef={scrollContainerRef}
             viewerId={viewerId}
             members={membersWithPointers}
@@ -518,10 +621,12 @@ export default function Room() {
             }}
             onSend={async (payload) => {
               await sendMessage(payload);
+              setStoredPosition(null);
               if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
             }}
             onSendMedia={async (items) => {
               await sendMedia(items);
+              setStoredPosition(null);
               if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
             }}
             isOnline={browserOnline && isConnected}
@@ -567,73 +672,28 @@ export default function Room() {
       />
 
       {threadRoot && (
-        <aside
-          role="complementary"
-          aria-label="Message thread"
-          className="fixed inset-x-0 bottom-16 top-16 z-40 flex flex-col border-l border-line bg-surface shadow-modal md:bottom-0 md:left-auto md:w-[min(400px,40vw)]"
-        >
-          <header className="flex items-center justify-between border-b border-line px-4 py-3">
-            <div>
-              <h2 className="text-h2 text-ink">Thread</h2>
-              <p className="text-metadata text-muted">
-                {
-                  messages.filter(
-                    (message) => message.reply_to_id === threadRoot.id,
-                  ).length
-                }{" "}
-                replies
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setThreadRoot(null)}
-              aria-label="Close thread"
-              className="rounded-lg px-3 py-2 text-label text-muted hover:bg-canvas"
-            >
-              Close
-            </button>
-          </header>
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            <article className="rounded-xl bg-canvas p-3">
-              <p className="text-metadata font-medium text-muted">
-                {threadRoot.sender_name || "Member"}
-              </p>
-              <p className="mt-1 whitespace-pre-wrap break-words text-body text-ink">
-                {messageSummary(threadRoot)}
-              </p>
-            </article>
-            <div className="my-4 border-t border-line" />
-            <div className="space-y-3">
-              {messages
-                .filter((message) => message.reply_to_id === threadRoot.id)
-                .map((message) => (
-                  <article
-                    key={message.id}
-                    className="rounded-xl border border-line p-3"
-                  >
-                    <p className="text-metadata font-medium text-muted">
-                      {message.sender_name || "Member"}
-                    </p>
-                    <p className="mt-1 whitespace-pre-wrap break-words text-body text-ink">
-                      {messageSummary(message)}
-                    </p>
-                  </article>
-                ))}
-            </div>
-          </div>
-          <div className="border-t border-line p-3">
-            <button
-              type="button"
-              onClick={() => {
-                setReplyTo(threadRoot);
-                setThreadRoot(null);
-              }}
-              className="w-full rounded-lg bg-brand px-4 py-2.5 text-label font-semibold text-surface"
-            >
-              Reply in thread
-            </button>
-          </div>
-        </aside>
+        <ThreadPanel
+          root={threadRoot}
+          room={room}
+          onClose={() => {
+            setThreadRoot(null);
+            setSearchParams(
+              (previous) => {
+                const next = new URLSearchParams(previous);
+                next.delete("thread");
+                return next;
+              },
+              { replace: true },
+            );
+          }}
+          onSend={sendMessage}
+          onSendMedia={sendMedia}
+          deliveryIds={deliveryIds}
+          pending={messages.filter(
+            (m) =>
+              m.thread_root_id === (threadRoot.thread_root_id || threadRoot.id),
+          )}
+        />
       )}
 
       <Modal

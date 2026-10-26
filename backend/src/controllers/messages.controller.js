@@ -42,6 +42,8 @@ const sendMessage = asyncHandler(async (req, res) => {
   const {
     content,
     replyToId,
+    threadRootId,
+    broadcastMention,
     attachments,
     albumId,
     mentionedUserIds,
@@ -60,6 +62,8 @@ const sendMessage = asyncHandler(async (req, res) => {
     clientId,
     content,
     replyToId,
+    threadRootId,
+    broadcastMention,
     attachments,
     albumId,
     mentionedUserIds,
@@ -113,6 +117,11 @@ const listMessages = asyncHandler(async (req, res) => {
     throw new ApiError(403, "You are not a member of this room");
   }
 
+  if (
+    req.query.context !== undefined &&
+    (req.query.context !== "viewport" || !req.query.around)
+  )
+    throw new ApiError(400, "Invalid history context");
   let anchorSequence = null;
   if (req.query.around !== undefined) {
     if (
@@ -132,6 +141,13 @@ const listMessages = asyncHandler(async (req, res) => {
     if (!anchor.rows.length)
       throw new ApiError(404, "Message no longer available");
     anchorSequence = anchor.rows[0].room_sequence;
+    if (req.query.context === "viewport") {
+      const newer = await query(
+        "SELECT MAX(room_sequence)::text AS sequence FROM (SELECT room_sequence FROM messages WHERE room_id=$1 AND room_sequence>$2 AND message_visible(id,$3) ORDER BY room_sequence LIMIT 20) context",
+        [roomId, anchorSequence, req.user.id],
+      );
+      anchorSequence = newer.rows[0].sequence || anchorSequence;
+    }
   }
 
   // 2. Fetch messages — cursor-based pagination via created_at
@@ -152,7 +168,7 @@ const listMessages = asyncHandler(async (req, res) => {
       -- tombstone — see BACKEND_TASKS.md Bug 7.
       CASE WHEN m.deleted_at IS NOT NULL THEN NULL ELSE m.content END AS content,
       m.deleted_at IS NOT NULL AS is_deleted,
-      m.reply_to_id,
+      m.thread_root_id,m.expires_at,m.reply_to_id,
       m.edited_at,
       m.deleted_at,
       m.created_at,
@@ -231,7 +247,7 @@ const listMessages = asyncHandler(async (req, res) => {
   const ascending = afterSeq !== undefined;
   sql += `
     GROUP BY m.id, m.room_id, m.sender_id, u.profile_version, u.display_name, u.avatar_url,
-             m.client_id, m.album_id, m.forwarded, m.room_sequence, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
+             m.client_id, m.album_id, m.forwarded, m.room_sequence, m.content, m.thread_root_id,m.expires_at,m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
     ORDER BY m.room_sequence ${ascending ? "ASC" : "DESC"} LIMIT $${params.length + 1}`;
   params.push(ascending ? 200 : PAGE_SIZE);
 
@@ -339,7 +355,7 @@ const searchMessages = asyncHandler(async (req, res) => {
        u.profile_version AS sender_profile_version,u.display_name AS sender_name,
        u.avatar_url   AS sender_avatar,
        m.content,
-       m.reply_to_id,
+       m.thread_root_id,m.expires_at,m.reply_to_id,
        m.edited_at,
        m.deleted_at,
        m.deleted_at IS NOT NULL AS is_deleted,
@@ -381,7 +397,7 @@ const searchMessages = asyncHandler(async (req, res) => {
        AND to_tsvector('english', m.content) @@ plainto_tsquery('english', $2)
      GROUP BY m.id, m.room_id, m.sender_id, m.client_id, m.room_sequence, u.profile_version, u.display_name, u.avatar_url,
               m.album_id,
-      m.forwarded, m.content, m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
+      m.forwarded, m.content, m.thread_root_id,m.expires_at,m.reply_to_id, m.edited_at, m.deleted_at, m.created_at
      ORDER BY rank DESC, m.created_at DESC
      LIMIT 50`,
     [roomId, q.trim(), req.user.id],

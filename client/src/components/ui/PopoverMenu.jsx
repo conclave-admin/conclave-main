@@ -53,6 +53,7 @@ export default function PopoverMenu({
   align = "end",
   followScroll = false,
   label,
+  popupRole = "menu",
   className = "",
   children,
 }) {
@@ -114,10 +115,45 @@ export default function PopoverMenu({
   }, [open, place]);
 
   useEffect(() => {
+    if (!open || !menuRef.current || typeof ResizeObserver === "undefined")
+      return undefined;
+    const observer = new ResizeObserver(place);
+    observer.observe(menuRef.current);
+    return () => observer.disconnect();
+  }, [open, place]);
+
+  useEffect(() => {
     if (!open) return undefined;
 
     const onKeyDown = (event) => {
-      if (event.key === "Escape") onClose?.();
+      if (event.key === "Escape") {
+        onClose?.();
+        triggerRef?.current?.focus();
+        return;
+      }
+      if (popupRole !== "menu" || event.target?.closest?.("em-emoji-picker"))
+        return;
+      if (
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement
+      )
+        return;
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      const items = [
+        ...menuRef.current.querySelectorAll("button:not([disabled]),a[href]"),
+      ].filter((el) => el.getClientRects().length);
+      if (!items.length) return;
+      event.preventDefault();
+      const current = items.indexOf(document.activeElement);
+      const next =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? items.length - 1
+            : event.key === "ArrowDown"
+              ? (current + 1) % items.length
+              : (current - 1 + items.length) % items.length;
+      items[next].focus();
     };
 
     // Capture phase, and both nodes treated as inside. Capture matters because
@@ -163,14 +199,14 @@ export default function PopoverMenu({
       document.removeEventListener("wheel", userScroll, true);
       document.removeEventListener("touchmove", userScroll, true);
     };
-  }, [open, onClose, triggerRef, followScroll, place]);
+  }, [open, onClose, triggerRef, followScroll, place, popupRole]);
 
   if (!open) return null;
 
   return createPortal(
     <div
       ref={menuRef}
-      role={label ? "menu" : undefined}
+      role={label ? popupRole : undefined}
       aria-label={label}
       className={`fixed z-50 rounded-lg border border-line bg-surface p-1 shadow-modal ${className}`}
       style={{
@@ -181,6 +217,6 @@ export default function PopoverMenu({
     >
       {children}
     </div>,
-    document.body,
+    triggerRef?.current?.closest('[role="dialog"]') || document.body,
   );
 }

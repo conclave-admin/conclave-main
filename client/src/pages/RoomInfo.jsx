@@ -1,3 +1,4 @@
+import AdvancedConversationSettings from "../components/chat/AdvancedConversationSettings";
 import ConversationManagement, {
   PersonalHistoryActions,
 } from "../components/chat/ConversationManagement";
@@ -723,6 +724,7 @@ export default function RoomInfo() {
         </section>
       )}
 
+      <AdvancedConversationSettings room={room} />
       <ConversationManagement
         key={`management:${user.id}:${roomId}`}
         room={room}

@@ -103,7 +103,29 @@ export function ChatsProvider({ children }) {
         return;
       }
       try {
-        const loaded = await listRooms();
+        const loaded = await listRooms({
+          onPreview: (roomId, message) => {
+            if (
+              currentUser.current !== userId ||
+              version !== refreshGeneration.current
+            )
+              return;
+            setRooms((old) =>
+              old.map((room) =>
+                room.id === roomId &&
+                (!message ||
+                  conversationMessageVisible(message, userId, roomId)) &&
+                (!room.last_message || room.last_message.id === message?.id)
+                  ? {
+                      ...room,
+                      last_message: message,
+                      has_message: Boolean(message),
+                    }
+                  : room,
+              ),
+            );
+          },
+        });
         if (
           currentUser.current === userId &&
           membershipEpoch.current === epoch

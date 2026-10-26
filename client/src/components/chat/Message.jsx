@@ -1,3 +1,6 @@
+import { Link } from "react-router-dom";
+import { ReminderAction } from "./MessageLater";
+import MessageBody from "./MessageBody";
 import Avatar from "@/components/ui/Avatar";
 import { usePresence } from "@/contexts/PresenceContext";
 import { formatClockTime, messageSummary, readStatus } from "@/lib/messageMeta";
@@ -43,30 +46,6 @@ function Tick({ status }) {
 }
 
 /**
- * Highlight @tokens in a message body.
- *
- * Styling only — this deliberately does not resolve anybody. The API says
- * display names are not unique, so text cannot tell two members apart; the
- * authoritative list is `mentioned_user_ids`, which is recorded at send time.
- * Painting a token is safe because it changes no identity and notifies nobody.
- */
-function renderContent(text) {
-  if (!text) return null;
-  return text.split(/(@[\w.]+)/).map((part, index) =>
-    part.startsWith("@") ? (
-      <span
-        key={index}
-        className="rounded bg-brand-soft px-0.5 font-medium text-brand"
-      >
-        {part}
-      </span>
-    ) : (
-      part
-    ),
-  );
-}
-
-/**
  * One message row.
  *
  * Own messages sit right in brand, others left on a soft surface, per section 6.
@@ -108,6 +87,7 @@ export default function Message({
   const { isOnlineIn, getPresence } = usePresence();
   const mine = message.sender_id === viewerId;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [reminderOpen, setReminderOpen] = useState(false);
   const bodyRef = useRef(null);
   const longPress = useLongPress(() => setMenuOpen(true), {
     disabled: message.is_deleted || message._optimistic,
@@ -172,6 +152,25 @@ export default function Message({
           <span className="truncate text-label text-ink">{senderName}</span>
         )}
 
+        {!message._optimistic && !message.is_deleted && (
+          <ReminderAction
+            messageId={message.id}
+            externalOpen={reminderOpen}
+            hideTrigger
+            onClose={() => setReminderOpen(false)}
+          />
+        )}
+        {message.thread_count > 0 && !message.is_deleted && (
+          <button
+            type="button"
+            className="min-h-9 text-label text-brand"
+            onClick={() => onOpenThread?.(message)}
+          >
+            {message.thread_count}{" "}
+            {message.thread_count === 1 ? "reply" : "replies"}
+            {message.thread_unread ? ` · ${message.thread_unread} unread` : ""}
+          </button>
+        )}
         {message.forwarded && !message.is_deleted && (
           <p className="text-metadata italic text-muted">Forwarded</p>
         )}
@@ -213,10 +212,18 @@ export default function Message({
                 role="status"
                 className="max-w-full break-words text-metadata text-muted"
               >
-                {message._cryptoError}
+                This message isn’t available on this device. Open Security and
+                recovery in Settings to connect or restore this device.
+                <Link
+                  to="/settings#security-recovery"
+                  className="ml-1 underline"
+                >
+                  Restore message access
+                </Link>
               </p>
             )}
             {message.content &&
+              !message._cryptoError &&
               (message.poll ? (
                 <PollCard
                   message={message}
@@ -225,7 +232,11 @@ export default function Message({
                 />
               ) : (
                 <div className={bubbleClass}>
-                  {renderContent(message.content)}
+                  <MessageBody
+                    text={message.content}
+                    forceExpanded={Boolean(message._searchMatch)}
+                    query={message._searchQuery || ""}
+                  />
                 </div>
               ))}
 
@@ -259,6 +270,10 @@ export default function Message({
                   onOpenChange={setMenuOpen}
                   anchorRef={bodyRef}
                   align={mine ? "end" : "start"}
+                  onRemind={() => {
+                    setMenuOpen(false);
+                    setReminderOpen(true);
+                  }}
                   onToggleReaction={(emoji) => onToggleReaction(message, emoji)}
                   onMessageInfo={
                     mine && onMessageInfo

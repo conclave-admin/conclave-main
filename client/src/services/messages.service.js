@@ -46,7 +46,7 @@ export async function listMessages(roomId, before, afterSeq, around) {
   }
   const { data } = await api.get(`/messages/room/${roomId}`, {
     params: around
-      ? { around }
+      ? { around, context: "viewport" }
       : afterSeq !== undefined
         ? { afterSeq }
         : before
