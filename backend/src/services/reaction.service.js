@@ -1,54 +1,32 @@
-// Message reactions — the allowlist, and the one shape every surface returns.
-//
-// The table shipped in migration 001 with no validation and no writer, so the
-// emoji column was free text and nothing read it. Two things are decided here so
-// they cannot be decided twice:
-//
-// 1. Which emoji are allowed. Constrained in the schema by
-//    message_reactions_emoji_check (migration 013), and re-checked in the
-//    controller so the client gets a useful 400 instead of an opaque 23514.
-//
-//    A heart is deliberately absent. ❤️ has two encodings — U+2764 and U+2764
-//    U+FE0F — and Postgres compares code points, so the two are different strings:
-//    both can be inserted against a UNIQUE (message_id, user_id, emoji)
-//    constraint, producing two rows for what looks like one reaction. The four
-//    below each have exactly one byte sequence.
-//
-// 2. The wire shape. Aggregated in SQL rather than assembled client-side, so a
-//    client does not have to count and re-group to render a chip. `reacted` is
-//    per viewer, which is why it needs the caller's id and why the same message
-//    has a different reaction shape for different people.
-//
-// The UNIQUE constraint is (message_id, user_id, emoji) and is named
-// message_reactions_message_id_user_id_emoji_key by Postgres. It is named
-// explicitly in ON CONFLICT rather than catching every violation as a 409,
-// because a bare ON CONFLICT DO NOTHING would also swallow a genuine duplicate
-// that ought to surface.
-
-const REACTION_EMOJI = ["\u{1F44D}", "\u{1F44E}", "\u{1F389}", "\u{2705}"];
-
-// Emojis with a variation-selector variant are excluded on purpose — see the
-// header comment. Keep this list and migration 013 in step.
+// Use the same native sequences the client picker offers. Rejecting arbitrary
+// strings at the API keeps reactions bounded without a hand-maintained SQL list.
+// Emoji Mart's canonical sequences also avoid visually duplicate variants such
+// as a bare heart and the fully qualified red heart.
+const data = require("@emoji-mart/data");
+const REACTION_EMOJI = [
+  ...new Set(
+    Object.values(data.emojis).flatMap((entry) =>
+      entry.skins.map((skin) => skin.native),
+    ),
+  ),
+];
 const ALLOWED_EMOJI = new Set(REACTION_EMOJI);
+const EMOJI_ORDER = new Map(
+  REACTION_EMOJI.map((emoji, index) => [emoji, index]),
+);
 
 const { query } = require("../config/db");
 const ApiError = require("../utils/ApiError");
 
 /**
- * Throw unless `emoji` is in the allowlist.
- *
- * The database enforces this too; this exists so an unknown emoji is a 400 with a
- * useful message rather than a 23514 mapped to "A field failed validation".
+ * Throw unless `emoji` is one canonical native emoji from Emoji Mart.
  *
  * @param {string} emoji
  * @returns {string} the emoji, validated
  */
 function assertAllowedEmoji(emoji) {
   if (typeof emoji !== "string" || !ALLOWED_EMOJI.has(emoji)) {
-    throw new ApiError(
-      400,
-      `Unsupported reaction. Allowed: ${REACTION_EMOJI.join(" ")}`,
-    );
+    throw new ApiError(400, "Choose a supported emoji reaction");
   }
   return emoji;
 }
@@ -78,10 +56,12 @@ function aggregateReactions(rows, viewerId = null) {
     byEmoji.set(row.emoji, current);
   }
 
-  // Ordered by the allowlist, not by row order, so the same message always
-  // renders its chips in the same order.
-  const ordered = REACTION_EMOJI.filter((emoji) => byEmoji.has(emoji)).map(
-    (emoji) => byEmoji.get(emoji),
+  // Catalog order is stable and does not require scanning every available
+  // emoji for every message page.
+  const ordered = [...byEmoji.values()].sort(
+    (a, b) =>
+      (EMOJI_ORDER.get(a.emoji) ?? Infinity) -
+      (EMOJI_ORDER.get(b.emoji) ?? Infinity),
   );
 
   return ordered.map((entry) => ({

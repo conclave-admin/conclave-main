@@ -185,3 +185,23 @@ test("recovered key bundles reject inconsistent signing secret suffixes and own-
     /identity changed/,
   );
 });
+
+test("encrypted thread context cannot be reassigned to another root", () => {
+  const a = crypto.createVault("alice"),
+    b = crypto.createVault("bob");
+  const payload = {
+    roomId: "room",
+    clientId: "thread-client",
+    content: "Thread reply",
+    threadRootId: "root",
+  };
+  const row = {
+    ...message(crypto.sealMessage(a, roster(a, b), payload), payload, a),
+    thread_root_id: "root",
+  };
+  assert.equal(crypto.openMessage(b, row).content, "Thread reply");
+  assert.throws(
+    () => crypto.openMessage(b, { ...row, thread_root_id: "other" }),
+    /thread context/,
+  );
+});

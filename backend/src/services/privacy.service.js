@@ -97,8 +97,10 @@ async function present(data, viewerId, db = { query }) {
       "bio" in row &&
       permissions.has(row.id) &&
       !permissions.get(row.id).about
-    )
+    ) {
       row.bio = null;
+      row.custom_status = null;
+    }
     if (
       "sender_avatar" in row &&
       permissions.has(row.sender_id) &&

@@ -23,7 +23,11 @@ export async function resolveChatPreview(roomId, message) {
     const decoded = result.messages.find((m) => m.id === message.id);
     if (!decoded) return null;
     if (!decoded._decrypted)
-      return { ...message, content: "Message unavailable on this device" };
+      return {
+        ...message,
+        content: "Connect this device to view the message",
+        _previewState: "keys",
+      };
     return {
       ...message,
       ...decoded,
@@ -32,11 +36,15 @@ export async function resolveChatPreview(roomId, message) {
     };
   } catch (error) {
     if (getSessionUserId() !== account) throw error;
-    return { ...message, content: "Message unavailable on this device" };
+    return {
+      ...message,
+      content: "Connect to load this message",
+      _previewState: "network",
+    };
   }
 }
 
-export async function listRooms() {
+export async function listRooms({ onPreview } = {}) {
   if (isDevAuthBypass) return previewRooms;
   const userId = getSessionUserId();
   const { data } = await api.get("/rooms");
@@ -50,17 +58,35 @@ export async function listRooms() {
       );
   const rows = data.data;
   let index = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(4, rows.length) }, async () => {
-      while (index < rows.length) {
-        const room = rows[index++];
-        room.last_message = await resolveChatPreview(
-          room.id,
-          room.last_message,
-        );
-      }
-    }),
-  );
+  const resolveAll = () =>
+    Promise.all(
+      Array.from({ length: Math.min(4, rows.length) }, async () => {
+        while (index < rows.length) {
+          const room = rows[index++];
+          room.last_message = await resolveChatPreview(
+            room.id,
+            room.last_message,
+          );
+          if (getSessionUserId() !== userId) throw new Error("Account changed");
+          onPreview?.(room.id, room.last_message);
+        }
+      }),
+    );
+  if (onPreview) {
+    void resolveAll().catch(() => {});
+    return rows.map((room) => ({
+      ...room,
+      last_message:
+        room.last_message?.content === "[Encrypted message]"
+          ? {
+              ...room.last_message,
+              content: "Loading message…",
+              _previewLoading: true,
+            }
+          : room.last_message,
+    }));
+  }
+  await resolveAll();
   if (getSessionUserId() !== userId) throw new Error("Account changed");
   return rows;
 }

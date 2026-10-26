@@ -29,6 +29,7 @@ const AccountRecovery = lazy(() => import("./pages/AccountRecovery"));
 const Room = lazy(() => import("./pages/Room"));
 const RoomInfo = lazy(() => import("./pages/RoomInfo"));
 const Settings = lazy(() => import("./pages/Settings"));
+const MessageActivity = lazy(() => import("./pages/MessageActivity"));
 const Tasks = lazy(() => import("./pages/Tasks"));
 
 // Keep public-page illustrations and content outside the signed-in app bundle.
@@ -122,6 +123,10 @@ export default function App() {
 
                           {/* Stub behind the sidebar's "Invite members" and the mobile
                       compose button. */}
+                          <Route
+                            path="/activity"
+                            element={<MessageActivity />}
+                          />
                           <Route path="/new" element={<NewChat />} />
                           <Route path="/discover" element={<DiscoverRooms />} />
 
@@ -147,7 +152,7 @@ export default function App() {
                         </Route>
                       </Route>
 
-                      <Route path="/join" element={<JoinRoom/>}/>
+                      <Route path="/join" element={<JoinRoom />} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </Suspense>

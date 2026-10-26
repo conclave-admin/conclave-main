@@ -15,6 +15,7 @@ export function draftMessage(item, senderName = "You") {
     sender_name: senderName,
     content: item.payload.content || "",
     reply_to_id: item.payload.replyToId || null,
+    thread_root_id: item.payload.threadRootId || null,
     album_id: item.payload.albumId || null,
     forwarded: Boolean(item.payload.forwardSource),
     attachments: item.media

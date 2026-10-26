@@ -7743,6 +7743,20 @@ dbTest(
     assert.equal(context.messages.length, 50);
     assert.equal(context.messages[0].id, anchor.id);
     assert.equal(context.nextCursor, "6");
+    const viewportRes = await fetch(
+      `${baseUrl}/api/messages/room/${chat.id}?around=${anchor.id}&context=viewport`,
+      { headers },
+    );
+    assert.equal(viewportRes.status, 200);
+    const viewport = (await viewportRes.json()).data;
+    assert.ok(viewport.messages.some((m) => m.id === anchor.id));
+    assert.ok(
+      viewport.messages.some(
+        (m) => BigInt(m.room_sequence) > BigInt(anchor.room_sequence),
+      ),
+      "viewport context leaves room below the reading anchor",
+    );
+
     assert.equal(
       context.messages.some((item) => item.id === inserted.id),
       false,

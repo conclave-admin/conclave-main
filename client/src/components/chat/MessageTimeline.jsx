@@ -1,3 +1,4 @@
+import { readPosition, savePosition } from "../../lib/readingPosition";
 import { observeMessageReads } from "../../lib/messageReads";
 import {
   Fragment,
@@ -51,6 +52,7 @@ const NEAR_BOTTOM_PX = 120;
  * @param {{ current: HTMLElement }} scrollContainerRef
  */
 export default function MessageTimeline({
+  initialPosition,
   messages,
   scrollContainerRef,
   viewerId,
@@ -145,13 +147,23 @@ export default function MessageTimeline({
       const atBottom = distance <= NEAR_BOTTOM_PX;
       stickRef.current = atBottom;
       setShowJump(!atBottom);
+      const viewport = container.getBoundingClientRect();
+      const visible = [...container.querySelectorAll("[data-message-id]")].find(
+        (el) => el.getBoundingClientRect().bottom > viewport.top,
+      );
+      if (visible)
+        savePosition(viewerId, roomId, {
+          id: visible.dataset.messageId,
+          offset: visible.getBoundingClientRect().top - viewport.top,
+          atBottom,
+        });
       if (atBottom) setNewBelow(0);
     };
 
     handleScroll();
     container.addEventListener("scroll", handleScroll, { passive: true });
     return () => container.removeEventListener("scroll", handleScroll);
-  }, [scrollContainerRef]);
+  }, [scrollContainerRef, viewerId, roomId]);
 
   // Runs before paint, so the reader never sees the top of the room flash by.
   useLayoutEffect(() => {
@@ -168,13 +180,21 @@ export default function MessageTimeline({
     if (placedRoomRef.current !== roomId) {
       // 1. First paint opens at the unread boundary when one exists.
       placedRoomRef.current = roomId;
+      const savedTarget =
+        initialPosition &&
+        !initialPosition.atBottom &&
+        container.querySelector(
+          `[data-message-id="${CSS.escape(initialPosition.id)}"]`,
+        );
       const target =
-        firstUnreadId &&
-        container.querySelector(`[data-message-id="${firstUnreadId}"]`);
+        savedTarget ||
+        (firstUnreadId &&
+          container.querySelector(`[data-message-id="${firstUnreadId}"]`));
       if (target) {
         container.scrollTop +=
           target.getBoundingClientRect().top -
-          container.getBoundingClientRect().top;
+          container.getBoundingClientRect().top -
+          (savedTarget ? initialPosition.offset : 0);
         stickRef.current = false;
       } else {
         container.scrollTop = container.scrollHeight;

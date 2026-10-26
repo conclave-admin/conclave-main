@@ -1,3 +1,4 @@
+import { containDialog, isTopDialog } from "../../lib/dialogFocus";
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import IconClose from "@/assets/icons/close.svg?react";
@@ -32,14 +33,23 @@ export default function Sheet({
     if (!open) return undefined;
     restoreFocusTo.current = document.activeElement;
     panelRef.current?.focus();
-    return () => restoreFocusTo.current?.focus?.();
+    const release = containDialog(panelRef.current);
+    return () => {
+      release();
+      restoreFocusTo.current?.focus?.();
+    };
   }, [open]);
 
   useEffect(() => {
     if (!open) return undefined;
 
     const onKeyDown = (event) => {
-      if (event.key === "Escape") onClose?.();
+      if (
+        isTopDialog(panelRef.current) &&
+        !panelRef.current?.querySelector('[role="menu"]') &&
+        event.key === "Escape"
+      )
+        onClose?.();
     };
     document.addEventListener("keydown", onKeyDown);
 

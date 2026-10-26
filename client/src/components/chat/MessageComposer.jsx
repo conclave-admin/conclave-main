@@ -1,11 +1,16 @@
+import { ScheduleMessage } from "./MessageLater";
+import { useAuth } from "../../contexts/AuthContext";
+import { readDraft, writeDraft } from "../../lib/drafts";
 import { voiceRecordingFile, voiceRecorderOptions } from "@/lib/voiceRecording";
 import { createActivitySender } from "@/lib/conversationActivity";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import IconClose from "@/assets/icons/close.svg?react";
 import IconMention from "@/assets/icons/mention.svg?react";
 import IconSend from "@/assets/icons/send.svg?react";
 import IconMic from "@/assets/icons/mic.svg?react";
+import IconReaction from "@/assets/icons/reaction.svg?react";
 import { createClientId } from "@/lib/outbox";
+import PopoverMenu from "@/components/ui/PopoverMenu";
 import {
   isAccepted,
   isImage,
@@ -18,6 +23,7 @@ import { MAX_VIDEO_INPUT_BYTES } from "@/lib/videoCompression";
 import AttachmentPicker from "./AttachmentPicker";
 import AttachmentPreviewDialog from "./AttachmentPreviewDialog";
 import MentionPicker from "./MentionPicker";
+import EmojiPicker from "./EmojiPicker";
 
 const MAX_LINES = 5;
 
@@ -73,15 +79,56 @@ export default function MessageComposer({
   // needs to accept the placement the parent decides rather than hardcoding one.
   className = "",
 }) {
-  const [content, setContent] = useState("");
+  const { user: draftUser } = useAuth();
+  const draftOwner = `${draftUser?.id}:${activityScope}`;
+  const restoredDraft = useRef(null);
+  const skipDraftWrite = useRef(true);
+  const [content, setContent] = useState(
+    () => readDraft(draftUser?.id, activityScope).text,
+  );
+  useLayoutEffect(() => {
+    const draft = readDraft(draftUser?.id, activityScope);
+    restoredDraft.current = draftOwner;
+    skipDraftWrite.current = true;
+    setContent(draft.text);
+    selectionRef.current = { start: draft.text.length, end: draft.text.length };
+    return () => {
+      restoredDraft.current = null;
+    };
+  }, [draftOwner]);
+  useEffect(() => {
+    if (skipDraftWrite.current) {
+      skipDraftWrite.current = false;
+      return;
+    }
+    if (restoredDraft.current === draftOwner)
+      writeDraft(
+        draftUser?.id,
+        activityScope,
+        content,
+        replyTo
+          ? {
+              id: replyTo.id,
+              sender_name: replyTo.sender_name,
+              content: replyTo.content,
+              room_sequence: replyTo.room_sequence,
+              created_at: replyTo.created_at,
+              expires_at: replyTo.expires_at,
+            }
+          : null,
+      );
+  }, [content, replyTo, draftOwner]);
   const [error, setError] = useState("");
   const [pendingFiles, setPendingFiles] = useState([]);
   const [sending, setSending] = useState(false);
   const [mentionQuery, setMentionQuery] = useState(null);
   const [mentionedIds, setMentionedIds] = useState([]);
   const [recording, setRecording] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
 
   const textareaRef = useRef(null);
+  const emojiTriggerRef = useRef(null);
+  const selectionRef = useRef({ start: content.length, end: content.length });
   const callbacks = useMemo(() => ({ current: null }), [activityScope]);
   callbacks.current = { onTyping, onStopTyping, onRecording, onStopRecording };
   const activityRef = useRef(null);
@@ -167,7 +214,8 @@ export default function MessageComposer({
   }, [disabled, isOnline, recording]);
 
   const handleTextChange = (event) => {
-    const { value, selectionStart } = event.target;
+    const { value, selectionStart, selectionEnd } = event.target;
+    selectionRef.current = { start: selectionStart, end: selectionEnd };
     setContent(value);
     setError("");
     activityRef.current?.textChanged(value);
@@ -193,6 +241,30 @@ export default function MessageComposer({
     const match = before.match(/@([^\s@]*)$/);
     setMentionQuery(match ? match[1] : null);
   };
+
+  const insertEmoji = (emoji) => {
+    const { start, end } = selectionRef.current;
+    const next = `${content.slice(0, start)}${emoji}${content.slice(end)}`;
+    const caret = start + emoji.length;
+    selectionRef.current = { start: caret, end: caret };
+    setContent(next);
+    setError("");
+    setMentionQuery(null);
+    setMentionedIds((current) =>
+      current.filter((id) => {
+        const person = members.find((member) => member.id === id);
+        return person && next.includes(`@${person.display_name}`);
+      }),
+    );
+    activityRef.current?.textChanged(next);
+    setEmojiOpen(false);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(caret, caret);
+    });
+  };
+
+  useEffect(() => setEmojiOpen(false), [activityScope]);
 
   const applyMention = (member) => {
     const el = textareaRef.current;
@@ -328,6 +400,7 @@ export default function MessageComposer({
   const reset = () => {
     activityRef.current?.endTyping();
     setContent("");
+    selectionRef.current = { start: 0, end: 0 };
     setMentionedIds([]);
     setMentionQuery(null);
     onCancelReply?.();
@@ -343,6 +416,7 @@ export default function MessageComposer({
     try {
       await onSend({
         content: text,
+        broadcastMention: text.match(/(?:^|\s)@(here|channel)\b/)?.[1],
         replyToId: replyTo?.id,
         attachments: [],
         mentionedUserIds: mentionedIds,
@@ -524,6 +598,26 @@ export default function MessageComposer({
             onTask={onCreateTask}
           />
           <button
+            ref={emojiTriggerRef}
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              const input = textareaRef.current;
+              if (input)
+                selectionRef.current = {
+                  start: input.selectionStart,
+                  end: input.selectionEnd,
+                };
+              setEmojiOpen((open) => !open);
+            }}
+            aria-label="Insert emoji"
+            aria-haspopup="dialog"
+            aria-expanded={emojiOpen}
+            className="grid h-8 w-8 place-items-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40"
+          >
+            <IconReaction className="h-5 w-5" aria-hidden="true" />
+          </button>
+          <button
             type="button"
             disabled={disabled}
             onClick={() => {
@@ -567,6 +661,12 @@ export default function MessageComposer({
           ref={textareaRef}
           value={content}
           onChange={handleTextChange}
+          onSelect={(event) => {
+            selectionRef.current = {
+              start: event.target.selectionStart,
+              end: event.target.selectionEnd,
+            };
+          }}
           onBlur={() => activityRef.current?.endTyping()}
           onKeyDown={handleKeyDown}
           rows={1}
@@ -594,6 +694,29 @@ export default function MessageComposer({
         )}
       </div>
 
+      <PopoverMenu
+        open={emojiOpen}
+        onClose={() => setEmojiOpen(false)}
+        triggerRef={emojiTriggerRef}
+        side="top"
+        align="start"
+        label="Choose an emoji"
+        popupRole="dialog"
+        className="w-[min(352px,calc(100vw-16px))] max-h-[calc(100dvh-16px)] overflow-y-auto"
+      >
+        <EmojiPicker onPick={insertEmoji} />
+      </PopoverMenu>
+
+      {!disabled &&
+        !pendingFiles.length &&
+        /^[0-9a-f-]{36}$/i.test(activityScope || "") &&
+        content.trim() && (
+          <ScheduleMessage
+            room={{ id: activityScope }}
+            text={content}
+            onScheduled={reset}
+          />
+        )}
       {error && pendingFiles.length === 0 && (
         <p role="alert" className="mt-2 px-1 text-metadata text-error">
           {error}

@@ -1,3 +1,4 @@
+import EmojiPicker from "./EmojiPicker";
 import { useRef, useState } from "react";
 // compose.svg, not an "edit" icon: the set has no pencil glyph, and compose and
 // edit are the same gesture — a pen writing on a surface. Inventing one asset
@@ -15,7 +16,6 @@ import IconTasks from "@/assets/icons/tasks.svg?react";
 import IconInfo from "@/assets/icons/info.svg?react";
 import IconThread from "@/assets/icons/thread.svg?react";
 import PopoverMenu from "@/components/ui/PopoverMenu";
-import { REACTION_EMOJI } from "@/lib/messageMeta";
 
 /**
  * Per-message actions.
@@ -55,6 +55,7 @@ import { REACTION_EMOJI } from "@/lib/messageMeta";
  * @param {{ onReply: Function, onEdit: Function, onDelete: Function, onPromote: Function, onFlagTask: Function, onPin: Function, onUnpin: Function }} handlers
  */
 export default function MessageActions({
+  onRemind,
   message,
   viewerId,
   isAdmin,
@@ -211,40 +212,28 @@ export default function MessageActions({
         triggerRef={menuAnchor}
         align={align}
         label="Message actions"
-        className="w-52"
+        className="w-[min(352px,calc(100vw-16px))] max-h-[calc(100dvh-16px)] overflow-y-auto"
       >
-        <div
-          role="group"
-          aria-label="React to this message"
-          className="mb-1 flex justify-between gap-1 border-b border-line px-1 pb-1.5 pt-0.5"
-        >
-          {REACTION_EMOJI.map((emoji) => {
-            const already = message.reactions?.find(
-              (r) => r.emoji === emoji,
-            )?.reacted;
-            return (
-              <button
-                key={emoji}
-                type="button"
-                role="menuitem"
-                aria-pressed={already}
-                onClick={() => {
-                  setOpen(false);
-                  onToggleReaction(emoji);
-                }}
-                className={`grid h-9 w-9 place-items-center rounded-lg text-body transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
-                  already ? "bg-brand-soft" : ""
-                }`}
-              >
-                <span aria-hidden="true">{emoji}</span>
-                <span className="sr-only">
-                  {already ? `Remove ${emoji} reaction` : `React with ${emoji}`}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <EmojiPicker
+          onPick={(emoji) => {
+            setOpen(false);
+            onToggleReaction(emoji);
+          }}
+        />
 
+        {onRemind && (
+          <button
+            type="button"
+            role="menuitem"
+            className="min-h-11 w-full rounded-lg px-3 text-left text-body text-ink hover:bg-canvas"
+            onClick={() => {
+              setOpen(false);
+              onRemind();
+            }}
+          >
+            Remind me
+          </button>
+        )}
         {items.map(({ key, label, Icon, onClick, danger }) => (
           <button
             key={key}

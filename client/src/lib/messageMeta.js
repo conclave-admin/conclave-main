@@ -7,17 +7,6 @@
  * another.
  */
 
-/**
- * The server's reaction allowlist, in its order.
- *
- * Mirrors `REACTION_EMOJI` in backend/src/services/reaction.service.js and the
- * CHECK constraint in migration 013 — all three must stay in step. A heart is
- * deliberately absent: ❤️ has two encodings (U+2764 and U+2764 U+FE0F) and
- * Postgres treats them as different strings, so it would either be rejected or
- * stack twice against the unique constraint. These four have one encoding each.
- */
-export const REACTION_EMOJI = ["👍", "👎", "🎉", "✅"];
-
 /** Human-readable fallback for attachment-only messages in reply and pin quotes. */
 export function messageSummary(message) {
   if (!message) return "Message";

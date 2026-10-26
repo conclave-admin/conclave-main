@@ -16,6 +16,7 @@ import Page from "@/components/layout/Page";
 // ROOM_TARGET_TYPES and TASK_TARGET_TYPES); an unknown one still renders rather
 // than throwing, because a new server-side type should not blank this page.
 const TYPES = {
+  reminder: { label: "Reminder", dot: "bg-brand" },
   mention: { label: "Mention", dot: "bg-brand" },
   new_message: { label: "New message", dot: "bg-muted" },
   file_uploaded: { label: "File shared", dot: "bg-brand" },

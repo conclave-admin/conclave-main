@@ -22,6 +22,17 @@ async function account(request, name) {
   expect(result.status()).toBe(201);
   return (await result.json()).data;
 }
+async function openSecurity(page) {
+  const section = page
+    .locator("details")
+    .filter({
+      has: page.locator("summary").filter({ hasText: "Security and recovery" }),
+    })
+    .first();
+  await section.waitFor();
+  if (!(await section.evaluate((el) => el.open)))
+    await section.locator("summary").first().click();
+}
 async function login(page, session) {
   await page.goto("/login");
   await page.evaluate((s) => {
@@ -30,6 +41,7 @@ async function login(page, session) {
     localStorage.setItem("conclave.session-user", JSON.stringify(s.user));
   }, session);
   await page.goto("/settings");
+  await openSecurity(page);
   await expect(
     page.getByText("This device is ready for encrypted conversations.", {
       exact: true,
@@ -75,8 +87,12 @@ test("real browsers encrypt text, offline drafts and files, receive privately an
     const text = "E2EE-PRIVATE-TEXT ".repeat(180);
     await composer.fill(text);
     await composer.press("Enter");
+    await recipient
+      .getByRole("button", { name: "Read more", exact: true })
+      .first()
+      .click();
     await expect(
-      recipient.getByText(text.trim(), { exact: true }),
+      recipient.locator("article").getByText(text.trim(), { exact: true }),
     ).toBeVisible();
     const stored = await request.get(`${API}/messages/room/${room.id}`, {
       headers: { authorization: `Bearer ${receiver.accessToken}` },
@@ -86,8 +102,12 @@ test("real browsers encrypt text, offline drafts and files, receive privately an
     expect(rows[0].encrypted_payload).toBeTruthy();
     expect(JSON.stringify(rows)).not.toContain("E2EE-PRIVATE-TEXT");
     await recipient.reload();
+    await recipient
+      .getByRole("button", { name: "Read more", exact: true })
+      .first()
+      .click();
     await expect(
-      recipient.getByText(text.trim(), { exact: true }),
+      recipient.locator("article").getByText(text.trim(), { exact: true }),
     ).toBeVisible();
     await page.context().setOffline(true);
     await composer.fill("E2EE-OFFLINE-QUEUED");
@@ -100,7 +120,9 @@ test("real browsers encrypt text, offline drafts and files, receive privately an
     ).toBeVisible();
     await page.context().setOffline(false);
     await expect(
-      recipient.getByText("E2EE-OFFLINE-QUEUED", { exact: true }),
+      recipient
+        .locator("article")
+        .getByText("E2EE-OFFLINE-QUEUED", { exact: true }),
     ).toBeVisible();
     const secret = Buffer.from("%PDF-1.4\nSECRET DOCUMENT CONTENT\n%%EOF");
     await page.locator('input[type="file"][multiple]').first().setInputFiles({
@@ -117,7 +139,9 @@ test("real browsers encrypt text, offline drafts and files, receive privately an
       .fill("E2EE-PRIVATE-CAPTION");
     await editor.getByRole("button", { name: "Send", exact: true }).click();
     await expect(
-      recipient.getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
+      recipient
+        .locator("article")
+        .getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
     ).toBeVisible();
     const mediaRows = (
       await (
@@ -148,6 +172,7 @@ test("real browsers encrypt text, offline drafts and files, receive privately an
       ),
     ).toBe(true);
     await recipient.goto("/settings");
+    await openSecurity(recipient);
     await recipient
       .getByRole("button", {
         name: "Create or replace encrypted backup",
@@ -172,7 +197,9 @@ test("real browsers encrypt text, offline drafts and files, receive privately an
     ).toBeVisible();
     await recipient.goto(`/chats/${room.id}`);
     await expect(
-      recipient.getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
+      recipient
+        .locator("article")
+        .getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
     ).toBeVisible();
     await recipient.goto(`/chats/${room.id}/info`);
     await recipient
@@ -195,15 +222,21 @@ test("real browsers encrypt text, offline drafts and files, receive privately an
     await composer.press("Enter");
     await recipient.goto(`/chats/${room.id}`);
     await expect(
-      recipient.getByText("Encrypted message after personal clear", {
-        exact: true,
-      }),
+      recipient
+        .locator("article")
+        .getByText("Encrypted message after personal clear", {
+          exact: true,
+        }),
     ).toBeVisible();
     await expect(
-      recipient.getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
+      recipient
+        .locator("article")
+        .getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
     ).toHaveCount(0);
     await expect(
-      page.getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
+      page
+        .locator("article")
+        .getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
     ).toBeVisible();
   } finally {
     await receiverContext.close();
@@ -241,6 +274,7 @@ test("a lost first registration response preserves device keys and a second tab 
     localStorage.setItem("conclave.session-user", JSON.stringify(s.user));
   }, session);
   await page.goto("/settings");
+  await openSecurity(page);
   await expect.poll(() => lost).toBe(true);
   await page
     .getByRole("button", { name: "Refresh encryption devices", exact: true })
@@ -255,6 +289,7 @@ test("a lost first registration response preserves device keys and a second tab 
   expect(new Set(registrations.map((r) => r.id)).size).toBe(1);
   const peer = await context.newPage();
   await peer.goto("/settings");
+  await openSecurity(peer);
   await expect(
     peer.getByText("This device is ready for encrypted conversations.", {
       exact: true,
@@ -770,4 +805,341 @@ test("phase6: invitations, approval, live roles and handover enforce room permis
   } finally {
     await context.close();
   }
+});
+
+test("ux: drafts, rich long messages, local navigation, search, focus and emoji picker work together", async ({
+  page,
+  request,
+}, info) => {
+  const a = await account(request, `${info.project.name}-ux`);
+  await login(page, a);
+  const headers = { authorization: `Bearer ${a.accessToken}` };
+  const created = await request.post(`${API}/rooms`, {
+    headers,
+    data: { type: "group", name: "Experience checks" },
+  });
+  expect(created.status()).toBe(201);
+  const id = (await created.json()).data.id;
+  const body =
+    "**Important update**\n" +
+    "Long readable text. ".repeat(110) +
+    '\n```js\nconst safe = "<script>";\n```\nhttps://example.test/resource';
+  const sent = await request.post(`${API}/messages`, {
+    headers,
+    data: { roomId: id, content: body },
+  });
+  expect(sent.status()).toBe(201);
+  const message = (await sent.json()).data;
+  await page.goto(`/chats/${id}`);
+  const article = page.locator(`[data-message-id="${message.id}"]`);
+  await article.getByRole("button", { name: "Read more", exact: true }).click();
+  await expect(
+    article.locator("strong").filter({ hasText: "Important update" }),
+  ).toBeVisible();
+  await expect(article.locator("pre code")).toContainText("const safe");
+  await expect(
+    article.getByRole("link", {
+      name: "https://example.test/resource",
+      exact: true,
+    }),
+  ).toHaveAttribute("rel", "noopener noreferrer");
+  await article.getByRole("button", { name: "Show less", exact: true }).click();
+  const composer = page.getByRole("textbox", { name: "Message", exact: true });
+  await composer.fill("Durable unsent draft");
+  await page.goto("/profile");
+  await page.goto(`/chats/${id}`);
+  await expect(composer).toHaveValue("Durable unsent draft");
+  await page
+    .getByRole("button", { name: "Search conversation", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "Search conversation",
+    exact: true,
+  });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("Search messages", { exact: true }).fill("Important");
+  await dialog.getByRole("button", { name: "Search", exact: true }).click();
+  const result = dialog
+    .getByRole("button")
+    .filter({ hasText: "Important update" });
+  await expect(result).toBeVisible();
+  for (let i = 0; i < 12; i++) await page.keyboard.press("Tab");
+  expect(
+    await page.evaluate(() =>
+      Boolean(document.activeElement.closest('[role="dialog"]')),
+    ),
+  ).toBe(true);
+  expect(
+    await page.evaluate(() => document.querySelector("#root")?.inert),
+  ).toBe(true);
+  await result.click();
+  await expect(page).toHaveURL(new RegExp(`message=${message.id}`));
+  await expect(
+    page.locator(`[data-message-id="${message.id}"] pre code`),
+  ).toBeVisible();
+  await composer.fill("");
+  await page.locator(`[data-message-id="${message.id}"]`).hover();
+  if (info.project.name.includes("mobile"))
+    await page
+      .locator(`[data-message-id="${message.id}"] strong`)
+      .dispatchEvent("contextmenu");
+  else
+    await page
+      .locator(`[data-message-id="${message.id}"]`)
+      .getByRole("button", { name: "Message actions", exact: true })
+      .click();
+  const menu = page.getByRole("menu", { name: "Message actions", exact: true });
+  await menu.locator('em-emoji-picker input[type="search"]').fill("rocket");
+  await menu.locator('em-emoji-picker button[aria-label="🚀"]').click();
+  await expect(
+    page.getByRole("button", { name: "🚀 reaction, 1", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("ux: thread panel, saved notes, notification preferences and scheduled text are reachable", async ({
+  page,
+  request,
+}, info) => {
+  const a = await account(request, `${info.project.name}-ux-tools`);
+  await login(page, a);
+  const headers = { authorization: `Bearer ${a.accessToken}` };
+  const created = await request.post(`${API}/rooms`, {
+    headers,
+    data: { type: "group", name: "Thread and tools" },
+  });
+  const id = (await created.json()).data.id;
+  const root = (
+    await (
+      await request.post(`${API}/messages`, {
+        headers,
+        data: { roomId: id, content: "A persistent thread topic" },
+      })
+    ).json()
+  ).data;
+  await request.post(`${API}/messages`, {
+    headers,
+    data: {
+      roomId: id,
+      threadRootId: root.id,
+      replyToId: root.id,
+      content: "Thread history outside the loaded page",
+    },
+  });
+  await page.goto(`/chats/${id}?message=${root.id}&thread=${root.id}`);
+  const panel = page.getByRole("complementary", {
+    name: "Message thread",
+    exact: true,
+  });
+  await expect(
+    panel.getByText("Thread history outside the loaded page", { exact: true }),
+  ).toBeVisible();
+  await panel
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill("Reply through persistent thread");
+  await panel
+    .getByRole("button", { name: "Send message", exact: true })
+    .click();
+  await expect(
+    panel.getByText("Reply through persistent thread", { exact: true }),
+  ).toBeVisible();
+  await panel
+    .locator('input[type="file"][multiple]')
+    .first()
+    .setInputFiles({
+      name: "thread-note.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("A document in a persistent thread"),
+    });
+  const mediaEditor = page.getByRole("dialog", {
+    name: "Send attachment",
+    exact: true,
+  });
+  await mediaEditor.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(mediaEditor).toBeHidden();
+  await expect(
+    panel.getByText("thread-note.txt", { exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(async () => {
+      const response = await request.get(
+        `${API}/experience/threads/${root.id}`,
+        { headers },
+      );
+      return (await response.json()).data.messages.some((m) =>
+        m.attachments?.some((a) => a.filename === "thread-note.txt"),
+      );
+    })
+    .toBe(true);
+  await panel
+    .getByRole("button", { name: "Close thread", exact: true })
+    .click();
+  await page.goto(`/chats/${id}/info`);
+  await page.getByLabel("Notify me", { exact: true }).selectOption("mentions");
+  await page.getByLabel("Mute duration", { exact: true }).selectOption("hour");
+  await page
+    .getByRole("button", { name: "Save notifications", exact: true })
+    .click();
+  await expect
+    .poll(async () => {
+      const res = await request.get(`${API}/experience/rooms/${id}/settings`, {
+        headers,
+      });
+      return (await res.json()).data.notification_level;
+    })
+    .toBe("mentions");
+  await page.goto(`/chats/${id}`);
+  const composer = page.getByRole("textbox", { name: "Message", exact: true });
+  await composer.fill("Schedule from the composer");
+  await page
+    .getByRole("button", { name: "Schedule text", exact: true })
+    .click();
+  const schedule = page.getByRole("dialog", {
+    name: "Schedule this text message",
+    exact: true,
+  });
+  const date = new Date(Date.now() + 3600000);
+  const local = new Date(+date - date.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 16);
+  await schedule.getByLabel("Send date and time", { exact: true }).fill(local);
+  await schedule
+    .getByRole("button", { name: "Confirm schedule", exact: true })
+    .click();
+  await expect(schedule).toBeHidden();
+  await page.goto("/activity?tab=schedules");
+  await expect(
+    page.getByText("Waiting to send", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Cancel", exact: true })
+    .first()
+    .click();
+  await expect(page.getByText("Cancelled", { exact: true })).toBeVisible();
+  await page.goto("/activity?tab=saved");
+  await page
+    .getByRole("button", { name: "Open private notes", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/chats\/[0-9a-f-]+$/);
+  await expect(
+    page.getByRole("textbox", { name: "Message", exact: true }),
+  ).toBeVisible();
+});
+
+test("ux: reading position survives navigation and deleting a chat uses a focused personal confirmation", async ({
+  page,
+  request,
+}, info) => {
+  const a = await account(request, `${info.project.name}-ux-reading`),
+    b = await account(request, `${info.project.name}-ux-peer`);
+  await login(page, a);
+  const headers = { authorization: `Bearer ${a.accessToken}` };
+  const room = (
+    await (
+      await request.post(`${API}/rooms`, {
+        headers,
+        data: {
+          type: "group",
+          name: "Reading position",
+          memberIds: [b.user.id],
+        },
+      })
+    ).json()
+  ).data;
+  const ids = [];
+  for (let i = 0; i < 16; i++) {
+    const result = await request.post(`${API}/messages`, {
+      headers,
+      data: {
+        roomId: room.id,
+        content:
+          `Reading message ${i}\n` + "Useful conversation context. ".repeat(15),
+      },
+    });
+    expect(result.status()).toBe(201);
+    ids.push((await result.json()).data.id);
+  }
+  await page.goto(`/chats/${room.id}`);
+  await expect(page.locator(`[data-message-id="${ids[8]}"]`)).toBeAttached();
+  await page.locator("[data-message-scroll]").evaluate((container, id) => {
+    const node = container.querySelector(`[data-message-id="${id}"]`);
+    container.scrollTop +=
+      node.getBoundingClientRect().top -
+      container.getBoundingClientRect().top -
+      18;
+    container.dispatchEvent(new Event("scroll"));
+  }, ids[8]);
+  const storageKey = `conclave:reading:${a.user.id}:${room.id}`;
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (key) => JSON.parse(localStorage.getItem(key) || "null")?.atBottom,
+        storageKey,
+      ),
+    )
+    .toBe(false);
+  const saved = await page.evaluate(
+    (key) => JSON.parse(localStorage.getItem(key)),
+    storageKey,
+  );
+  await page.goto("/profile");
+  await page.goto(`/chats/${room.id}`);
+  const target = page.locator(`[data-message-id="${saved.id}"]`);
+  await expect(target).toBeVisible();
+  await expect
+    .poll(() =>
+      target.evaluate(
+        (node, offset) =>
+          Math.abs(
+            node.getBoundingClientRect().top -
+              node.closest("[data-message-scroll]").getBoundingClientRect()
+                .top -
+              offset,
+          ),
+        saved.offset,
+      ),
+    )
+    .toBeLessThan(10);
+  await page.goto("/chats");
+  await page
+    .getByRole("button", { name: "Actions for Reading position", exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Delete chat", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "Delete this chat?",
+    exact: true,
+  });
+  await expect(dialog).toBeVisible();
+  expect(await page.evaluate(() => document.querySelector("#root").inert)).toBe(
+    true,
+  );
+  await dialog.getByRole("button", { name: "Keep chat", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect(await page.evaluate(() => document.querySelector("#root").inert)).toBe(
+    false,
+  );
+  await page
+    .getByRole("button", { name: "Actions for Reading position", exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Delete chat", exact: true })
+    .click();
+  await dialog
+    .getByRole("button", { name: "Delete chat for me", exact: true })
+    .click();
+  await expect(dialog).toBeHidden();
+  const peer = (
+    await (
+      await request.get(`${API}/messages/room/${room.id}`, {
+        headers: { authorization: `Bearer ${b.accessToken}` },
+      })
+    ).json()
+  ).data;
+  expect(peer.messages).toHaveLength(16);
 });

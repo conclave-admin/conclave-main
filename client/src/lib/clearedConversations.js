@@ -27,6 +27,11 @@ export function getAccountClearSequence(userId, roomId) {
   return /^\d+$/.test(value) ? value : "0";
 }
 export function conversationMessageVisible(message, userId, roomId) {
+  if (
+    message.expires_at &&
+    new Date(message.expires_at).getTime() <= Date.now()
+  )
+    return false;
   if (message._optimistic) return true;
   if (
     new Date(message.created_at).getTime() <=

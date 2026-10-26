@@ -273,7 +273,7 @@ const listRooms = asyncHandler(async (req, res) => {
        rm.last_seen_at,
        rm.last_seen_sequence, rm.cleared_sequence,rm.cleared_at,
        COALESCE(rmp.pinned, FALSE) AS is_pinned,
-       COALESCE(rmp.muted, FALSE) AS is_muted,
+       (COALESCE(rmp.muted, FALSE) OR COALESCE(rmp.mute_until>NOW(),FALSE) OR COALESCE(rmp.notification_level,'all')='none') AS is_muted,
        COALESCE(rmp.archived, FALSE) AS is_archived,
        (SELECT COUNT(*) FROM room_members am WHERE am.room_id = r.id)::int
          AS member_count,
@@ -526,6 +526,8 @@ const updateRoomPreferences = asyncHandler(async (req, res) => {
        pinned = CASE WHEN $6::boolean THEN $3 ELSE room_member_preferences.pinned END,
        muted = CASE WHEN $7::boolean THEN $4 ELSE room_member_preferences.muted END,
        archived = CASE WHEN $8::boolean THEN $5 ELSE room_member_preferences.archived END,
+       mute_until = CASE WHEN $7::boolean THEN NULL ELSE room_member_preferences.mute_until END,
+       notification_level = CASE WHEN $7::boolean AND NOT $4::boolean THEN 'all' ELSE room_member_preferences.notification_level END,
        updated_at = NOW()
      RETURNING pinned, muted, archived`,
     [...values, "pinned" in updates, "muted" in updates, "archived" in updates],
@@ -578,6 +580,7 @@ const getRoom = asyncHandler(async (req, res) => {
                'display_name', u.display_name,
                'avatar_url', u.avatar_url,
                'bio', u.bio,
+               'custom_status', CASE WHEN u.status_until>NOW() THEN u.custom_status ELSE NULL END,
                'account_created_at', u.created_at,
                'role', rm2.role,
                'joined_at', rm2.joined_at,

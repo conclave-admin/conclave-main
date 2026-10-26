@@ -340,7 +340,14 @@ export async function encryptEdit(message, content) {
   const payload = protocol.sealMessage(
     value,
     roster,
-    { roomId: message.room_id, clientId: message.client_id, content },
+    {
+      roomId: message.room_id,
+      clientId: message.client_id,
+      content,
+      ...(message.thread_root_id
+        ? { threadRootId: message.thread_root_id }
+        : {}),
+    },
     { file, revision: message.encrypted_payload.revision + 1 },
   );
   vault = await persistValue(value);

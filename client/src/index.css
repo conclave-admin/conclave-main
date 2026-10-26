@@ -408,3 +408,8 @@ html.dark {
 .app-shell .chat-composer form > div:last-of-type {
   border-radius: 18px;
 }
+.emoji-mart-panel em-emoji-picker {
+  width: 100%;
+  max-width: 100%;
+  height: min(360px, 55dvh);
+}
