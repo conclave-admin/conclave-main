@@ -31,7 +31,8 @@ import { usePresence } from "@/contexts/PresenceContext";
 export default function RoomHeader({ room, isConnected }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const { isOnline } = useRealtime();
-  const title = room.display_name || room.name;
+  const title = room.display_name ||
+    (room.type === "dm" ? "Deleted user" : room.name || "Conversation");
   const { user } = useAuth();
   const { isOnlineIn, getPresence, labelFor } = usePresence();
   const isDm = room.type === "dm";
@@ -72,7 +73,7 @@ export default function RoomHeader({ room, isConnected }) {
         </div>
         <p className="mt-0.5 text-[11px] leading-4 text-muted md:text-xs">
           {isDm
-            ? labelFor(room.id, peer?.id)
+            ? peer ? labelFor(room.id, peer.id) : "Account deleted"
             : `${room.members?.length || 0} members`}
           {isDm && peer?.custom_status && <span> · {peer.custom_status}</span>}
           <span hidden={isOnline && isConnected}>

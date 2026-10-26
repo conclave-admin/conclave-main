@@ -14,6 +14,7 @@ import {
   isDevAuthBypass,
   previewMessages,
   previewPinnedMessages,
+  makePreviewLargeMessages,
 } from "../config/devPreview";
 
 async function decode(value) {
@@ -24,8 +25,26 @@ async function decode(value) {
   return value;
 }
 
+let largePreviewMessages;
+function previewHistory(roomId) {
+  if (roomId !== "preview-large-room") return previewMessages;
+  largePreviewMessages ||= makePreviewLargeMessages();
+  return largePreviewMessages;
+}
+
 export async function listMessages(roomId, before, afterSeq, around) {
   if (isDevAuthBypass) {
+    if (roomId === "preview-large-room") {
+      const rows = previewHistory(roomId);
+      const anchorIndex = around ? rows.findIndex((row) => row.id === around) : -1;
+      if (around && anchorIndex < 0) throw new Error("Message no longer available");
+      return {
+        messages: around
+          ? rows.slice(Math.max(0, anchorIndex - 100), anchorIndex + 101)
+          : rows,
+        nextCursor: null,
+      };
+    }
     const anchor = around
       ? previewMessages.find(
           (message) =>
@@ -166,6 +185,20 @@ export async function unpinMessage(messageId, scope) {
 /** Every room-wide pin in a room, oldest first. Personal bookmarks are not listed. */
 export async function listPinnedMessages(roomId) {
   if (isDevAuthBypass) {
+    if (roomId === "preview-large-room")
+      return previewHistory(roomId)
+        .filter((message) => message.id === "perf-300")
+        .map((message) => ({
+          ...message,
+          pins: {
+            room: {
+              user_id: "dev-preview-user",
+              display_name: "Amina Yusuf",
+              pinned_at: message.created_at,
+            },
+            mine: [],
+          },
+        }));
     return previewPinnedMessages
       .filter((message) => message.room_id === roomId)
       .map((message) => ({ ...message, room_id: roomId }));
@@ -318,7 +351,7 @@ export async function getRoomReceiptSummaries(roomId, ids) {
 
 export async function getMessageSnapshots(roomId, ids) {
   if (isDevAuthBypass) {
-    const messages = previewMessages
+    const messages = previewHistory(roomId)
       .filter((m) => ids.includes(m.id))
       .map((m) => ({ ...m, room_id: roomId }));
     return {

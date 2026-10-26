@@ -9,7 +9,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import IconMoreVertical from "@/assets/icons/more-vertical.svg?react";
 import IconSearch from "@/assets/icons/search.svg?react";
-import IconCalendar from "@/assets/icons/calendar.svg?react";
 import IconMember from "@/assets/icons/member.svg?react";
 import IconCamera from "@/assets/icons/camera.svg?react";
 import Avatar from "@/components/ui/Avatar";
@@ -162,7 +161,6 @@ export default function RoomInfo() {
   const canEditRoom = isAdmin && room?.type !== "dm";
   const isDm = room?.type === "dm";
   const peer = isDm ? members.find((member) => member.id !== user?.id) : null;
-  const roomCreator = members.find((member) => member.id === room?.created_by);
 
   useEffect(() => {
     if (!isDm || !peer?.id) {
@@ -182,17 +180,6 @@ export default function RoomInfo() {
       .then((result) => setPeerBlocked(Boolean(result.blocked)))
       .catch(() => setPeerBlocked(false));
   }, [isDm, peer?.id]);
-
-  const formatDate = (
-    value,
-    options = { month: "long", day: "numeric", year: "numeric" },
-  ) => {
-    if (!value) return "Not available";
-    const date = new Date(value);
-    return Number.isNaN(date.getTime())
-      ? "Not available"
-      : date.toLocaleDateString(undefined, options);
-  };
 
   function startEditing() {
     setDraftName(room?.display_name || room?.name || "");
@@ -351,9 +338,9 @@ export default function RoomInfo() {
         <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
           <div className="flex shrink-0 flex-col items-center gap-2">
             <Avatar
-              name={
-                isDm ? peer?.display_name : room?.display_name || room?.name
-              }
+              name={isDm
+                ? peer?.display_name || room?.display_name
+                : room?.display_name || room?.name}
               src={
                 isDm
                   ? peer?.avatar_url
@@ -410,26 +397,17 @@ export default function RoomInfo() {
                         : "Group room"}
               </Badge>
             </div>
-            <p className="mt-2 max-w-2xl text-body leading-relaxed text-muted">
-              {isDm
-                ? "A private conversation between the two of you."
-                : room?.description ||
-                  "A shared space for conversation, updates, and decisions."}
-            </p>
+            {!isDm && room?.description && (
+              <p className="mt-2 max-w-2xl text-body leading-relaxed text-muted">
+                {room.description}
+              </p>
+            )}
             {!isDm && (
               <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-metadata text-muted">
                 <span className="inline-flex items-center gap-1.5">
                   <IconMember className="h-4 w-4" aria-hidden="true" />
                   {members.length} {members.length === 1 ? "member" : "members"}
                 </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <IconCalendar className="h-4 w-4" aria-hidden="true" />
-                  Created {formatDate(room?.created_at)}
-                </span>
-                {roomCreator && (
-                  <span>Started by {roomCreator.display_name}</span>
-                )}
-                {room?.slug && <span>#{room.slug}</span>}
               </div>
             )}
           </div>
@@ -464,13 +442,6 @@ export default function RoomInfo() {
               </p>
               <p className="mt-4 whitespace-pre-wrap text-body leading-relaxed text-ink">
                 {peer.bio || "No profile introduction yet."}
-              </p>
-              <p className="mt-4 text-metadata text-muted">
-                On Conclave since{" "}
-                {formatDate(peer.account_created_at || peer.created_at, {
-                  month: "long",
-                  year: "numeric",
-                })}
               </p>
             </div>
           </div>
@@ -542,10 +513,6 @@ export default function RoomInfo() {
               placeholder="What this room is for"
             />
           </div>
-          <p className="mt-2 text-metadata text-muted">
-            The room&rsquo;s address in the URL does not change when you rename
-            it.
-          </p>
           <div className="mt-4 flex items-center gap-3">
             <Button type="submit" disabled={!draftName.trim() || isSavingRoom}>
               {isSavingRoom ? "Saving…" : "Save changes"}
@@ -625,11 +592,6 @@ export default function RoomInfo() {
                   : ""}
               </p>
             </div>
-            {isAdmin && !isDm && (
-              <p className="text-metadata text-muted">
-                Admins can add people and manage roles.
-              </p>
-            )}
           </div>
           <ul className="mt-3 divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
             {members.map((member) => {
@@ -654,8 +616,6 @@ export default function RoomInfo() {
                     </div>
                     <p className="mt-0.5 truncate text-metadata text-muted">
                       {labelFor(roomId, member.id)}
-                      {member.joined_at &&
-                        ` · Joined ${formatDate(member.joined_at, { month: "short", day: "numeric", year: "numeric" })}`}
                     </p>
                   </div>
 

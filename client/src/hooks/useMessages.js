@@ -38,10 +38,13 @@ function byTime(a, b) {
 }
 
 function mergeMessages(current, rows) {
+  const previousReceipts = new Map(
+    current.map((message) => [message.id, message.receipt_summary]),
+  );
   return mergeServerMessages(current, rows).map((message) => ({
     ...message,
     receipt_summary: newerReceipt(
-      current.find((m) => m.id === message.id)?.receipt_summary,
+      previousReceipts.get(message.id),
       message.receipt_summary,
     ),
   }));

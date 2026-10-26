@@ -658,7 +658,71 @@ export const previewUsers = [
 // edits disappear the moment the page refetched, so the screens would look
 // broken in exactly the way dev-preview exists to prevent. Mutating this array
 // is what lets the round trip be seen offline.
-export const previewRooms = [previewRoom, previewDmRoom];
+export const previewLargeRoom = {
+  ...previewRoom,
+  id: "preview-large-room",
+  name: "Large conversation preview",
+  display_name: "Large conversation preview",
+  unread_count: 0,
+  last_seen_sequence: 1200,
+  members: previewRoom.members.map((member) =>
+    member.id === previewUser.id
+      ? { ...member, last_seen_sequence: 1200 }
+      : member,
+  ),
+};
+
+// Generated on demand so normal preview routes do not allocate a large history.
+export function makePreviewLargeMessages() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 2;
+  canvas.height = 2;
+  canvas.getContext("2d").fillRect(0, 0, 2, 2);
+  const thumbnail = canvas.toDataURL("image/jpeg", 0.5);
+  return Array.from({ length: 1200 }, (_, index) => ({
+    id: `perf-${index}`,
+    room_id: previewLargeRoom.id,
+    room_sequence: index + 1,
+    sender_id: index % 2 ? "dev-victor" : previewUser.id,
+    sender_name: index % 2 ? "Victor" : previewUser.display_name,
+    content:
+      index === 300
+        ? "Earlier target in a large conversation"
+        : index === 1199
+          ? "Jump back to the earlier message"
+          : index === 1198
+            ? "A long message ".repeat(500)
+            : `History message ${index}`,
+    reactions: [],
+    pins: { room: null, mine: [] },
+    attachments:
+      index % 24 === 0 || index === 300
+        ? [{
+            id: `perf-image-${index}`,
+            filename: `photo-${index}.jpg`,
+            mime_type: "image/jpeg",
+            size: 700,
+            width: 640,
+            height: 480,
+            url: `r2://preview/photo-${index}.jpg`,
+            preview_url: thumbnail,
+          }]
+        : index % 30 === 0
+          ? [{
+              id: `perf-document-${index}`,
+              filename: `document-${index}.pdf`,
+              mime_type: "application/pdf",
+              size: 12000,
+              url: `r2://preview/document-${index}.pdf`,
+            }]
+          : [],
+    reply_to_id: index === 1199 ? "perf-300" : null,
+    is_deleted: false,
+    created_at: new Date(Date.UTC(2026, 9, 8, 9, index)).toISOString(),
+  }));
+}
+
+export const previewRooms = [previewRoom, previewDmRoom, previewLargeRoom];
 
 // One row of `GET /users/me/preferences`. Shape matches the controller's
 // default answer for an account that has never saved anything: the GET returns

@@ -39,9 +39,9 @@ tracked in the phases below.
 | 2     | P1       | Presence, typing, visibility-based reads, and group receipts      | Complete    |
 | 3     | P1       | Recoverable delivery and reconnect synchronization                | Complete    |
 | 4     | P1       | Background notifications and preference enforcement               | In progress |
-| 5     | P1       | Privacy controls, account recovery, devices, and encryption       | Not started |
+| 5     | P1       | Privacy controls, account recovery, devices, and encryption       | In progress |
 | 6     | P2       | Voice messages, info pages, rooms, and personal history           | Complete    |
-| 7     | P2       | Deployed media, browser CI, real devices, accessibility, and load | Not started |
+| 7     | P2       | Deployed media, browser CI, real devices, accessibility, and load | In progress |
 | 8     | P3       | Calling, events, and further collaboration                        | Not started |
 
 Encryption architecture needs early planning alongside phases 1–3 because it
@@ -279,6 +279,7 @@ access alone is not encryption. See [privacy and encryption policy](docs/PRIVACY
 - [x] Encryption guarantees and recovery limitations are documented and covered by functional checks.
 - [ ] Complete independent protocol/security review before making audited-security claims. The custom protocol has no forward secrecy or post-compromise ratchet.
 - [ ] Verify Resend sending domain, add `RESEND_API_KEY` and verified `RESEND_FROM`, and exercise real verification/recovery email delivery.
+- [x] User confirmed a local recovery email works after correcting the sender address (26 October 2026). Deployed delivery, email verification, domain-status evidence, and expiry/single-use acceptance remain open under GH-03.
 - [ ] Complete deployed HTTPS, real R2, and real-device/browser acceptance; browser security checks mock storage.
 - [ ] Review secure local key storage and a ratcheting/rotation design for stronger security claims. Browser vaults currently rely on IndexedDB and the trusted origin/OS.
 
@@ -349,14 +350,14 @@ assume the deployed configuration is unchanged.
 
 ### Performance and resilience
 
-- [ ] **7.4** Introduce large-history virtualization where needed.
-- [ ] **7.5** Bound memory usage for long conversations and media-heavy sessions.
+- [x] **7.4** Introduce large-history virtualization where needed. A 1,200-message local fixture now mounts fewer than 80 rows at once; see [docs/LARGE_CHAT_PERFORMANCE.md](docs/LARGE_CHAT_PERFORMANCE.md).
+- [x] **7.5** Bound memory usage for long conversations and media-heavy sessions. Measured DOM/heap reduction and object-URL cleanup are documented in the same performance note; deployed and physical-device load checks remain open.
 - [ ] **7.6** Apply fair rate limits consistently across API instances and transports.
 - [ ] **7.7** Run sustained load and network-failure scenarios.
 
 ### Verification and delivery
 
-- [ ] **7.8** Add browser messaging coverage to CI alongside unit and database checks.
+- [x] **7.8** Add browser messaging coverage to CI alongside unit and database checks; remote push/PR acceptance remains open under GH-23.
 - [ ] **7.9** Verify supported real devices and browsers, including mobile keyboard/background behaviour.
 - [ ] **7.10** Verify accessibility, keyboard navigation, screen-reader use, and reduced-motion behaviour.
 - [ ] **7.11** Record deployed verification evidence and unresolved release blockers.

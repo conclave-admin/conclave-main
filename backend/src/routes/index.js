@@ -24,6 +24,7 @@ router.use("/users", usersRoutes);
 router.use("/rooms", require("./roomLifecycle.routes"));
 router.use("/rooms", roomsRoutes);
 router.use("/messages", messagesRoutes);
+router.use("/links", require("./links.routes"));
 router.use("/decisions", decisionsRoutes);
 router.use("/tasks", tasksRoutes);
 router.use("/digest", digestRoutes);

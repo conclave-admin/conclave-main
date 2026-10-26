@@ -128,11 +128,6 @@ export default function ConversationManagement({ room, user, onChanged }) {
         <h2 id="conversation-notifications" className="text-h2 text-ink">
           Notifications and organization
         </h2>
-        <p className="text-body text-muted">
-          These settings apply to your account across devices. Global
-          notification permissions and preferences still apply. Muting stops
-          interruptions; messages and unread counts remain available.
-        </p>
         {data &&
           [
             ["muted", "Mute conversation"],
@@ -173,20 +168,13 @@ export default function ConversationManagement({ room, user, onChanged }) {
           Storage
         </h2>
         <p className="text-body text-ink">
-          Shared attachments visible to you:{" "}
+          Shared media:{" "}
           {data?.storage?.attachment_count ?? "…"} ·{" "}
           {size(data?.storage?.bytes)}
         </p>
         <p className="text-body text-ink">
-          This account’s media cache on this device:{" "}
+          Downloaded on this device:{" "}
           {usage === null ? "Unavailable" : size(usage)}
-        </p>
-        <p className="text-metadata text-muted">
-          The shared total is server storage; encrypted files include encryption
-          overhead. The device total covers this account’s cached files across
-          all conversations. Removing local copies leaves messages, pending
-          uploads, and server originals intact. Files must be downloaded again
-          for offline use.
         </p>
         <Button
           variant="secondary"
@@ -204,18 +192,6 @@ export default function ConversationManagement({ room, user, onChanged }) {
           <h2 id="room-access" className="text-h2 text-ink">
             Room access and permissions
           </h2>
-          <p className="text-body text-muted">
-            Current members can access server-readable room history. Leaving or
-            removal stops future authorized access, but cannot erase downloaded
-            copies. New encrypted-room members receive future messages only;
-            joining does not transfer old message keys.
-          </p>
-          <p className="text-metadata text-muted">
-            Admins manage roles, settings, room details, removals, and
-            invitation revocation. Participants can report/block users and
-            leave. Sending and invitation-link creation follow the switches
-            below.
-          </p>
           {data &&
             [
               ["join_approval", "Require approval to join"],

@@ -485,6 +485,44 @@ function tokenForFixtureUser() {
   );
 }
 
+dbTest("deleting a DM peer keeps the survivor's chat list and room readable", async () => {
+  const owner = await authedAccount(`dm-owner-${randomUUID()}@test.com`);
+  const peer = await authedAccount(`dm-peer-${randomUUID()}@test.com`);
+  const created = await fetch(`${baseUrl}/api/rooms`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${owner.token}`,
+    },
+    body: JSON.stringify({ type: "dm", memberIds: [peer.userId] }),
+  });
+  const createdBody = await created.text();
+  assert.equal(created.status, 201, createdBody);
+  const roomId = JSON.parse(createdBody).data.id;
+
+  const deleted = await fetch(`${baseUrl}/api/users/me`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${peer.token}` },
+  });
+  assert.equal(deleted.status, 200, await deleted.text());
+
+  const listed = await fetch(`${baseUrl}/api/rooms`, {
+    headers: { authorization: `Bearer ${owner.token}` },
+  });
+  const listBody = await listed.text();
+  assert.equal(listed.status, 200, listBody);
+  const dm = JSON.parse(listBody).data.find((item) => item.id === roomId);
+  assert.equal(dm?.display_name, "Deleted user");
+  assert.equal(dm?.display_avatar, null);
+
+  const detail = await fetch(`${baseUrl}/api/rooms/${roomId}`, {
+    headers: { authorization: `Bearer ${owner.token}` },
+  });
+  const detailBody = await detail.text();
+  assert.equal(detail.status, 200, detailBody);
+  assert.equal(JSON.parse(detailBody).data.display_name, "Deleted user");
+});
+
 dbTest("createRoom slugifies names and disambiguates duplicates", async () => {
   const token = await authedUser("slug-tester@test.com");
   const post = (name) =>

@@ -81,43 +81,56 @@ export default function MessageComposer({
 }) {
   const { user: draftUser } = useAuth();
   const draftOwner = `${draftUser?.id}:${activityScope}`;
-  const restoredDraft = useRef(null);
-  const skipDraftWrite = useRef(true);
   const [content, setContent] = useState(
     () => readDraft(draftUser?.id, activityScope).text,
   );
+  const draftSnapshot = useRef({
+    owner: draftOwner,
+    userId: draftUser?.id,
+    roomId: activityScope,
+    text: content,
+    reply: replyTo,
+  });
+  if (draftSnapshot.current.owner === draftOwner) {
+    draftSnapshot.current = {
+      owner: draftOwner,
+      userId: draftUser?.id,
+      roomId: activityScope,
+      text: content,
+      reply: replyTo,
+    };
+  }
+  const persistDraft = () => {
+    const { userId, roomId, text, reply } = draftSnapshot.current;
+    writeDraft(userId, roomId, text, reply ? {
+      id: reply.id,
+      sender_name: reply.sender_name,
+      content: reply.content,
+      room_sequence: reply.room_sequence,
+      created_at: reply.created_at,
+      expires_at: reply.expires_at,
+    } : null);
+  };
   useLayoutEffect(() => {
     const draft = readDraft(draftUser?.id, activityScope);
-    restoredDraft.current = draftOwner;
-    skipDraftWrite.current = true;
+    draftSnapshot.current = {
+      owner: draftOwner,
+      userId: draftUser?.id,
+      roomId: activityScope,
+      text: draft.text,
+      reply: draft.reply,
+    };
     setContent(draft.text);
     selectionRef.current = { start: draft.text.length, end: draft.text.length };
     return () => {
-      restoredDraft.current = null;
+      persistDraft();
     };
   }, [draftOwner]);
   useEffect(() => {
-    if (skipDraftWrite.current) {
-      skipDraftWrite.current = false;
-      return;
-    }
-    if (restoredDraft.current === draftOwner)
-      writeDraft(
-        draftUser?.id,
-        activityScope,
-        content,
-        replyTo
-          ? {
-              id: replyTo.id,
-              sender_name: replyTo.sender_name,
-              content: replyTo.content,
-              room_sequence: replyTo.room_sequence,
-              created_at: replyTo.created_at,
-              expires_at: replyTo.expires_at,
-            }
-          : null,
-      );
-  }, [content, replyTo, draftOwner]);
+    const saveOnExit = () => persistDraft();
+    window.addEventListener("pagehide", saveOnExit);
+    return () => window.removeEventListener("pagehide", saveOnExit);
+  }, [draftOwner]);
   const [error, setError] = useState("");
   const [pendingFiles, setPendingFiles] = useState([]);
   const [sending, setSending] = useState(false);
@@ -399,6 +412,14 @@ export default function MessageComposer({
 
   const reset = () => {
     activityRef.current?.endTyping();
+    draftSnapshot.current = {
+      owner: draftOwner,
+      userId: draftUser?.id,
+      roomId: activityScope,
+      text: "",
+      reply: null,
+    };
+    writeDraft(draftUser?.id, activityScope, "");
     setContent("");
     selectionRef.current = { start: 0, end: 0 };
     setMentionedIds([]);
@@ -541,9 +562,42 @@ export default function MessageComposer({
     }
   };
 
+  const handlePaste = (event) => {
+    const items = Array.from(event.clipboardData?.items || []);
+    const pastedFiles = items
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    const files = (pastedFiles.length
+      ? pastedFiles
+      : Array.from(event.clipboardData?.files || []))
+      .map((file, index) => file.name
+        ? file
+        : new File([file], `pasted-file-${index + 1}${file.type === "image/png" ? ".png" : ""}`, { type: file.type }));
+    if (!files.length) return;
+    event.preventDefault();
+    if (disabled) return;
+    const text = event.clipboardData.getData("text/plain");
+    if (text) {
+      const { start, end } = selectionRef.current;
+      const next = `${content.slice(0, start)}${text}${content.slice(end)}`;
+      selectionRef.current = { start: start + text.length, end: start + text.length };
+      setContent(next);
+      activityRef.current?.textChanged(next);
+    }
+    handleFiles(files, { compress: true });
+  };
+
   return (
     <form
       onSubmit={submit}
+      onBlurCapture={(event) => {
+        const form = event.currentTarget;
+        if (form.contains(event.relatedTarget)) return;
+        requestAnimationFrame(() => {
+          if (!form.contains(document.activeElement)) persistDraft();
+        });
+      }}
       className={`relative mx-auto w-full max-w-3xl shrink-0 bg-surface px-4 pb-6 pt-2 ${className}`}
     >
       {replyTo && (
@@ -668,6 +722,7 @@ export default function MessageComposer({
             };
           }}
           onBlur={() => activityRef.current?.endTyping()}
+          onPaste={handlePaste}
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder="Message…"

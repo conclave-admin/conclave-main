@@ -132,10 +132,6 @@ export default function AdvancedConversationSettings({ room }) {
             <option value="forever">Until I unmute</option>
           </select>
         </label>
-        <p className="text-metadata text-muted">
-          Global notification permissions and Do not disturb still apply. Only
-          admins can use @here or @channel to notify a room.
-        </p>
         <Button type="submit" disabled={busy || !settings}>
           Save notifications
         </Button>
@@ -153,10 +149,7 @@ export default function AdvancedConversationSettings({ room }) {
       >
         <h3 className="text-label">Disappearing messages</h3>
         <p className="text-body text-muted">
-          Applies to new messages from the moment they are sent. Existing timers
-          do not change. Expired messages become unavailable; downloaded copies
-          cannot be recalled. Either person may change a DM timer; only admins
-          may change a group timer.
+          Applies to new messages. Downloaded copies may remain.
         </p>
         <select
           aria-label="Message expiry"
