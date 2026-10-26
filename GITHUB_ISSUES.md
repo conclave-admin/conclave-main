@@ -92,6 +92,7 @@ The custom encryption protocol has functional coverage but no independent audit.
 ## GH-03
 
 **Title:** Configure Resend and verify real verification/recovery email delivery
+**Status:** In progress — user confirmed local recovery delivery; deployed verification and remaining acceptance are open
 **Priority:** P1
 **Suggested labels:** `P1`, `account-security`, `email`, `deployment`
 **Tracker source:** Phase 5: Resend email acceptance
@@ -99,6 +100,11 @@ The custom encryption protocol has functional coverage but no independent audit.
 ### Description
 
 The Resend API integration and encrypted mail queue exist. Actual provider/inbox delivery remains unverified.
+
+On 26 October 2026, the local sender was corrected to a full address on
+`conclave.com.ng` and the user reported that recovery email now works. The
+configured API key permits sending but cannot read Resend domain status, so
+domain verification and deployed delivery remain to be documented separately.
 
 ### Acceptance criteria
 
@@ -409,6 +415,7 @@ R2 configuration and preview Worker verification; deployed HTTPS frontend/API.
 ## GH-20
 
 **Title:** Bound large-history rendering and media-session memory use
+**Status:** Complete locally — deployment and physical-device performance remain in Phase 7 release acceptance
 **Priority:** P2
 **Suggested labels:** `P2`, `performance`, `frontend`, `media`
 **Tracker source:** 7.4, 7.5
@@ -419,10 +426,16 @@ Measure long conversations and media-heavy sessions, introduce virtualization wh
 
 ### Acceptance criteria
 
-- [ ] Define representative large-history/media datasets and baseline memory/render/scroll measurements.
-- [ ] Implement bounded rendering/caching and release unused object URLs, media resources, and listeners.
-- [ ] Preserve reply/pin scrolling, brief message highlighting, receipt visibility, and historical anchors.
-- [ ] Verify long messages and reply composers at narrow mobile widths without horizontal overflow.
+- [x] Define representative large-history/media datasets and baseline memory/render/scroll measurements.
+- [x] Implement bounded rendering/caching and release unused object URLs, media resources, and listeners.
+- [x] Preserve reply/pin scrolling, brief message highlighting, receipt visibility, and historical anchors.
+- [x] Verify long messages and reply composers at narrow mobile widths without horizontal overflow.
+
+See `docs/LARGE_CHAT_PERFORMANCE.md` for the 1,200-message dataset, measured
+before/after results, implementation, and local browser checks. The local
+Chromium sweep reduced mounted rows from 1,200 to 13 and garbage-collected JS
+heap from 109.3 MB to 14.1 MB. Physical low-memory devices and deployed load
+remain separate release checks.
 
 ## GH-21
 
@@ -462,19 +475,23 @@ Establish measured reliability/resource targets and verify sustained behavior un
 ## GH-23
 
 **Title:** Add browser messaging and encryption checks to CI
+**Status:** Implemented locally — remote push/PR run still needs acceptance
 **Priority:** P2
 **Suggested labels:** `P2`, `ci`, `testing`, `reliability`
 **Tracker source:** 7.8
 
 ### Description
 
-CI currently runs unit/database checks and the client build. Add deterministic browser messaging coverage.
+The `browser` job in `verify.yml` now runs recovery and security/experience
+Chromium suites with disposable PostgreSQL and Redis services after backend and
+client checks. It uploads browser artifacts on failure. A remote push/PR pass
+has not been recorded.
 
 ### Acceptance criteria
 
-- [ ] Install browser prerequisites and run selected desktop/mobile messaging and recovery suites.
-- [ ] Run the disposable real-API encryption suite with PostgreSQL/Redis and mocked storage/email.
-- [ ] Publish failure traces/screenshots and keep live-service tests explicitly gated without leaking credentials.
+- [x] Install browser prerequisites and run selected desktop/mobile messaging and recovery suites.
+- [x] Run the disposable real-API encryption suite with PostgreSQL/Redis and mocked storage/email.
+- [x] Publish failure traces/screenshots and keep live-service tests explicitly gated without leaking credentials.
 - [ ] Isolate ports/databases and clean up resources; verify checks run on pull requests and pushes.
 
 ## GH-24

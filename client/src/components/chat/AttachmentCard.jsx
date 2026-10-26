@@ -122,6 +122,7 @@ function AudioAttachment({ attachment }) {
   const [speed, setSpeed] = useState(1);
   const [error, setError] = useState("");
   const [duration, setDuration] = useState(null);
+  const playWhenReady = useRef(false);
   const probing = useRef(false);
   const probeTimer = useRef(null);
   useEffect(() => () => clearTimeout(probeTimer.current), [src]);
@@ -130,6 +131,25 @@ function AudioAttachment({ attachment }) {
     setDuration(null);
     probing.current = false;
   }, [src]);
+  useEffect(() => {
+    if (!src || !playWhenReady.current || !player.current) return;
+    playWhenReady.current = false;
+    player.current.play().catch(() => {
+      setError("Playback could not start. Tap play in the audio player.");
+    });
+  }, [src]);
+  const startPlayback = async () => {
+    setError("");
+    if (src && player.current) {
+      await player.current.play().catch(() =>
+        setError("Playback could not start. Tap play in the audio player."),
+      );
+      return;
+    }
+    playWhenReady.current = true;
+    const blob = await download.start();
+    if (!blob) playWhenReady.current = false;
+  };
   useEffect(() => {
     if (player.current) player.current.playbackRate = speed;
   }, [speed, src]);
@@ -178,9 +198,7 @@ function AudioAttachment({ attachment }) {
       aria-label="Voice message"
       className="w-full min-w-0 max-w-sm space-y-2 rounded-lg border border-line bg-canvas p-3"
     >
-      <p className="truncate text-label text-ink">
-        {attachment.filename || "Voice message"}
-      </p>
+      <p className="truncate text-label text-ink">Voice message</p>
       {src ? (
         <>
           <audio
@@ -210,7 +228,7 @@ function AudioAttachment({ attachment }) {
             <span className="text-metadata text-muted">
               {duration
                 ? `${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, "0")}`
-                : "Duration available in player"}
+                : ""}
             </span>
             <label className="text-metadata text-ink">
               Playback speed{" "}
@@ -245,9 +263,11 @@ function AudioAttachment({ attachment }) {
             download.status === "downloading" ||
             !(attachment.id || attachment.local_blob)
           }
-          onClick={() => download.start()}
+          onClick={startPlayback}
         >
-          Download voice message · {formatSize(attachment.size)}
+          {download.status === "downloading"
+            ? `Loading voice message ${Math.round(download.progress * 100)}%`
+            : `Play voice message${attachment.size ? ` · ${formatSize(attachment.size)}` : ""}`}
         </button>
       )}
       {error && (

@@ -281,13 +281,13 @@ const listRooms = asyncHandler(async (req, res) => {
        -- A DM is named after the other person, not the two-word title
        -- createRoom gave it. Groups keep their own name.
        CASE
-         WHEN r.type = 'dm' THEN (
+         WHEN r.type = 'dm' THEN COALESCE((
            SELECT u.display_name
              FROM room_members o
              INNER JOIN users u ON u.id = o.user_id
             WHERE o.room_id = r.id AND o.user_id <> $1
             LIMIT 1
-         )
+         ), 'Deleted user')
          ELSE r.name
        END AS display_name,
 
@@ -558,13 +558,13 @@ const getRoom = asyncHandler(async (req, res) => {
        -- by id so nothing routes on this, but the two screens should not
        -- disagree about what a room is called.
        CASE
-         WHEN r.type = 'dm' THEN (
+         WHEN r.type = 'dm' THEN COALESCE((
            SELECT u.display_name
              FROM room_members o
              INNER JOIN users u ON u.id = o.user_id
             WHERE o.room_id = r.id AND o.user_id <> $2
              LIMIT 1
-         )
+         ), 'Deleted user')
          ELSE r.name
        END AS display_name,
        (
@@ -1028,7 +1028,7 @@ const removeMember = asyncHandler(async (req, res) => {
 const setMemberRole = asyncHandler(async (req, res) => {
   const { roomId, userId } = req.params;
   const { role } = req.body;
-
+ 
   if (role !== "admin" && role !== "member") {
     throw new ApiError(400, 'role must be either "admin" or "member"');
   }

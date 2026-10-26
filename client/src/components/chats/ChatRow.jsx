@@ -80,6 +80,8 @@ export default function ChatRow({ room }) {
       ? null
       : room.last_message;
   const unread = room.unread_count || 0;
+  const displayName = room.display_name ||
+    (room.type === "dm" ? "Deleted user" : room.name || "Conversation");
 
   return (
     <li className="relative">
@@ -98,14 +100,14 @@ export default function ChatRow({ room }) {
           }`
         }
       >
-        <Avatar name={room.display_name} src={room.display_avatar} size="md" />
+        <Avatar name={displayName} src={room.display_avatar} size="md" />
 
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline justify-between gap-2">
             <span
               className={`truncate text-label ${unread ? "font-semibold" : "font-medium"}`}
             >
-              {room.display_name}
+              {displayName}
             </span>
             <span className="shrink-0 text-metadata text-muted">
               {formatRoomTime(room.last_message?.created_at)}
@@ -169,7 +171,7 @@ export default function ChatRow({ room }) {
         onClick={() => setMenuOpen((open) => !open)}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
-        aria-label={`Actions for ${room.display_name}`}
+        aria-label={`Actions for ${displayName}`}
         className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-muted transition-colors hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
       >
         <IconMore className="h-4 w-4" aria-hidden="true" />
@@ -229,7 +231,7 @@ export default function ChatRow({ room }) {
         onClose={() => setMenuOpen(false)}
         triggerRef={triggerRef}
         align="end"
-        label={`Actions for ${room.display_name}`}
+        label={`Actions for ${displayName}`}
         className="w-44"
       >
         {room.last_message?._previewState && (
@@ -298,9 +300,6 @@ export default function ChatRow({ room }) {
           <IconArchive className="h-4 w-4 text-muted" aria-hidden="true" />
           {isArchived ? "Unarchive" : "Archive"}
         </button>
-        <p className="border-t border-line px-2.5 pb-1 pt-2 text-metadata text-muted">
-          Saved to your account
-        </p>
       </PopoverMenu>
     </li>
   );

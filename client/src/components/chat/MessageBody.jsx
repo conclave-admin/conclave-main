@@ -1,6 +1,9 @@
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { sharedUrls } from "../../lib/sharedLinks";
+import { api } from "../../lib/api";
 const LIMIT = 1000;
+const linkMetadata = new Map();
+const pendingMetadata = new Map();
 function highlight(text, query) {
   if (!query) return text;
   const lower = text.toLocaleLowerCase(),
@@ -116,7 +119,8 @@ export default function MessageBody({
   query = "",
 }) {
   const [expanded, setExpanded] = useState(false),
-    [preview, setPreview] = useState(false);
+    [showAllLinks, setShowAllLinks] = useState(false),
+    [firstPreview, setFirstPreview] = useState(null);
   const id = useId(),
     root = useRef(null),
     anchor = useRef(null);
@@ -131,6 +135,29 @@ export default function MessageBody({
     }
   }, [expanded]);
   const urls = sharedUrls(text).slice(0, 3);
+  const firstUrl = urls[0];
+  useEffect(() => {
+    let active = true;
+    setFirstPreview(linkMetadata.get(firstUrl) || null);
+    if (firstUrl && !linkMetadata.has(firstUrl)) {
+      let pending = pendingMetadata.get(firstUrl);
+      if (!pending) {
+        pending = api.get("/links/preview", { params: { url: firstUrl } })
+          .then(({ data }) => {
+            linkMetadata.set(firstUrl, data.data || null);
+            return data.data || null;
+          })
+          .catch(() => null)
+          .finally(() => pendingMetadata.delete(firstUrl));
+        pendingMetadata.set(firstUrl, pending);
+      }
+      pending.then((metadata) => {
+        if (active) setFirstPreview(metadata);
+      });
+    }
+    return () => { active = false; };
+  }, [firstUrl]);
+  const visibleUrls = showAllLinks ? urls : urls.slice(0, 1);
   return (
     <div ref={root} className="min-w-0 max-w-full">
       <div
@@ -159,30 +186,38 @@ export default function MessageBody({
       )}
       {urls.length > 0 && (
         <div className="mt-2 border-t border-current/15 pt-1">
-          <button
-            type="button"
-            className="min-h-8 text-xs underline"
-            aria-expanded={preview}
-            onClick={() => setPreview((v) => !v)}
-          >
-            {preview ? "Hide link cards" : "Show link cards"}
-          </button>
-          {preview &&
-            urls.map((url) => (
-              <a
-                key={url}
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-1 block rounded-lg border border-current/15 bg-black/5 p-2 text-xs"
-              >
-                <strong>{new URL(url).hostname}</strong>
-                <span className="mt-1 block truncate">{url}</span>
-                <span className="opacity-70">
-                  Open website · no external preview fetched
+          {urls.length > 1 && (
+            <button
+              type="button"
+              className="min-h-8 text-xs underline"
+              aria-expanded={showAllLinks}
+              onClick={() => setShowAllLinks((value) => !value)}
+            >
+              {showAllLinks ? "Show first link" : "Show link cards"}
+            </button>
+          )}
+          {visibleUrls.map((url) => (
+            <a
+              key={url}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 block rounded-lg border border-current/15 bg-black/5 p-2 text-xs"
+            >
+              <span className="block truncate opacity-70">
+                {(url === firstUrl && firstPreview?.host) || new URL(url).hostname}
+              </span>
+              <strong className="mt-1 block line-clamp-2 text-sm">
+                {(url === firstUrl && firstPreview?.title) || new URL(url).hostname}
+              </strong>
+              {url === firstUrl && firstPreview?.description && (
+                <span className="mt-1 block line-clamp-2 opacity-80">
+                  {firstPreview.description}
                 </span>
-              </a>
-            ))}
+              )}
+              <span className="mt-1 block truncate opacity-70">{url}</span>
+            </a>
+          ))}
         </div>
       )}
     </div>

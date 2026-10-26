@@ -7,6 +7,7 @@ import { readDraft } from "../lib/drafts";
 import { conversationMessageVisible } from "../lib/clearedConversations";
 import { respondToRequest } from "../services/security.service";
 import { activeReadView } from "../lib/messageReads";
+import { isDevAuthBypass } from "../config/devPreview";
 import MessageInfoDialog from "../components/chat/MessageInfoDialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -118,6 +119,7 @@ export default function Room() {
   }, [roomId]);
   const [jumpTarget, setJumpTarget] = useState(null);
   const [highlightedId, setHighlightedId] = useState(null);
+  const jumpTimerRef = useRef(null);
 
   const scrollContainerRef = useRef(null);
 
@@ -185,48 +187,105 @@ export default function Room() {
       setStoredPosition(null);
     }
   }, [messagesError, anchorId, viewerId, roomId, storedPosition?.id]);
-  const threadCountKey = messages
-    .map((m) => `${m.id}:${m.thread_root_id || ""}:${m.deleted_at || ""}`)
-    .join("|");
+  const threadRootSignatures = useMemo(() => {
+    const roots = new Map();
+    for (const message of messages) {
+      const id = message.thread_root_id || message.id;
+      if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
+      const current = roots.get(id) || { count: 0, deleted: 0 };
+      current.count += 1;
+      if (message.deleted_at || message.is_deleted) current.deleted += 1;
+      roots.set(id, current);
+    }
+    return [...roots].map(([id, value]) => ({
+      id,
+      signature: `${value.count}:${value.deleted}`,
+    }));
+  }, [messages]);
+  const fetchedThreadRootsRef = useRef({
+    roomId: null,
+    revision: null,
+    signatures: new Map(),
+  });
   useEffect(() => {
     let active = true;
-    const ids = [
-      ...new Set(
-        messages
-          .map((m) => m.thread_root_id || m.id)
-          .filter((id) => /^[0-9a-f-]{36}$/i.test(id)),
-      ),
-    ];
+    const cache = fetchedThreadRootsRef.current;
+    if (cache.roomId !== roomId || cache.revision !== threadCountsRevision) {
+      cache.roomId = roomId;
+      cache.revision = threadCountsRevision;
+      cache.signatures = new Map();
+      setThreadCounts({});
+    }
+    const pending = threadRootSignatures.filter(
+      ({ id, signature }) => cache.signatures.get(id) !== signature,
+    );
     (async () => {
       const counts = {};
-      for (let i = 0; i < ids.length; i += 200) {
+      const succeeded = [];
+      for (let i = 0; i < pending.length; i += 200) {
+        const page = pending.slice(i, i + 200);
         try {
           const result = (
             await api.get(`/experience/rooms/${roomId}/thread-counts`, {
-              params: { ids: ids.slice(i, i + 200).join(",") },
+              params: { ids: page.map(({ id }) => id).join(",") },
             })
           ).data.data;
-          for (const row of result.threads) counts[row.id] = row;
+          if (!active) return;
+          succeeded.push(...page);
+          result.threads.forEach((row) => {
+            counts[row.id] = row;
+          });
         } catch {}
       }
-      if (active) setThreadCounts(counts);
+      if (!active) return;
+      succeeded.forEach(({ id, signature }) =>
+        cache.signatures.set(id, signature),
+      );
+      if (Object.keys(counts).length)
+        setThreadCounts((previous) => ({ ...previous, ...counts }));
     })();
     return () => {
       active = false;
     };
-  }, [roomId, threadCountKey, threadCountsRevision]);
+  }, [roomId, threadRootSignatures, threadCountsRevision]);
+
+  const timelineMessages = useMemo(
+    () =>
+      messages.map((message) => ({
+        ...message,
+        thread_count:
+          threadCounts[message.thread_root_id || message.id]?.reply_count,
+        thread_unread:
+          threadCounts[message.thread_root_id || message.id]?.unread_count,
+        ...(message.id === anchorId
+          ? {
+              _searchMatch: true,
+              _searchQuery: searchParams.get("q") || "",
+            }
+          : {}),
+      })),
+    [messages, threadCounts, anchorId, searchParams],
+  );
 
   useEffect(() => {
     setHighlightedId(null);
     setJumpTarget(anchorId ? { id: anchorId } : null);
   }, [roomId, anchorId]);
 
+  useEffect(() => () => clearTimeout(jumpTimerRef.current), []);
+
+  const handleJumpLocated = useCallback((id) => {
+    clearTimeout(jumpTimerRef.current);
+    setHighlightedId(id);
+    jumpTimerRef.current = setTimeout(() => {
+      setHighlightedId(null);
+      setJumpTarget(null);
+    }, 2200);
+  }, []);
+
   useEffect(() => {
     if (!jumpTarget?.id || messagesLoading || roomLoading) return;
-    const node = scrollContainerRef.current?.querySelector(
-      `[data-message-id="${CSS.escape(String(jumpTarget.id))}"]`,
-    );
-    if (!node) {
+    if (!messages.some((message) => message.id === jumpTarget.id)) {
       if (messagesError || !hasMore) {
         setJumpTarget(null);
         if (!messagesError)
@@ -236,15 +295,7 @@ export default function Room() {
             tone: "error",
           });
       } else if (!isLoadingOlder) loadOlder();
-      return;
     }
-    node.scrollIntoView({ behavior: "smooth", block: "center" });
-    setHighlightedId(jumpTarget.id);
-    const timer = setTimeout(() => {
-      setHighlightedId(null);
-      setJumpTarget(null);
-    }, 2200);
-    return () => clearTimeout(timer);
   }, [
     jumpTarget,
     messages,
@@ -483,18 +534,7 @@ export default function Room() {
           </p>
         ) : (
           <MessageTimeline
-            messages={messages.map((m) => ({
-              ...m,
-              thread_count: threadCounts[m.thread_root_id || m.id]?.reply_count,
-              thread_unread:
-                threadCounts[m.thread_root_id || m.id]?.unread_count,
-              ...(m.id === anchorId
-                ? {
-                    _searchMatch: true,
-                    _searchQuery: searchParams.get("q") || "",
-                  }
-                : {}),
-            }))}
+            messages={timelineMessages}
             initialPosition={!anchorId ? storedPosition : null}
             scrollContainerRef={scrollContainerRef}
             viewerId={viewerId}
@@ -541,7 +581,14 @@ export default function Room() {
               room?.encryption_mode === "e2ee-v1" ? undefined : setForwarding
             }
             onJumpToMessage={jumpToMessage}
+            jumpTargetId={jumpTarget?.id}
+            onJumpLocated={handleJumpLocated}
             highlightedId={highlightedId}
+            disableWindowing={
+              isDevAuthBypass &&
+              roomId === "preview-large-room" &&
+              searchParams.has("fullHistory")
+            }
           />
         )}
       </div>

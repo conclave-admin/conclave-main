@@ -9,7 +9,6 @@ import Input from "@/components/ui/Input";
 import Modal from "@/components/ui/Modal";
 import Textarea from "@/components/ui/Textarea";
 import { useAuth } from "@/contexts/AuthContext";
-import { useChats } from "@/contexts/ChatsContext";
 import { useToast } from "@/contexts/ToastContext";
 import { uploadAvatar } from "@/services/users.service";
 import Page from "@/components/layout/Page";
@@ -33,7 +32,6 @@ import Page from "@/components/layout/Page";
 export default function Profile() {
   const { setRoomHeader } = useOutletContext();
   const { user, logout, updateProfile, deleteAccount } = useAuth();
-  const { rooms = [], unreadTotal = 0 } = useChats();
   const { toast } = useToast();
   const fileRef = useRef(null);
 
@@ -61,15 +59,6 @@ export default function Profile() {
   const nameChanged = displayName.trim() !== (user?.display_name || "");
   const bioChanged = bio !== (user?.bio || "");
   const isDirty = nameChanged || bioChanged;
-  const dmCount = rooms.filter((room) => room.type === "dm").length;
-  const roomCount = rooms.filter((room) => room.type !== "dm").length;
-
-  const memberSince = user?.created_at
-    ? new Date(user.created_at).toLocaleDateString(undefined, {
-        month: "long",
-        year: "numeric",
-      })
-    : "—";
 
   async function onPickAvatar(event) {
     const file = event.target.files?.[0];
@@ -132,9 +121,6 @@ export default function Profile() {
     <Page width="content">
       <div>
         <h1 className="text-h1 text-ink">Your profile</h1>
-        <p className="mt-2 text-body leading-relaxed text-muted">
-          Your identity and account details across your conversations.
-        </p>
       </div>
 
       <section
@@ -159,29 +145,12 @@ export default function Profile() {
                 "Add a short introduction so people know who they are talking to."}
             </p>
           </div>
-          <div className="shrink-0 rounded-xl bg-canvas px-4 py-3 text-left sm:text-right">
-            <p className="text-metadata text-muted">Member since</p>
-            <p className="mt-1 text-label text-ink">{memberSince}</p>
-          </div>
         </div>
-      </section>
-
-      <section
-        className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4"
-        aria-label="Account overview"
-      >
-        <ProfileStat label="Conversations" value={rooms.length} />
-        <ProfileStat label="Direct messages" value={dmCount} />
-        <ProfileStat label="Rooms" value={roomCount} />
-        <ProfileStat label="Unread messages" value={unreadTotal} />
       </section>
 
       <section className="mt-8 rounded-2xl border border-line bg-surface p-5 md:p-7">
         <div>
           <h2 className="text-h2 text-ink">Edit your profile</h2>
-          <p className="mt-1 text-body text-muted">
-            This is the name, photo, and introduction other members see.
-          </p>
         </div>
 
         <section className="mt-6 flex flex-wrap items-center gap-4">
@@ -204,9 +173,6 @@ export default function Profile() {
               className="sr-only"
               aria-label="Upload a profile photo"
             />
-            <p className="mt-2 text-metadata text-muted">
-              PNG, JPEG, WebP or GIF.
-            </p>
           </div>
         </section>
 
@@ -225,9 +191,6 @@ export default function Profile() {
               readOnly
               disabled
             />
-            <p className="mt-1 text-metadata text-muted">
-              Email is used to sign in and is only shown here to you.
-            </p>
           </div>
           <Textarea
             className="md:col-span-2"
@@ -303,14 +266,5 @@ export default function Profile() {
         </p>
       </Modal>
     </Page>
-  );
-}
-
-function ProfileStat({ label, value }) {
-  return (
-    <div className="rounded-xl border border-line bg-surface px-4 py-3">
-      <p className="text-metadata text-muted">{label}</p>
-      <p className="mt-1 text-h2 tabular-nums text-ink">{value}</p>
-    </div>
   );
 }

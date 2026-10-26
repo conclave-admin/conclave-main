@@ -12,7 +12,7 @@ const SIZES = {
 
 export function initialsOf(name = "") {
   return (
-    name
+    String(name ?? "")
       .split(" ")
       .filter(Boolean)
       .map((part) => part[0])
