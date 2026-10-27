@@ -36,11 +36,13 @@ const ROOM_TARGET_TYPES = ["room_invite", "member_joined"];
 // Added in phase 8: flagging a message as a task told nobody. The assignee had
 // no way to learn about it short of opening the board.
 const TASK_TARGET_TYPES = ["task"];
+const DECISION_TARGET_TYPES = ["decision"];
 
 const NOTIFICATION_TYPES = [
   ...MESSAGE_TARGET_TYPES,
   ...ROOM_TARGET_TYPES,
   ...TASK_TARGET_TYPES,
+  ...DECISION_TARGET_TYPES,
 ];
 
 const TARGET_OF = {
@@ -51,6 +53,7 @@ const TARGET_OF = {
   room_invite: "room",
   member_joined: "room",
   task: "task",
+  decision: "decision",
 };
 
 // Long enough to render a line in the bell, short enough not to dump a whole
@@ -142,6 +145,7 @@ async function presentNotifications(rows, { db } = {}) {
   const messageIds = [];
   const roomIds = [];
   const taskIds = [];
+  const decisionIds = [];
   const actorIds = new Set();
   for (const row of rows) {
     if (row.actor_id) actorIds.add(row.actor_id);
@@ -149,6 +153,7 @@ async function presentNotifications(rows, { db } = {}) {
     if (TARGET_OF[row.type] === "message") messageIds.push(row.reference_id);
     else if (TARGET_OF[row.type] === "room") roomIds.push(row.reference_id);
     else if (TARGET_OF[row.type] === "task") taskIds.push(row.reference_id);
+    else if (TARGET_OF[row.type] === "decision") decisionIds.push(row.reference_id);
   }
 
   // A soft-deleted message still resolves — the recipient should still see that
@@ -207,6 +212,16 @@ async function presentNotifications(rows, { db } = {}) {
     for (const t of found) tasks.set(t.id, t);
   }
 
+  const decisions = new Map();
+  if (decisionIds.length > 0) {
+    const { rows: found } = await run(
+      `SELECT d.id, d.title, d.status, d.room_id, r.name AS room_name, r.slug AS room_slug
+       FROM decisions d JOIN rooms r ON r.id=d.room_id WHERE d.id=ANY($1::uuid[])`,
+      [decisionIds],
+    );
+    for (const decision of found) decisions.set(decision.id, decision);
+  }
+
   return rows.map((row) => {
     let context = {
       room_id: null,
@@ -257,6 +272,16 @@ async function presentNotifications(rows, { db } = {}) {
           task_title: t.title,
         };
       }
+    } else if (row.reference_id && TARGET_OF[row.type] === "decision") {
+      const decision = decisions.get(row.reference_id);
+      if (decision) context = {
+        ...context,
+        room_id: decision.room_id,
+        room_name: decision.room_name,
+        room_slug: decision.room_slug,
+        decision_title: decision.title,
+        decision_status: decision.status,
+      };
     }
 
     // Whoever caused it, falling back to the message's sender when the row has

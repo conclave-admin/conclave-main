@@ -10,6 +10,16 @@ function previewFor(roomId) {
     : previewDecisions;
 }
 
+export async function getDecisionOverview() {
+  if (isDevAuthBypass) return {
+    active: previewDecisions.filter((item) => item.status !== "retracted").length,
+    retracted: previewDecisions.filter((item) => item.status === "retracted").length,
+    with_open_tasks: 0, follow_ups_done: 0,
+  };
+  const { data } = await api.get("/decisions/overview");
+  return data.data;
+}
+
 /**
  * Decisions across every room the caller is in.
  *
@@ -20,11 +30,15 @@ function previewFor(roomId) {
  *   opaque `created_at|id` cursor from the previous page
  * @returns {{ decisions: Array, nextCursor: string|null }}
  */
-export async function listDecisions({ roomId, before } = {}) {
+export async function listDecisions({ roomId, before, pinnedOnly = false, status = "all" } = {}) {
   if (isDevAuthBypass)
-    return { decisions: previewFor(roomId), nextCursor: null };
+    return { decisions: (pinnedOnly
+      ? previewFor(roomId).filter((decision) =>
+        decision.pins?.room || decision.pins?.mine?.length)
+      : previewFor(roomId)).filter((decision) =>
+        status === "all" || (decision.status || "active") === status), nextCursor: null };
   const { data } = await api.get("/decisions", {
-    params: { roomId, before },
+    params: { roomId, before, pinned: pinnedOnly || undefined, status },
   });
   return data.data;
 }
@@ -39,20 +53,26 @@ export async function listDecisions({ roomId, before } = {}) {
  * @param {string} q
  * @param {string} [roomId]
  */
-export async function searchDecisions(q, roomId) {
+export async function searchDecisions(q, roomId, after, status = "all") {
   if (isDevAuthBypass) {
     const needle = q.trim().toLowerCase();
-    return previewFor(roomId).filter(
+    const matches = previewFor(roomId).filter(
       (decision) =>
-        decision.title.toLowerCase().includes(needle) ||
+        (status === "all" || (decision.status || "active") === status) &&
+        (decision.title.toLowerCase().includes(needle) ||
         decision.body.toLowerCase().includes(needle) ||
-        (decision.tags || []).some((tag) => tag.includes(needle)),
+        (decision.tags || []).some((tag) => tag.includes(needle))),
     );
+    const index = Number(after || 0);
+    return {
+      decisions: matches.slice(index, index + 50),
+      nextCursor: matches.length > index + 50 ? String(index + 50) : null,
+    };
   }
   const { data } = await api.get("/decisions/search", {
-    params: { q, roomId },
+    params: { q, roomId, after, status },
   });
-  return data.data.decisions;
+  return data.data;
 }
 
 /**
@@ -92,6 +112,7 @@ export async function promoteToDecision({
   title,
   body,
   tags,
+  clientId,
 }) {
   const { data } = await api.post("/decisions", {
     roomId,
@@ -99,7 +120,25 @@ export async function promoteToDecision({
     title,
     body,
     tags: tags || [],
+    clientId,
   });
+  return data.data;
+}
+
+export async function editDecision(decisionId, changes) {
+  const { data } = await api.patch(`/decisions/${decisionId}`, changes);
+  return data.data;
+}
+
+export async function retractDecision(decisionId, version, reason) {
+  const { data } = await api.post(`/decisions/${decisionId}/retract`, {
+    version, reason,
+  });
+  return data.data;
+}
+
+export async function getDecisionHistory(decisionId, before) {
+  const { data } = await api.get(`/decisions/${decisionId}/history`, { params: { before } });
   return data.data;
 }
 

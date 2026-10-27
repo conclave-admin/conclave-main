@@ -4,7 +4,10 @@ const validateUuidParams = require("../middlewares/validateParams");
 const {
   createTask,
   listTasks,
+  getTask,
   updateTaskStatus,
+  addTaskUpdate,
+  editTask,
 } = require("../controllers/tasks.controller");
 
 const router = Router();
@@ -23,6 +26,9 @@ router.get("/room/:roomId", (req, res, next) => {
   req.query.roomId = req.params.roomId;
   return listTasks(req, res, next);
 });
+router.get("/:taskId", getTask);
+router.patch("/:taskId", editTask);
 router.patch("/:taskId/status", updateTaskStatus);
+router.post("/:taskId/updates", addTaskUpdate);
 
 module.exports = router;

@@ -36,11 +36,13 @@ export default function FlagAsTaskDialog({
   const [dueDate, setDueDate] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
+  const [clientId, setClientId] = useState(() => crypto.randomUUID());
 
   // Opened from the attach menu rather than from a message: no source message,
   // no prefilled title, so the title field is the only thing that must be
   // filled before the request can go out.
   const manual = Boolean(message?.manual);
+  const draftKey = `task-create:${roomId}:${message?.id || "manual"}`;
 
   const candidates = useMemo(
     () => members.filter((member) => member.id && member.display_name),
@@ -55,7 +57,11 @@ export default function FlagAsTaskDialog({
     setAssigneeId("");
     setDueDate("");
     setError("");
-  }, [open, message]);
+    const existing = sessionStorage.getItem(draftKey);
+    const nextId = existing || crypto.randomUUID();
+    sessionStorage.setItem(draftKey, nextId);
+    setClientId(nextId);
+  }, [open, message, draftKey]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -73,8 +79,10 @@ export default function FlagAsTaskDialog({
         body: body.trim() || undefined,
         assigneeId: assigneeId || undefined,
         dueDate: dueDate || undefined,
+        clientId,
       });
       onCreated?.(task);
+      sessionStorage.removeItem(draftKey);
       onClose();
     } catch (err) {
       setError(err.response?.data?.message || "Could not create this task.");

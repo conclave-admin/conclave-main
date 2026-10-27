@@ -44,11 +44,16 @@ const getRoomDigest = asyncHandler(async (req, res) => {
 
   // 2. New decisions since last visit
   const decisions = await query(
-    `SELECT d.id, d.title, d.body, d.tags, d.created_at, u.display_name AS author_name
+    `SELECT d.id, d.title, d.body, d.tags, dr.changed_at AS created_at,
+            dr.status, dr.version, u.display_name AS author_name
      FROM decisions d
-     INNER JOIN users u ON u.id = d.created_by
-     WHERE d.room_id = $1 AND d.created_at > $2
-     ORDER BY d.created_at DESC`,
+     INNER JOIN LATERAL (
+       SELECT changed_at, changed_by, status, version FROM decision_revisions
+       WHERE decision_id=d.id AND changed_at > $2 ORDER BY version DESC LIMIT 1
+     ) dr ON TRUE
+     INNER JOIN users u ON u.id = dr.changed_by
+     WHERE d.room_id = $1
+     ORDER BY dr.changed_at DESC`,
     [roomId, lastSeenAt],
   );
 
@@ -120,7 +125,7 @@ const getRoomDigest = asyncHandler(async (req, res) => {
     ...decisions.rows.map((d) => ({
       id: d.id,
       type: "decision",
-      title: d.title,
+      title: `${d.version === 1 ? "Recorded" : d.status === "retracted" ? "Retracted" : "Updated"}: ${d.title}`,
       metadata: d.author_name,
       room_id: roomId,
       room_name: roomName,
@@ -209,15 +214,20 @@ const getUserDigest = asyncHandler(async (req, res) => {
 
   // 1. New decisions across all rooms
   const decisions = await query(
-    `SELECT d.id, d.title, d.body, d.tags, d.created_at, d.room_id,
+    `SELECT d.id, d.title, d.body, d.tags, dr.changed_at AS created_at,
+            dr.status, dr.version, d.room_id,
             r.name AS room_name, u.display_name AS author_name
      FROM decisions d
      INNER JOIN rooms r ON r.id = d.room_id
-     INNER JOIN users u ON u.id = d.created_by
      INNER JOIN room_members rm ON rm.room_id = d.room_id AND rm.user_id = $2
+     INNER JOIN LATERAL (
+       SELECT changed_at, changed_by, status, version FROM decision_revisions
+       WHERE decision_id=d.id AND changed_at > rm.digest_seen_at
+       ORDER BY version DESC LIMIT 1
+     ) dr ON TRUE
+     INNER JOIN users u ON u.id = dr.changed_by
      WHERE d.room_id = ANY($1)
-       AND d.created_at > rm.digest_seen_at
-     ORDER BY d.created_at DESC
+     ORDER BY dr.changed_at DESC
      LIMIT 50`,
     [roomIds, req.user.id],
   );
@@ -299,7 +309,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
     ...decisions.rows.map((d) => ({
       id: d.id,
       type: "decision",
-      title: d.title,
+      title: `${d.version === 1 ? "Recorded" : d.status === "retracted" ? "Retracted" : "Updated"}: ${d.title}`,
       metadata: d.author_name,
       room_id: d.room_id,
       room_name: d.room_name,

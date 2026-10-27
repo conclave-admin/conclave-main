@@ -48,6 +48,7 @@ const TYPES = [
   { value: "room_invite", label: "Room invites" },
   { value: "member_joined", label: "New room members" },
   { value: "task", label: "Task assignments" },
+  { value: "decision", label: "Decision changes" },
 ];
 
 /**

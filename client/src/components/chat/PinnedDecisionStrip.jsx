@@ -23,10 +23,8 @@ import PopoverMenu from "@/components/ui/PopoverMenu";
  * "this is pinned for everyone". Collapsing them into one row would make a
  * personal note look like a room-wide agreement.
  *
- * The strip is driven by the `pins` object the server attaches to every
- * decision, and by the `decision:pinned` / `decision:unpinned` events, which
- * carry a full decision rather than a delta — so an unpin is a replace, not a
- * filter, and a 409 arriving on a stale read is corrected without a refetch.
+ * The strip is driven by the viewer-specific `pins` object. Realtime events
+ * carry identifiers only, so this component refetches its own bookmark state.
  *
  * A chip opens the decision itself, via GET /decisions/:decisionId (added in
  * phase 6 for exactly this). Before that endpoint existed the chip linked to
@@ -39,6 +37,18 @@ export default function PinnedDecisionStrip({ roomId }) {
   const triggerRef = useRef(null);
   const { toast } = useToast();
   const { socket } = useRealtime();
+  const requestVersion = useRef(0);
+
+  const fetchPinned = useCallback(async () => {
+    const rows = [];
+    let before;
+    do {
+      const page = await listDecisions({ roomId, pinnedOnly: true, before });
+      rows.push(...page.decisions);
+      before = page.nextCursor;
+    } while (before);
+    return rows;
+  }, [roomId]);
 
   const mergeDecision = useCallback((incoming) => {
     setDecisions((prev) => {
@@ -52,13 +62,14 @@ export default function PinnedDecisionStrip({ roomId }) {
 
   useEffect(() => {
     let cancelled = false;
+    const version = ++requestVersion.current;
     setIsLoading(true);
-    listDecisions({ roomId })
-      .then(({ decisions: rows }) => {
-        if (!cancelled) setDecisions(rows);
+    fetchPinned()
+      .then((rows) => {
+        if (!cancelled && version === requestVersion.current) setDecisions(rows);
       })
       .catch(() => {
-        if (!cancelled) setDecisions([]);
+        if (!cancelled && version === requestVersion.current) setDecisions([]);
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);
@@ -66,32 +77,42 @@ export default function PinnedDecisionStrip({ roomId }) {
     return () => {
       cancelled = true;
     };
-  }, [roomId]);
+  }, [fetchPinned]);
 
   useEffect(() => {
     if (!socket) return undefined;
 
+    let active = true;
+    const refreshPinned = () => {
+      const version = ++requestVersion.current;
+      fetchPinned()
+        .then((rows) => {
+          if (active && version === requestVersion.current) setDecisions(rows);
+        })
+        .catch(() => {});
+    };
     const onPinned = (payload) => {
-      if (payload?.decision?.room_id === roomId)
-        mergeDecision(payload.decision);
+      if (payload?.roomId === roomId)
+        refreshPinned();
     };
     const onUnpinned = (payload) => {
-      if (payload?.decision?.room_id !== roomId) return;
-      const decision = payload.decision;
-      const stillPinned =
-        decision.pins?.room || (decision.pins?.mine || []).length > 0;
-      if (stillPinned) mergeDecision(decision);
-      else
-        setDecisions((prev) => prev.filter((item) => item.id !== decision.id));
+      if (payload?.roomId === roomId)
+        refreshPinned();
+    };
+    const onChanged = (payload) => {
+      if (payload?.roomId === roomId) refreshPinned();
     };
 
     socket.on("decision:pinned", onPinned);
     socket.on("decision:unpinned", onUnpinned);
+    socket.on("decision:changed", onChanged);
     return () => {
+      active = false;
       socket.off("decision:pinned", onPinned);
       socket.off("decision:unpinned", onUnpinned);
+      socket.off("decision:changed", onChanged);
     };
-  }, [socket, roomId, mergeDecision]);
+  }, [socket, roomId, fetchPinned]);
 
   const pinned = decisions
     .filter(
@@ -112,9 +133,7 @@ export default function PinnedDecisionStrip({ roomId }) {
       // A 409 means the room pin moved to somebody else. Refetching rather than
       // guessing at the new holder keeps the strip honest when two people race.
       if (err.response?.status === 409) {
-        const { decisions: rows } = await listDecisions({ roomId }).catch(
-          () => ({ decisions: [] }),
-        );
+        const rows = await fetchPinned().catch(() => []);
         setDecisions(rows);
       }
     }
@@ -151,7 +170,7 @@ export default function PinnedDecisionStrip({ roomId }) {
             const isRoomPinned = Boolean(decision.pins?.room);
             const mineScopes = decision.pins?.mine || [];
             const isMineOnly = !isRoomPinned && mineScopes.includes("user");
-            const canUnpinRoom = mineScopes.includes("room");
+            const canUnpinRoom = decision.capabilities?.canUnpinRoom ?? mineScopes.includes("room");
 
             return (
               <li key={decision.id}>
@@ -184,13 +203,13 @@ export default function PinnedDecisionStrip({ roomId }) {
 
                   {(isMineOnly || canUnpinRoom || isRoomPinned) && (
                     <button
-                      ref={triggerRef}
                       type="button"
-                      onClick={() =>
+                      onClick={(event) => {
+                        triggerRef.current = event.currentTarget;
                         setMenuFor((open) =>
                           open === decision.id ? null : decision.id,
-                        )
-                      }
+                        );
+                      }}
                       aria-haspopup="menu"
                       aria-expanded={menuFor === decision.id}
                       aria-label={`Pin actions for ${decision.title}`}

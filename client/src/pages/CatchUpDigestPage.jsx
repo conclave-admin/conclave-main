@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import EmptyState from "../components/ui/EmptyState";
 import Button from "../components/ui/Button";
 import Spinner from "../components/ui/Spinner";
@@ -18,7 +18,7 @@ const ITEM_TYPES = {
   activity: { label: "HIGH ACTIVITY", color: "text-brand", dot: "bg-brand" },
 };
 
-function DigestItem({ type, title, metadata, room_name }) {
+function DigestItem({ id, type, title, metadata, room_name }) {
   const { label, color, dot } = ITEM_TYPES[type] || {
     label: "UPDATE",
     color: "text-muted",
@@ -32,9 +32,14 @@ function DigestItem({ type, title, metadata, room_name }) {
       />
       <div className="min-w-0 flex-1">
         <p className={`text-label ${color}`}>{label}</p>
-        <p className="mt-3 text-h2 text-ink [overflow-wrap:anywhere]">
-          {title}
-        </p>
+        {type === "decision" ? (
+          <Link to={`/decisions/${id}`}
+            className="mt-3 block text-h2 text-ink hover:text-brand [overflow-wrap:anywhere]">
+            {title}
+          </Link>
+        ) : (
+          <p className="mt-3 text-h2 text-ink [overflow-wrap:anywhere]">{title}</p>
+        )}
         {/* metadata is authored by, or describes, the room — so it is never
             null for the four content types, and null for activity. The room
             name carries the "where" when there is no actor to name. */}

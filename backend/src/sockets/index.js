@@ -68,19 +68,15 @@ const {
 //                                   writers publish, so a read tick updates for
 //                                   everyone whether the reader arrived via the
 //                                   socket or the REST call.
-//   decision:pinned    { decision, scope, userId }
-//   decision:unpinned  { decision, scope, userId }
-//                                   from PUT /decisions/:decisionId/pin and
-//                                   DELETE .../pin/:scope. The decision carries
-//                                   pins.room, which is shared truth and identical
-//                                   for every viewer. It does NOT carry a finished
-//                                   pins.mine — that is per viewer, the same way
-//                                   reactions' `reacted` is, so each client fixes
-//                                   up its own from the acting userId.
-//   task:updated       { task }     emitted by POST /tasks and
-//                                   PATCH /tasks/:taskId/status. Sent to each
-//                                   of the assignee, the creator and the room's
-//                                   admins individually in `user:{userId}`,
+//   decision:changed   { decisionId, roomId }
+//   decision:pinned    { decisionId, roomId, scope, userId }
+//   decision:unpinned  { decisionId, roomId, scope, userId }
+//                                   Events carry identifiers only; each viewer
+//                                   refetches their own bookmark/capability state.
+//                                   Personal pin events go only to user:{userId}.
+//   task:updated       { taskId, roomId } emitted after task creation or change.
+//                                   Sent to current room members in their
+//                                   personal socket rooms; clients refetch.
 //                                   never to the room — the list query hides a
 //                                   task from everyone else, so announcing it
 //                                   would leak it.
@@ -117,16 +113,12 @@ const {
 //
 // Not yet implemented, so deliberately absent from this list rather than
 // advertised and never sent (BACKEND_TASKS.md Bug 13): upload-progress and
-// decision:created. `notification` is live — emitted by notification.service for
-// room invites and mentions. Marking notifications seen emits the separate
+// `notification` is live — emitted by notification.service for room invites,
+// mentions and decisions. Marking notifications seen emits the separate
 // `notification:seen`, never `notification` with a count in place of a row.
 //
-// Limitation worth knowing, now half-fixed: task:updated is no longer emitted to
-// the task's room (see its entry above), so it reaches the assignee, the creator
-// and the admins on `user:{userId}` — which every socket joins on connect, and so
-// the cross-room Tasks page updates live even though it never joins a room.
-// Nothing else here has changed: sockets still join a chat room only on demand
-// (client/src/hooks/useMessages.js emits join-room when a room view mounts).
+// Task updates reach each current member's personal socket room. The cross-room
+// board can refresh without joining every conversation room.
 
 function registerSocketHandlers(io) {
   registerAccessControl(io);

@@ -1382,8 +1382,14 @@ dbTest("createTask returns the same shape listTasks returns", async () => {
       "assignee_id",
       "assignee_name",
       "body",
+      "can_manage",
+      "can_progress",
       "created_at",
       "created_by",
+      "creator_name",
+      "decision_id",
+      "decision_status",
+      "decision_title",
       "due_date",
       "id",
       "room_id",
@@ -1393,6 +1399,7 @@ dbTest("createTask returns the same shape listTasks returns", async () => {
       "status",
       "title",
       "updated_at",
+      "viewer_role",
     ],
     "createTask must not hand back a different shape than listTasks",
   );
@@ -1563,8 +1570,8 @@ dbTest("status can be updated, and updated_at actually moves", async () => {
   // time would mean the task never appears in anyone's catch-up feed.
   const created = (
     await query(
-      `INSERT INTO tasks (room_id, title, created_by, updated_at)
-       VALUES ($1, 'Bump me', $2, NOW() - interval '2 days') RETURNING id, updated_at`,
+      `INSERT INTO tasks (room_id, title, assignee_id, created_by, updated_at)
+       VALUES ($1, 'Bump me', $2, $2, NOW() - interval '2 days') RETURNING id, updated_at`,
       [room.id, user.id],
     )
   ).rows[0];
@@ -3571,7 +3578,7 @@ dbTest(
 );
 
 dbTest(
-  "a disallowed emoji is rejected by the controller and by the database",
+  "Emoji Mart reactions accept banana and reject arbitrary text",
   async () => {
     const { author, roomId } = await messageFixture("reactallow");
     const message = await sendMessage(author.token, roomId, "bad emoji");
@@ -3585,19 +3592,14 @@ dbTest(
       body: JSON.stringify({ emoji: BANANA }),
     });
     const body = await res.text();
-    assert.equal(res.status, 400, `expected 400, got ${res.status}: ${body}`);
+    assert.equal(res.status, 200, `expected 200, got ${res.status}: ${body}`);
 
-    // The controller check is not the guarantee — the CHECK constraint is, because a
-    // service or script bypassing the controller would otherwise be unconstrained.
-    await assert.rejects(
-      () =>
-        query(
-          `INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3)`,
-          [message.id, author.userId, BANANA],
-        ),
-      (err) => err.code === "23514",
-      "a raw insert of a disallowed emoji must be rejected by the schema",
-    );
+    const invalid = await fetch(`${baseUrl}/api/messages/${message.id}/reactions`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", authorization: `Bearer ${author.token}` },
+      body: JSON.stringify({ emoji: "not-an-emoji" }),
+    });
+    assert.equal(invalid.status, 400);
   },
 );
 
@@ -3930,6 +3932,7 @@ dbTest(
       body: JSON.stringify({
         roomId: room.id,
         title: "Leap-day deadline",
+        assigneeId: user.id,
         dueDate: "2028-02-29",
       }),
     });
@@ -4776,7 +4779,7 @@ dbTest("re-pinning your own scope is idempotent", async () => {
   );
 });
 
-dbTest("you cannot remove another member's personal pin", async () => {
+dbTest("removing an absent personal pin never removes another member's pin", async () => {
   const me = await authedAccount("pin-protect-me@test.com");
   const them = await authedAccount("pin-protect-them@test.com");
   const room = await createRoomVia(me.token, {
@@ -4794,7 +4797,7 @@ dbTest("you cannot remove another member's personal pin", async () => {
   // The author of the decision is also the room admin, and still cannot touch
   // somebody else's private bookmark — that is the point of it being private.
   const res = await unpinVia(me.token, decision.id, "user");
-  assert.equal(res.status, 403, await res.text());
+  assert.equal(res.status, 200, await res.text());
 
   const still = (await listDecisionsVia(them.token, room.id)).find(
     (d) => d.id === decision.id,
@@ -4913,7 +4916,7 @@ dbTest("an unknown pin scope is a 400, not a silent personal pin", async () => {
 });
 
 dbTest(
-  "pinning publishes decision:pinned with shared truth, not a per-viewer payload",
+  "pinning publishes decision identifiers without personal bookmark state",
   async () => {
     const me = await authedAccount("pin-emit@test.com");
     const room = await createRoomVia(me.token, { name: "Pin Emit Room" });
@@ -4942,21 +4945,11 @@ dbTest(
     assert.equal(
       pinned.payload.userId,
       me.userId,
-      "the actor is named so each client can fix up its own mine",
+      "the actor is named for the shared room event",
     );
-    assert.equal(
-      pinned.payload.decision.pins.room.user_id,
-      me.userId,
-      "shared truth rides along",
-    );
-    // pins.mine in this payload is computed for the ACTOR, who happens to be the
-    // viewer in a single-user test. Other clients must not copy it: it is per
-    // viewer, exactly like reactions' `reacted`, and each one derives its own
-    // from the userId above.
-    assert.ok(
-      Array.isArray(pinned.payload.decision.pins.mine),
-      "mine is present as an array",
-    );
+    assert.equal(pinned.payload.decisionId, decision.id);
+    assert.equal(pinned.payload.roomId, room.id);
+    assert.equal(pinned.payload.decision, undefined, "private viewer state is not broadcast");
 
     await unpinDecision({
       decisionId: decision.id,
@@ -4966,11 +4959,8 @@ dbTest(
     });
     const unpinned = captured.find((c) => c.event === "decision:unpinned");
     assert.ok(unpinned, "an unpin is announced too");
-    assert.equal(
-      unpinned.payload.decision.pins.room,
-      null,
-      "and carries the now-empty room pin",
-    );
+    assert.equal(unpinned.payload.decisionId, decision.id);
+    assert.equal(unpinned.payload.roomId, room.id);
   },
 );
 
@@ -6943,7 +6933,7 @@ dbTest(
 // against both: a task a member cannot SEE, they also cannot MOVE.
 
 dbTest(
-  "a task is hidden from a member who is neither the assignee nor the creator",
+  "a task is visible to members, but only its assignee can change progress",
   async () => {
     const run = Date.now();
     const admin = await authedAccount(`tv2-admin-${run}@test.com`);
@@ -6991,15 +6981,15 @@ dbTest(
       "the creator — who is also the room admin — must see it",
     );
     assert.ok(
-      !(await titlesFor(bystander.token)).includes(task.title),
-      "a plain member must not be shown a task they cannot act on",
+      (await titlesFor(bystander.token)).includes(task.title),
+      "a plain member must be able to follow a group task",
     );
 
     // Room-scoped reads agree with the cross-room list rather than widening it.
     const scoped = await titlesFor(bystander.token, `?roomId=${room.id}`);
     assert.ok(
-      !scoped.includes(task.title),
-      "the room-scoped list hides it too",
+      scoped.includes(task.title),
+      "the room-scoped list includes it too",
     );
 
     // And the write path agrees with the read path.
@@ -7014,7 +7004,7 @@ dbTest(
     const patchBody = await patch.text();
     assert.equal(
       patch.status,
-      404,
+      403,
       `a bystander must not move a task: ${patch.status} ${patchBody}`,
     );
 
@@ -7026,7 +7016,13 @@ dbTest(
       },
       body: JSON.stringify({ status: "in_progress" }),
     });
-    assert.equal(asAdmin.status, 200, await asAdmin.text());
+    assert.equal(asAdmin.status, 403, await asAdmin.text());
+    const asAssignee = await fetch(`${baseUrl}/api/tasks/${task.id}/status`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", authorization: `Bearer ${assignee.token}` },
+      body: JSON.stringify({ status: "in_progress" }),
+    });
+    assert.equal(asAssignee.status, 200, await asAssignee.text());
   },
 );
 
@@ -7068,8 +7064,8 @@ dbTest(
       "the creator of an unassigned task must still be able to find it",
     );
     assert.ok(
-      !(await titles(bystander.token)).includes("Nobody owns this yet"),
-      "and it must still be hidden from everyone else",
+      (await titles(bystander.token)).includes("Nobody owns this yet"),
+      "room members can view unassigned work",
     );
   },
 );
@@ -8004,3 +8000,132 @@ dbTest(
     }
   },
 );
+
+// Collaboration workflow regression checks.
+dbTest("assigned task progress belongs to its assignee and notes remain visible to members", async () => {
+  const run = Date.now();
+  const admin = await authedAccount(`task-owner-${run}@test.com`);
+  const assignee = await authedAccount(`task-worker-${run}@test.com`);
+  const viewer = await authedAccount(`task-viewer-${run}@test.com`);
+  const workroom = await createRoomVia(admin.token, {
+    name: `Ownership ${run}`, memberIds: [assignee.userId, viewer.userId],
+  });
+  const request = (path, token, method = "GET", body) => fetch(`${baseUrl}/api${path}`, {
+    method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const created = await request("/tasks", admin.token, "POST", {
+    roomId: workroom.id, title: "Prepare handoff", assigneeId: assignee.userId,
+  });
+  assert.equal(created.status, 201, await created.clone().text());
+  const task = (await created.json()).data;
+  const detail = await request(`/tasks/${task.id}`, viewer.token);
+  assert.equal(detail.status, 200);
+  assert.equal((await detail.json()).data.task.can_progress, false);
+  assert.equal((await request(`/tasks/${task.id}/status`, admin.token, "PATCH", { status: "done" })).status, 403);
+  assert.equal((await request(`/tasks/${task.id}/updates`, viewer.token, "POST", { body: "No" })).status, 403);
+  assert.equal((await request(`/tasks/${task.id}/status`, assignee.token, "PATCH", { status: "in_progress" })).status, 200);
+  assert.equal((await request(`/tasks/${task.id}/updates`, assignee.token, "POST", { body: "Waiting on review" })).status, 201);
+  const after = (await (await request(`/tasks/${task.id}`, viewer.token)).json()).data;
+  assert.equal(after.task.status, "in_progress");
+  assert.ok(after.updates.some((update) => update.body === "Waiting on review"));
+  const edit = await request(`/tasks/${task.id}`, admin.token, "PATCH", {
+    title: "Prepare final handoff", body: "Add an owner summary", assigneeId: assignee.userId,
+    dueDate: "2028-02-29",
+  });
+  assert.equal(edit.status, 200, await edit.text());
+  assert.equal((await request(`/tasks/${task.id}`, assignee.token)).status, 200);
+});
+
+dbTest("decision creation records a notification and edit and retract keep history", async () => {
+  const run = Date.now();
+  const author = await authedAccount(`decision-author-${run}@test.com`);
+  const member = await authedAccount(`decision-member-${run}@test.com`);
+  const workroom = await createRoomVia(author.token, { name: `Choice ${run}`, memberIds: [member.userId] });
+  const request = (path, token, method = "GET", body) => fetch(`${baseUrl}/api${path}`, {
+    method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const intent = { roomId: workroom.id, title: "Choose provider", body: "Use R2", tags: ["storage"], clientId: randomUUID() };
+  const created = await request("/decisions", author.token, "POST", intent);
+  assert.equal(created.status, 201, await created.clone().text());
+  const decision = (await created.json()).data;
+  const retry = await request("/decisions", author.token, "POST", intent);
+  assert.equal((await retry.json()).data.id, decision.id);
+  const notifications = (await (await request("/notifications", member.token)).json()).data.notifications;
+  assert.ok(notifications.some((item) => item.type === "decision" && item.reference_id === decision.id));
+  const edited = await request(`/decisions/${decision.id}`, author.token, "PATCH", {
+    version: decision.version, title: "Choose object storage", body: "Use R2 for media", tags: ["storage"],
+  });
+  assert.equal(edited.status, 200, await edited.clone().text());
+  const latest = (await edited.json()).data;
+  const retracted = await request(`/decisions/${decision.id}/retract`, author.token, "POST", {
+    version: latest.version, reason: "Requirements changed",
+  });
+  assert.equal(retracted.status, 200, await retracted.clone().text());
+  const history = (await (await request(`/decisions/${decision.id}/history`, member.token)).json()).data.revisions;
+  assert.deepEqual(history.map((entry) => entry.version), [3, 2, 1]);
+});
+
+dbTest("decision follow-ups stay in one room and report task progress", async () => {
+  const run = Date.now();
+  const author = await authedAccount(`followup-author-${run}@test.com`);
+  const assignee = await authedAccount(`followup-worker-${run}@test.com`);
+  const outsider = await authedAccount(`followup-outsider-${run}@test.com`);
+  const room = await createRoomVia(author.token, { name: `Follow up ${run}`, memberIds: [assignee.userId] });
+  const otherRoom = await createRoomVia(outsider.token, { name: `Other ${run}` });
+  const request = (path, token, method = "GET", body) => fetch(`${baseUrl}/api${path}`, {
+    method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const choice = await request("/decisions", author.token, "POST", {
+    roomId: room.id, title: "Ship the new flow", body: "Use the revised task handoff", tags: [],
+  });
+  assert.equal(choice.status, 201, await choice.clone().text());
+  const decision = (await choice.json()).data;
+  const wrongRoom = await request("/tasks", outsider.token, "POST", {
+    roomId: otherRoom.id, decisionId: decision.id, title: "Should be rejected",
+  });
+  assert.equal(wrongRoom.status, 400);
+  const created = await request("/tasks", author.token, "POST", {
+    roomId: room.id, decisionId: decision.id, title: "Prepare release", assigneeId: assignee.userId,
+  });
+  assert.equal(created.status, 201, await created.clone().text());
+  const task = (await created.json()).data;
+  assert.equal(task.decision_id, decision.id);
+  assert.equal(task.decision_title, decision.title);
+  const linked = await request(`/tasks?decisionId=${decision.id}`, assignee.token);
+  assert.deepEqual((await linked.json()).data.tasks.map((item) => item.id), [task.id]);
+  assert.equal((await request(`/tasks?decisionId=${decision.id}`, outsider.token).then((res) => res.json())).data.tasks.length, 0);
+  const before = (await (await request(`/decisions/${decision.id}`, author.token)).json()).data;
+  assert.deepEqual(before.follow_up, { total: 1, done: 0 });
+  assert.equal((await request(`/tasks/${task.id}/status`, assignee.token, "PATCH", { status: "done" })).status, 200);
+  const after = (await (await request(`/decisions/${decision.id}`, author.token)).json()).data;
+  assert.deepEqual(after.follow_up, { total: 1, done: 1 });
+  const overview = (await (await request("/decisions/overview", author.token)).json()).data;
+  assert.ok(overview.follow_ups_done >= 1);
+});
+
+dbTest("task create retries return the same task without a duplicate notification", async () => {
+  const run = Date.now();
+  const author = await authedAccount(`task-retry-author-${run}@test.com`);
+  const assignee = await authedAccount(`task-retry-assignee-${run}@test.com`);
+  const workroom = await createRoomVia(author.token, { name: `Task retry ${run}`, memberIds: [assignee.userId] });
+  const intent = { roomId: workroom.id, title: "One assignment", assigneeId: assignee.userId, clientId: randomUUID() };
+  const send = () => fetch(`${baseUrl}/api/tasks`, { method: "POST",
+    headers: { authorization: `Bearer ${author.token}`, "content-type": "application/json" },
+    body: JSON.stringify(intent) });
+  const first = await send();
+  assert.equal(first.status, 201, await first.clone().text());
+  const second = await send();
+  assert.equal(second.status, 201, await second.clone().text());
+  const a = (await first.json()).data;
+  const b = (await second.json()).data;
+  assert.equal(a.id, b.id);
+  const count = await query("SELECT count(*)::int AS n FROM tasks WHERE created_by=$1 AND client_id=$2",
+    [author.userId, intent.clientId]);
+  assert.equal(count.rows[0].n, 1);
+  const notices = await query("SELECT count(*)::int AS n FROM notifications WHERE recipient_id=$1 AND type='task' AND reference_id=$2",
+    [assignee.userId, a.id]);
+  assert.equal(notices.rows[0].n, 1);
+});
