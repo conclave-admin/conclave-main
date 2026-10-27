@@ -7,15 +7,10 @@ export default function ConversationWelcome() {
         <div className="mx-auto mb-8 flex h-24 w-24 items-center justify-center rounded-[28px] border border-line bg-surface shadow-sm">
           <Logo withWordmark={false} className="scale-150" />
         </div>
-        <p className="mb-3 text-xs font-semibold uppercase tracking-[.2em] text-brand">
-          Conversations that connect
-        </p>
-        <h1 className="text-3xl font-bold tracking-tight text-ink">
-          A space for your people.
-        </h1>
+        <p className="mb-3 text-xs font-semibold uppercase tracking-[.2em] text-brand">Conclave messages</p>
+        <h1 className="text-3xl font-bold tracking-tight text-ink">Select a conversation</h1>
         <p className="mx-auto mt-4 max-w-xs text-sm leading-6 text-muted">
-          Pick a conversation or start something new. Messages, shared moments,
-          and plans — together in Conclave.
+          Choose a chat from the list to read and reply, or start a new conversation.
         </p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
           <Link
@@ -31,9 +26,6 @@ export default function ConversationWelcome() {
             Explore rooms
           </Link>
         </div>
-        <p className="mt-12 text-xs text-muted">
-          Your next conversation starts here.
-        </p>
       </div>
     </div>
   );

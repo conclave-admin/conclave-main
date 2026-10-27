@@ -119,8 +119,8 @@ const createTask = asyncHandler(async (req, res) => {
       if (!source.rowCount) throw new ApiError(400, "Choose a visible message from this conversation");
     }
     const inserted = await client.query(
-      `INSERT INTO tasks (room_id,source_message_id,title,body,assignee_id,due_date,created_by,client_id,decision_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO tasks (room_id,source_message_id,title,initial_title,body,assignee_id,initial_assignee_id,due_date,initial_due_date,created_by,client_id,decision_id)
+       VALUES ($1,$2,$3,$3,$4,$5,$5,$6,$6,$7,$8,$9)
        ON CONFLICT (created_by,client_id) WHERE client_id IS NOT NULL DO NOTHING RETURNING id`,
       [roomId, sourceMessageId || null, title, body, assigneeId, dueDate, req.user.id, clientId, decisionId],
     );
@@ -218,7 +218,7 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
   try {
     await client.query("BEGIN");
     const current = await client.query(
-      `SELECT t.status,t.assignee_id FROM tasks t JOIN room_members rm
+      `SELECT t.status,t.assignee_id,t.title FROM tasks t JOIN room_members rm
        ON rm.room_id=t.room_id AND rm.user_id=$2 WHERE t.id=$1 FOR UPDATE OF t, rm`,
       [req.params.taskId, req.user.id],
     );
@@ -229,9 +229,9 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
       await client.query("UPDATE tasks SET status=$2,updated_at=NOW() WHERE id=$1",
         [req.params.taskId, status]);
       await client.query(
-        `INSERT INTO task_updates(task_id,author_id,kind,old_status,new_status)
-         VALUES($1,$2,'status',$3,$4)`,
-        [req.params.taskId, req.user.id, current.rows[0].status, status],
+        `INSERT INTO task_updates(task_id,author_id,kind,old_status,new_status,event_title)
+         VALUES($1,$2,'status',$3,$4,$5)`,
+        [req.params.taskId, req.user.id, current.rows[0].status, status, current.rows[0].title],
       );
     }
     task = await payload(req.params.taskId, req.user.id, client);
@@ -251,15 +251,15 @@ const addTaskUpdate = asyncHandler(async (req, res) => {
   try {
     await client.query("BEGIN");
     const current = await client.query(
-      `SELECT t.assignee_id FROM tasks t JOIN room_members rm
+      `SELECT t.assignee_id,t.title FROM tasks t JOIN room_members rm
        ON rm.room_id=t.room_id AND rm.user_id=$2 WHERE t.id=$1 FOR UPDATE OF t, rm`,
       [req.params.taskId, req.user.id],
     );
     if (!current.rowCount) throw new ApiError(404, "Task not found");
     if (current.rows[0].assignee_id !== req.user.id)
       throw new ApiError(403, "Only the assigned member can add progress notes");
-    await client.query("INSERT INTO task_updates(task_id,author_id,kind,body) VALUES($1,$2,'note',$3)",
-      [req.params.taskId, req.user.id, body.trim()]);
+    await client.query("INSERT INTO task_updates(task_id,author_id,kind,body,event_title) VALUES($1,$2,'note',$3,$4)",
+      [req.params.taskId, req.user.id, body.trim(), current.rows[0].title]);
     await client.query("UPDATE tasks SET updated_at=NOW() WHERE id=$1", [req.params.taskId]);
     task = await payload(req.params.taskId, req.user.id, client);
     await client.query("COMMIT");
@@ -280,7 +280,8 @@ const editTask = asyncHandler(async (req, res) => {
   try {
     await client.query("BEGIN");
     const current = await client.query(
-      `SELECT t.room_id,t.assignee_id,t.created_by,rm.role FROM tasks t
+      `SELECT t.room_id,t.assignee_id,t.title,to_char(t.due_date,'YYYY-MM-DD') AS due_date,
+              t.created_by,rm.role FROM tasks t
        JOIN room_members rm ON rm.room_id=t.room_id AND rm.user_id=$2
        WHERE t.id=$1 FOR UPDATE OF t, rm`, [req.params.taskId, req.user.id],
     );
@@ -295,9 +296,13 @@ const editTask = asyncHandler(async (req, res) => {
        WHERE id=$1`, [req.params.taskId, fields.title, fields.body, fields.dueDate, fields.assigneeId],
     );
     await client.query(
-      `INSERT INTO task_updates(task_id,author_id,kind,body) VALUES($1,$2,'details',$3)`,
+      `INSERT INTO task_updates(task_id,author_id,kind,body,old_assignee_id,new_assignee_id,event_title,
+                                old_title,new_title,old_due_date,new_due_date)
+       VALUES($1,$2,'details',$3,$4,$5,$6,$7,$8,$9,$10)`,
       [req.params.taskId, req.user.id,
-        previousAssignee !== fields.assigneeId ? "Assignment and task details updated" : "Task details updated"],
+        previousAssignee !== fields.assigneeId ? "Assignment and task details updated" : "Task details updated",
+        previousAssignee, fields.assigneeId, fields.title, row.title, fields.title,
+        row.due_date, fields.dueDate],
     );
     task = await payload(req.params.taskId, req.user.id, client);
     await client.query("COMMIT");

@@ -92,6 +92,8 @@ export default function AppShell() {
     "conclave.sidebar.expanded",
     false,
   );
+  const [railHovered, setRailHovered] = useState(false);
+  const [railFocused, setRailFocused] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const isDesktop = useMediaQuery("(min-width: 768px)");
 
@@ -135,6 +137,7 @@ export default function AppShell() {
       ? "Collapse sidebar"
       : "Expand sidebar"
     : "Open menu";
+  const showRailLabels = expanded || railHovered || railFocused;
 
   return (
     // Every provider here sits at the shell rather than at the root for the
@@ -153,8 +156,18 @@ export default function AppShell() {
               open={switcherOpen}
               onClose={() => setSwitcherOpen(false)}
             />
-            <aside className="app-rail hidden min-h-0 border-r border-line bg-surface md:block">
-              <NavRail collapsed={!expanded} />
+            <aside
+              className={`app-rail relative z-30 hidden min-h-0 md:block ${showRailLabels && !expanded ? "app-rail-peek" : ""}`}
+              onMouseEnter={() => setRailHovered(true)}
+              onMouseLeave={() => setRailHovered(false)}
+              onFocusCapture={() => setRailFocused(true)}
+              onBlurCapture={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setRailFocused(false);
+              }}
+            >
+              <div className={`app-rail-panel h-full ${showRailLabels ? "w-[240px]" : "w-[72px]"}`}>
+                <NavRail collapsed={!showRailLabels} pinned={expanded} onToggleExpanded={() => setExpanded((value) => !value)} />
+              </div>
             </aside>
 
             {/* grid-cols-1 is the grid-blowout guard: without it one long title

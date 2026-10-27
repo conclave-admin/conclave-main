@@ -6739,7 +6739,7 @@ dbTest(
       name: `Digest Open ${run}`,
       memberIds: [them.userId],
     });
-    await sendVia(them.token, room.id, "Something worth catching up on");
+    await promoteVia(them.token, { roomId: room.id, title: "A decision worth catching up on", body: "Proceed with the plan", tags: [] });
 
     const before = await getDigestVia(me.token);
     assert.ok(before.items.length > 0, "the backlog is reported");
@@ -6771,7 +6771,7 @@ dbTest(
     const afterMark = await getDigestVia(me.token);
     assert.equal(afterMark.items.length, 0, "marking it read does empty it");
 
-    // And the room's own activity digest follows the same pointer.
+    // And the room's own decision digest follows the same pointer.
     const roomDigest = await fetch(`${baseUrl}/api/digest/room/${room.id}`, {
       headers: { authorization: `Bearer ${me.token}` },
     });
@@ -6798,8 +6798,8 @@ dbTest(
       name: `Digest Two ${run}`,
       memberIds: [second.userId],
     });
-    await sendVia(first.token, one.id, "In the first room");
-    await sendVia(second.token, two.id, "In the second room");
+    await promoteVia(first.token, { roomId: one.id, title: "First room decision", body: "Proceed", tags: [] });
+    await promoteVia(second.token, { roomId: two.id, title: "Second room decision", body: "Proceed", tags: [] });
 
     const res = await fetch(`${baseUrl}/api/digest/read`, {
       method: "POST",

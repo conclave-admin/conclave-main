@@ -95,7 +95,7 @@ export default function ChatRow({ room }) {
       <NavLink
         to={`/chats/${room.id}`}
         className={({ isActive }) =>
-          `chat-row flex items-center gap-3.5 rounded-xl px-3 py-3 pr-10 transition-colors ${
+          `chat-row flex items-center gap-3.5 rounded-lg px-3 py-3 pr-10 transition-colors ${
             isActive ? "bg-brand-soft" : "hover:bg-canvas"
           }`
         }

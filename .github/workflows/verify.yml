@@ -42,7 +42,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: backend/package-lock.json
-      - run: npm ci
+      - name: Install backend dependencies
+        run: npm ci
+      - name: Install client dependencies used by backend tests
+        run: npm ci --prefix ../client
       - name: Run backend unit tests
         run: npm test
       - name: Apply migrations to fresh PostgreSQL

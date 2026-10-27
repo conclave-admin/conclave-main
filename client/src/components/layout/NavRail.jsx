@@ -11,6 +11,7 @@ import IconSettings from "@/assets/icons/settings.svg?react";
 import IconSignOut from "@/assets/icons/sign-out.svg?react";
 import IconTasks from "@/assets/icons/tasks.svg?react";
 import IconPublic from "@/assets/icons/public.svg?react";
+import IconChevronRight from "@/assets/icons/chevron-right.svg?react";
 
 const primaryNav = [
   { to: "/chats", label: "Chats", Icon: IconHome, end: false },
@@ -65,7 +66,7 @@ function RailItem({ to, end, label, Icon, badge = 0, collapsed, onNavigate }) {
  * @param {boolean} [collapsed]
  * @param {() => void} [onNavigate] - closes the mobile drawer after a click
  */
-export default function NavRail({ collapsed = false, onNavigate }) {
+export default function NavRail({ collapsed = false, pinned = false, onToggleExpanded, onNavigate }) {
   const { user, logout } = useAuth();
   const { unreadTotal } = useChats();
   const displayName = user?.display_name || "Unknown user";
@@ -102,6 +103,18 @@ export default function NavRail({ collapsed = false, onNavigate }) {
 
       <div className="mt-auto shrink-0 pt-4">
         <div className="mx-3 mb-3 border-t border-line" />
+
+        {onToggleExpanded && <button
+          type="button"
+          onClick={onToggleExpanded}
+          aria-label={pinned ? "Collapse navigation" : "Keep navigation open"}
+          aria-pressed={pinned}
+          title={collapsed ? "Keep navigation open" : undefined}
+          className={`${itemBase} w-[calc(100%-1.5rem)] text-muted hover:bg-surface hover:text-ink ${collapsed ? "justify-center" : "gap-3 px-3"}`}
+        >
+          <IconChevronRight className={`h-5 w-5 shrink-0 transition-transform ${pinned ? "rotate-180" : ""}`} aria-hidden="true" />
+          {!collapsed && <span className="text-body">{pinned ? "Collapse menu" : "Keep menu open"}</span>}
+        </button>}
 
         <RailItem
           to="/settings"

@@ -399,67 +399,78 @@ export const previewDecisions = [
   },
 ];
 
-// Mirrors the digest getRoomDigest assembles from decisions/tasks/messages/attachments
-// (digest.controller.js) and the cross-room variant. Each item carries the room it
-// belongs to — the wire shape is { id, type, title, metadata, room_id, room_name,
-// created_at } — because a cross-room catch-up list whose rows do not name their
-// room is unreadable the moment two rooms have similar traffic.
+// A rule-based digest preview with one example of each important event type.
 export const previewDigestSummary = {
-  headline: "5 meaningful updates",
-  summary: "1 decisions, 1 task changes, 1 mentions, 1 files.",
+  headline: "5 updates worth a look",
+  summary: "1 for you · 2 decision or task updates · 2 shared items",
 };
 
-// `type` only — no label/colour here. That's presentation, not data: the backend will
-// send a type, not display copy, so the type-to-label/colour mapping lives in
-// CatchUpDigestPage.jsx instead. The five below are one of every type getRoomDigest
-// can emit, and `metadata` is copied from the controller's own construction:
-// author_name for a decision, `status · assignee_name` for a task, sender_name for a
-// mention or file, and null for activity — which has no actor to name. The summary
-// string follows the same `${n} …` template the controller builds, so a preview and
-// the real response read the same way.
+// Display labels and colours stay in CatchUpDigestPage.jsx.
 export const previewDigestItems = [
   {
     id: "dev-digest-1",
+    event_id: "decision:dev-digest-1",
     type: "decision",
+    action: "recorded",
     title: "Keep Socket.IO focused on real-time events; REST handles CRUD.",
     metadata: "Victor",
+    actor_name: "Victor",
+    priority: 1,
     room_id: previewRoom.id,
     room_name: previewRoom.name,
     created_at: "2026-10-08T09:02:00.000Z",
   },
   {
     id: "dev-digest-2",
+    event_id: "task:create:dev-digest-2",
     type: "task",
+    action: "created",
     title: "Confirm production upload limits",
     metadata: "open · Daniel",
+    actor_name: "Daniel",
+    priority: 1,
     room_id: previewRoom.id,
     room_name: previewRoom.name,
     created_at: "2026-10-08T10:12:00.000Z",
   },
   {
     id: "dev-digest-3",
+    event_id: "mention:dev-digest-3",
     type: "mention",
+    action: "mentioned",
+    message_id: "dev-digest-3",
     title:
       "Amina can you confirm deployment readiness for the API gateway changes today?",
     metadata: "Amina Yusuf",
+    actor_name: "Amina Yusuf",
+    priority: 0,
     room_id: "dev-room-deployments",
     room_name: "Deployments",
     created_at: "2026-10-08T11:22:00.000Z",
   },
   {
     id: "dev-digest-4",
+    event_id: "file:dev-digest-4",
     type: "file",
+    action: "shared",
+    message_id: "dev-digest-4",
     title: "deployment-checklist-v2.pdf",
     metadata: "Victor",
+    actor_name: "Victor",
+    priority: 2,
     room_id: "dev-room-deployments",
     room_name: "Deployments",
     created_at: "2026-10-08T12:32:00.000Z",
   },
   {
     id: "dev-digest-5",
-    type: "activity",
-    title: "7 new messages",
-    metadata: null,
+    event_id: "pin:dev-digest-5",
+    type: "pin",
+    action: "pinned",
+    message_id: "dev-digest-5",
+    priority: 1,
+    title: "Launch review starts Friday at 10 AM.",
+    actor_name: "Victor",
     room_id: previewRoom.id,
     room_name: previewRoom.name,
     created_at: "2026-10-08T13:42:00.000Z",
