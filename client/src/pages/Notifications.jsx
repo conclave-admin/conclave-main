@@ -23,6 +23,7 @@ const TYPES = {
   room_invite: { label: "Room invite", dot: "bg-success" },
   member_joined: { label: "Member joined", dot: "bg-success" },
   task: { label: "Task assigned", dot: "bg-warning" },
+  decision: { label: "Decision changed", dot: "bg-success" },
 };
 
 const FILTERS = [
@@ -91,6 +92,11 @@ function Row({ notification, onOpen }) {
             {context.task_title}
           </span>
         )}
+        {context.decision_title && (
+          <span className="mt-0.5 block truncate text-metadata text-muted">
+            {context.decision_status === "retracted" ? "Retracted: " : ""}{context.decision_title}
+          </span>
+        )}
 
         {context.message_preview && (
           <span className="mt-0.5 block truncate text-metadata text-muted">
@@ -151,6 +157,10 @@ export default function Notifications() {
 
   const handleOpen = (notification) => {
     markOne(notification.id);
+    if (notification.type === "decision" && notification.reference_id) {
+      navigate(`/decisions/${notification.reference_id}`);
+      return;
+    }
     if (notification.context?.room_id)
       navigate(`/chats/${notification.context.room_id}`);
   };

@@ -5,7 +5,8 @@ function visibleSql(n = "n") {
   return `NOT EXISTS(SELECT 1 FROM user_blocks b WHERE (b.blocker_id=${n}.recipient_id AND b.blocked_id=${n}.actor_id) OR (b.blocked_id=${n}.recipient_id AND b.blocker_id=${n}.actor_id))
     AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=${n}.reference_id AND ${n}.type IN ('mention','new_message','file_uploaded','reminder') AND NOT message_visible(m.id,${n}.recipient_id))
     AND NOT EXISTS(SELECT 1 FROM rooms r WHERE r.id=${n}.reference_id AND ${n}.type IN ('room_invite','member_joined') AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=r.id AND rm.user_id=${n}.recipient_id))
-    AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.id=${n}.reference_id AND ${n}.type='task' AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=t.room_id AND rm.user_id=${n}.recipient_id))`;
+    AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.id=${n}.reference_id AND ${n}.type='task' AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=t.room_id AND rm.user_id=${n}.recipient_id))
+    AND NOT EXISTS(SELECT 1 FROM decisions d WHERE d.id=${n}.reference_id AND ${n}.type='decision' AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=d.room_id AND rm.user_id=${n}.recipient_id))`;
 }
 function allowsInterruption(preferences = {}, type, roomMuted = false) {
   if (
@@ -25,13 +26,14 @@ function allowsInterruption(preferences = {}, type, roomMuted = false) {
 async function interruption(notificationId) {
   const result = await pool.query(
     `SELECT n.*,p.activity_level,p.muted,p.push_enabled,recipient.dnd_until,rmp.mute_until AS room_mute_until,rmp.notification_level,
-    COALESCE(m.room_id,t.room_id,r.id) AS room_id,COALESCE(rmp.muted,FALSE) AS room_muted,
+    COALESCE(m.room_id,t.room_id,d.room_id,r.id) AS room_id,COALESCE(rmp.muted,FALSE) AS room_muted,
     (m.deleted_at IS NOT NULL) AS message_deleted, ${visibleSql()} AS visible
     FROM notifications n LEFT JOIN users recipient ON recipient.id=n.recipient_id LEFT JOIN notification_preferences p ON p.user_id=n.recipient_id
     LEFT JOIN messages m ON m.id=n.reference_id AND n.type IN ('mention','new_message','file_uploaded','reminder')
     LEFT JOIN tasks t ON t.id=n.reference_id AND n.type='task'
+    LEFT JOIN decisions d ON d.id=n.reference_id AND n.type='decision'
     LEFT JOIN rooms r ON r.id=n.reference_id AND n.type IN ('room_invite','member_joined')
-    LEFT JOIN room_member_preferences rmp ON rmp.room_id=COALESCE(m.room_id,t.room_id,r.id) AND rmp.user_id=n.recipient_id
+    LEFT JOIN room_member_preferences rmp ON rmp.room_id=COALESCE(m.room_id,t.room_id,d.room_id,r.id) AND rmp.user_id=n.recipient_id
     WHERE n.id=$1`,
     [notificationId],
   );

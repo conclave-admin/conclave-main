@@ -58,6 +58,15 @@ async function attachPins(decisions, viewerId, { db } = {}) {
     [decisions.map((d) => d.id)],
   );
 
+  const followUps = await run(
+    `SELECT decision_id, COUNT(*)::integer AS total,
+       COUNT(*) FILTER (WHERE status='done')::integer AS done
+       FROM tasks WHERE decision_id = ANY($1::uuid[]) GROUP BY decision_id`,
+    [decisions.map((d) => d.id)],
+  );
+  const counts = new Map(followUps.rows.map((row) => [row.decision_id,
+    { total: row.total, done: row.done }]));
+
   const byDecision = new Map();
   for (const row of rows) {
     const entry = byDecision.get(row.decision_id) || { room: null, mine: [] };
@@ -78,10 +87,18 @@ async function attachPins(decisions, viewerId, { db } = {}) {
   }
 
   for (const decision of decisions) {
+    decision.follow_up = counts.get(decision.id) || { total: 0, done: 0 };
     const entry = byDecision.get(decision.id);
     decision.pins = entry
       ? { room: entry.room, mine: entry.mine }
       : { room: null, mine: [] };
+    decision.capabilities = {
+      canManage: decision.created_by === viewerId || decision.viewer_role === "admin",
+      canUnpinRoom: Boolean(decision.pins.room) && (
+        decision.pins.room.user_id === viewerId || decision.viewer_role === "admin"
+      ),
+    };
+    delete decision.viewer_role;
   }
 
   return decisions;
@@ -98,12 +115,13 @@ async function attachPins(decisions, viewerId, { db } = {}) {
 async function getDecisionPayload(decisionId, viewerId) {
   const result = await query(
     `SELECT d.*, r.name AS room_name, r.slug AS room_slug,
-            u.display_name AS author_name
+            u.display_name AS author_name, rm.role AS viewer_role
        FROM decisions d
        INNER JOIN rooms r ON r.id = d.room_id
        INNER JOIN users u ON u.id = d.created_by
+       INNER JOIN room_members rm ON rm.room_id=d.room_id AND rm.user_id=$2
       WHERE d.id = $1`,
-    [decisionId],
+    [decisionId, viewerId],
   );
 
   if (result.rows.length === 0) {
@@ -141,6 +159,12 @@ async function pinDecision({ decisionId, userId, scope, io }) {
   }
 
   if (scope === "room") {
+    const state = await query("SELECT status FROM decisions WHERE id=$1", [decisionId]);
+    if (state.rows[0]?.status === "retracted")
+      throw new ApiError(409, "Retracted decisions cannot be pinned for the room");
+  }
+
+  if (scope === "room") {
     const existing = await query(
       `SELECT dp.user_id, u.display_name
          FROM decision_pins dp
@@ -157,22 +181,30 @@ async function pinDecision({ decisionId, userId, scope, io }) {
     }
   }
 
-  await query(
-    `INSERT INTO decision_pins (decision_id, user_id, scope, pinned_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT (decision_id, user_id, scope)
-     DO UPDATE SET pinned_at = NOW()`,
-    [decisionId, userId, scope],
-  );
+  try {
+    await query(
+      `INSERT INTO decision_pins (decision_id, user_id, scope, pinned_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (decision_id, user_id, scope)
+       DO UPDATE SET pinned_at = NOW()`,
+      [decisionId, userId, scope],
+    );
+  } catch (error) {
+    if (scope === "room" && error.code === "23514")
+      throw new ApiError(409, "This decision can no longer be pinned for the room");
+    if (scope === "room" && error.code === "23505")
+      throw new ApiError(409, "This decision is already pinned for the room");
+    throw error;
+  }
 
   const decision = await getDecisionPayload(decisionId, userId);
 
-  if (io)
-    io.to(decision.room_id).emit("decision:pinned", {
-      decision,
-      scope,
-      userId,
+  if (io) {
+    const target = scope === "user" ? `user:${userId}` : decision.room_id;
+    io.to(target).emit("decision:pinned", {
+      decisionId, roomId: decision.room_id, scope, userId,
     });
+  }
 
   return decision;
 }
@@ -193,11 +225,18 @@ async function pinDecision({ decisionId, userId, scope, io }) {
  */
 async function unpinDecision({ decisionId, userId, scope, io }) {
   assertScope(scope);
+  const membership = await query(
+    `SELECT 1 FROM room_members rm JOIN decisions d ON d.room_id=rm.room_id
+      WHERE d.id=$1 AND rm.user_id=$2`,
+    [decisionId, userId],
+  );
+  if (!membership.rowCount) throw new ApiError(403, "You are not a member of this room");
 
   const existing = await query(
     `SELECT dp.user_id FROM decision_pins dp
-      WHERE dp.decision_id = $1 AND dp.scope = $2`,
-    [decisionId, scope],
+      WHERE dp.decision_id = $1 AND dp.scope = $2
+        AND ($2 <> 'user' OR dp.user_id = $3)`,
+    [decisionId, scope, userId],
   );
 
   const held = existing.rows[0];
@@ -224,8 +263,9 @@ async function unpinDecision({ decisionId, userId, scope, io }) {
   const removed = await query(
     `DELETE FROM decision_pins
       WHERE decision_id = $1 AND scope = $2
+        AND ($2 <> 'user' OR user_id = $3)
       RETURNING decision_id`,
-    [decisionId, scope],
+    [decisionId, scope, userId],
   );
   if (removed.rows.length === 0) return null;
 
@@ -235,10 +275,9 @@ async function unpinDecision({ decisionId, userId, scope, io }) {
   const decision = await getDecisionPayload(decisionId, userId);
 
   if (io && roomId.rows[0]) {
-    io.to(roomId.rows[0].room_id).emit("decision:unpinned", {
-      decision,
-      scope,
-      userId,
+    const target = scope === "user" ? `user:${userId}` : roomId.rows[0].room_id;
+    io.to(target).emit("decision:unpinned", {
+      decisionId, roomId: roomId.rows[0].room_id, scope, userId,
     });
   }
 

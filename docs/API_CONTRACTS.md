@@ -248,11 +248,16 @@ The socket `receive-message` event returns this **same shape** — including fla
 
 | Method | Path                           | Body                                               | Returns                     | Notes                                                                                                              |
 | ------ | ------------------------------ | -------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| POST   | /decisions                     | `{ roomId, title, body, tags?, sourceMessageId? }` | decision                    | Membership required. Returns the **same shape as the list**, including `room_name`, `room_slug` and `author_name`. |
-| GET    | /decisions                     | `?roomId=&before=`                                 | `{ decisions, nextCursor }` | Cross-room by default. Omit `roomId` for every room the caller is in.                                              |
-| GET    | /decisions/search              | `?q=`                                              | `{ decisions, query }`      | Cross-room search. ⚠️ A tag-only hit **matches but does not rank** — it sorts by date.                             |
-| GET    | /decisions/room/:roomId        | —                                                  | `{ decisions, nextCursor }` | Room-scoped, kept for compatibility.                                                                               |
-| GET    | /decisions/room/:roomId/search | `?q=`                                              | `{ decisions, query }`      | Room-scoped search.                                                                                                |
+| POST   | /decisions                     | `{ roomId, title, body, tags?, sourceMessageId?, clientId? }` | decision | Membership required. A repeated `clientId` from the same author returns the original record. |
+| GET    | /decisions                     | `?roomId=&before=&status=&pinned=`                 | `{ decisions, nextCursor }` | Cross-room by default. Status is `all`, `active` or `retracted`. |
+| GET    | /decisions/overview            | — | `{ active, retracted, with_open_tasks, follow_ups_done }` | Counts across current conversations. |
+| GET    | /decisions/search              | `?q=&roomId=&after=&status=`                       | `{ decisions, query, nextCursor }` | Ranked search with stable cursor pagination. Tag-only hits match with rank zero. |
+| GET    | /decisions/room/:roomId        | `?before=&status=&pinned=`                          | `{ decisions, nextCursor }` | Room-scoped, kept for compatibility. |
+| GET    | /decisions/room/:roomId/search | `?q=&after=&status=`                                | `{ decisions, query, nextCursor }` | Room-scoped search. |
+| GET    | /decisions/:decisionId         | —                                                  | decision                    | Current members only. |
+| PATCH  | /decisions/:decisionId         | `{ version, title, body, tags }`                    | decision                    | Author or room admin; version conflict returns 409. |
+| POST   | /decisions/:decisionId/retract | `{ version, reason }`                               | decision                    | Keeps revision history and removes the room pin. |
+| GET    | /decisions/:decisionId/history | `?before=`                                         | `{ revisions, nextCursor }` | 20 revisions per page, newest first. |
 
 A decision row:
 
@@ -268,7 +273,12 @@ A decision row:
   "tags": ["urgent"],
   "created_by": "uuid",
   "author_name": "Victor",
-  "created_at": "ISO"
+  "created_at": "ISO",
+  "updated_at": "ISO",
+  "status": "active",
+  "version": 1,
+  "follow_up": { "total": 2, "done": 1 },
+  "capabilities": { "canManage": true, "canUnpinRoom": false }
 }
 ```
 
@@ -353,54 +363,35 @@ legacy), `zip`, `gzip`, audio (`mpeg`, `ogg`, `wav`, `webm`, `mp4`) and video
 
 ## Tasks
 
-| Method | Path                  | Status | Body / query                                                 | Returns     |
-| ------ | --------------------- | ------ | ------------------------------------------------------------ | ----------- |
-| POST   | /tasks                | 201    | `{ roomId, title, assigneeId?, dueDate?, sourceMessageId? }` | task        |
-| GET    | /tasks                | 200    | `?roomId=`, `?status=`, `?assigneeId=`                       | `{ tasks }` |
-| GET    | /tasks/room/:roomId   | 200    | same filters                                                 | `{ tasks }` |
-| PATCH  | /tasks/:taskId/status | 200    | `{ status }` ∈ `open \| in_progress \| done`                 | task        |
+| Method | Path | Body / query | Returns |
+| --- | --- | --- | --- |
+| POST | /tasks | `{ roomId, title, body?, assigneeId?, dueDate?, sourceMessageId?, decisionId?, clientId? }` | task (201) |
+| GET | /tasks | `?roomId=&status=&assigneeId=&decisionId=&before=` | `{ tasks, nextCursor }` |
+| GET | /tasks/room/:roomId | Same filters | `{ tasks, nextCursor }` |
+| GET | /tasks/:taskId | `?before=` for older activity | `{ task, updates, nextCursor }` |
+| PATCH | /tasks/:taskId | `{ title, body, assigneeId, dueDate }` | task |
+| PATCH | /tasks/:taskId/status | `{ status }` (`open`, `in_progress`, `done`) | task |
+| POST | /tasks/:taskId/updates | `{ body }` | task (201) |
 
-Auth required. `GET /tasks` is **cross-room** — the Tasks page is top-level — and
-scoped to rooms you are a member of. `GET /tasks/room/:roomId` delegates to the
-same handler. Every task row has the same shape from all three endpoints:
+Only current room members can read a task. A member who is neither its assignee,
+creator nor an admin can view its details and activity, but cannot change them.
+Only the current assignee can change status or add a progress note. The creator
+and room admins can edit the title, instructions, deadline and assignment. They
+cannot change progress unless assigned to the task. Unassigned tasks have no
+progress owner until assigned. Room membership is checked on every request.
+`decisionId` must name an active decision in the same conversation. Task payloads
+include `decision_id`, `decision_title`, and `decision_status` when linked.
 
-```json
-{
-  "id": "uuid",
-  "room_id": "uuid",
-  "room_name": "Product Engineering",
-  "source_message_id": null,
-  "title": "Confirm upload limits",
-  "assignee_id": "uuid",
-  "assignee_name": "Priya",
-  "status": "open",
-  "due_date": "2026-08-22",
-  "created_by": "uuid",
-  "created_at": "ISO",
-  "updated_at": "ISO"
-}
-```
-
-`assignee_name` is `null` for an unassigned task — those rows are still returned.
-`due_date` is a `YYYY-MM-DD` calendar-date string or null, independent of the
-server timezone. Create, list and status-update responses use the same shape.
-
-Ordering is `due_date` ascending with undated tasks **last**, then newest first.
-
-`POST /tasks` requires you to be in the room. `sourceMessageId`, if given, must be
-an undeleted message **in that room**, and `assigneeId` must be a member of it —
-assigning to a non-member produces a task that assignee can never see, since their
-digest filters on `assignee_id` within a room they cannot open.
-
-`PATCH` returns **404** for a task in a room you are not in, rather than 403, so
-it does not confirm the id exists.
-
-Creating or updating a task emits **`task:updated`** to the task's room.
-
-⚠️ That event only reaches sockets that have joined that room, and joining is
-on-demand — so the **top-level cross-room Tasks page will not update live**, only
-on reload. The response body carries the updated task, so the client that made the
-change is not left stale.
+Tasks are unavailable in end-to-end encrypted rooms because this workflow stores
+searchable server-side text. Source messages must be visible, undeleted messages
+in the same room. Assignees must be current room members. Due dates are calendar
+strings (`YYYY-MM-DD`), and list pages are sorted by due date, with undated tasks
+last. Each page contains at most 50 tasks. Activity pages contain at most 20
+entries. Repeating a create with the same `clientId` from the same creator returns
+the original task without another assignment notification. Apply migrations 045
+and 046 before deploying this client. `task:updated` sends identifiers to current room members' personal
+sockets; the client refetches with its own permissions. New assignments notify
+the assignee. A removed member receives neither task data nor updates.
 
 ## Notifications
 

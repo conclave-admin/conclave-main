@@ -1,341 +1,312 @@
-const { query } = require("../config/db");
+const { pool, query } = require("../config/db");
 const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
 const {
-  createNotification,
-  presentNotification,
-  emitNotification,
-  personalRoom,
+  createNotification, presentNotification, emitNotification, personalRoom,
 } = require("../services/notification.service");
 
-// In-chat Action Items — flag any message as a task, assign it, track
-// status in a per-room Tasks tab.
-//
-// The table, the routes and the digest's task queries all shipped in migration
-// 002; only these handlers were missing, so the digest's task section has been
-// structurally correct but permanently empty.
-//
-// Status values are constrained by tasks_status_check (migration 011) as well as
-// validated here. The controller check exists to return a useful 400; the
-// constraint is what makes the guarantee real for any future write path.
-
 const STATUSES = ["open", "in_progress", "done"];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PAGE_SIZE = 50;
+const COLUMNS = `t.id,t.room_id,t.source_message_id,t.decision_id,t.title,t.body,t.assignee_id,
+ t.status,to_char(t.due_date,'YYYY-MM-DD') AS due_date,t.created_by,t.created_at,t.updated_at,
+ r.name AS room_name,r.slug AS room_slug,d.title AS decision_title,d.status AS decision_status,a.display_name AS assignee_name,
+ c.display_name AS creator_name,rm.role AS viewer_role,
+ (t.assignee_id=$1::uuid) AS can_progress,
+ (t.created_by=$1::uuid OR rm.role='admin') AS can_manage`;
+const JOINS = `FROM tasks t JOIN rooms r ON r.id=t.room_id
+ JOIN room_members rm ON rm.room_id=t.room_id AND rm.user_id=$1
+ LEFT JOIN decisions d ON d.id=t.decision_id
+ LEFT JOIN users a ON a.id=t.assignee_id JOIN users c ON c.id=t.created_by`;
 
-// The notes a flag-as-task dialog collects. The column is unbounded so the
-// limit lives in one place with the other input validation rather than being
-// duplicated as a column constraint that could drift from it.
-const MAX_BODY_LENGTH = 2000;
-
-// One shape for every task this module returns, matching what Tasks.jsx reads
-// (status, due_date, title, assignee_name, id) and the devPreview fixtures. Kept
-// as constants so create, list and update cannot drift apart — the same
-// shape-drift bug the attachment payloads had (BACKEND_TASKS.md Bug 6).
-//
-// a is LEFT JOINed: a task may be unassigned, and an INNER JOIN would silently
-// drop those rows from the board rather than showing them with a blank assignee.
-const TASK_COLUMNS = `
-  t.id, t.room_id, t.source_message_id, t.title, t.body,
-  t.assignee_id, t.status, to_char(t.due_date, 'YYYY-MM-DD') AS due_date,
-  t.created_by, t.created_at, t.updated_at,
-  r.name AS room_name,
-  r.slug AS room_slug,
-  a.display_name AS assignee_name`;
-
-// The joins a real `tasks` row needs. The write paths select from a CTE of the
-// same columns instead, so they cannot use these — only listTasks can.
-const TASK_JOINS = `
-  FROM tasks t
-  INNER JOIN rooms r ON r.id = t.room_id
-  LEFT JOIN users a ON a.id = t.assignee_id`;
-
-// Only the people who can see a task are told it changed. The old emit went to
-// the whole room, which leaked every private task to every member.
-async function emitTaskUpdated(io, task) {
-  if (!io) return;
-  const admins = await query(
-    `SELECT user_id FROM room_members WHERE room_id = $1 AND role = 'admin'`,
-    [task.room_id],
+function validateTitle(value) {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 160)
+    throw new ApiError(400, "Title must be 1–160 characters");
+  return value.trim();
+}
+function validateBody(value) {
+  if (value !== null && value !== undefined && (typeof value !== "string" || value.length > 2000))
+    throw new ApiError(400, "Notes must be at most 2,000 characters");
+  return value?.trim() || null;
+}
+function validateDate(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const date = typeof value === "string" ? new Date(`${value}T00:00:00Z`) : null;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+      !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value)
+    throw new ApiError(400, "Due date must be a valid calendar date");
+  return value;
+}
+async function payload(taskId, userId, client = { query }) {
+  const result = await client.query(
+    `SELECT ${COLUMNS} ${JOINS} WHERE t.id=$2`, [userId, taskId],
   );
-  const audience = new Set(
-    [
-      task.assignee_id,
-      task.created_by,
-      ...admins.rows.map((row) => row.user_id),
-    ].filter(Boolean),
+  return result.rows[0] || null;
+}
+async function publish(io, task) {
+  if (!io || !task) return;
+  const members = await query("SELECT user_id FROM room_members WHERE room_id=$1", [task.room_id]);
+  for (const member of members.rows)
+    io.to(personalRoom(member.user_id)).emit("task:updated", { taskId: task.id, roomId: task.room_id });
+}
+async function notifyAssignee(io, task, actorId) {
+  if (!task.assignee_id || task.assignee_id === actorId) return;
+  try {
+    const row = await createNotification({ recipientId: task.assignee_id,
+      type: "task", referenceId: task.id, actorId });
+    emitNotification(io, task.assignee_id, await presentNotification(row));
+  } catch (error) {
+    console.error("Could not notify task assignee", { taskId: task.id, message: error.message });
+  }
+}
+async function checkAssignee(client, roomId, assigneeId) {
+  if (assigneeId === null) return;
+  if (!UUID_RE.test(assigneeId)) throw new ApiError(400, "Invalid assignee");
+  const member = await client.query(
+    "SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2 FOR SHARE", [roomId, assigneeId],
   );
-  audience.forEach((id) =>
-    io.to(personalRoom(id)).emit("task:updated", { task }),
-  );
+  if (!member.rowCount) throw new ApiError(400, "Assignee must be a current room member");
 }
 
-// ---------- createTask ----------
-// Flag a message as a task, optionally assigning it to a room member.
 const createTask = asyncHandler(async (req, res) => {
-  const { roomId, sourceMessageId, title, body, assigneeId, dueDate } =
-    req.body;
-
-  if (!roomId || typeof title !== "string" || !title.trim()) {
-    throw new ApiError(400, "roomId and title are required");
-  }
-
-  const membership = await query(
-    `SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2`,
-    [roomId, req.user.id],
-  );
-  if (membership.rows.length === 0) {
-    throw new ApiError(403, "You are not a member of this room");
-  }
-
-  if (
-    (
-      await query(
-        "SELECT 1 FROM rooms WHERE id=$1 AND encryption_mode='e2ee-v1'",
-        [roomId],
-      )
-    ).rowCount
-  )
-    throw new ApiError(
-      409,
-      "Server-readable collaboration is unavailable in encrypted conversations",
+  const { roomId, sourceMessageId, decisionId = null, assigneeId = null, clientId = null } = req.body || {};
+  if (!UUID_RE.test(roomId) || sourceMessageId && !UUID_RE.test(sourceMessageId))
+    throw new ApiError(400, "Invalid conversation or source message");
+  if (decisionId !== null && !UUID_RE.test(decisionId))
+    throw new ApiError(400, "Invalid decision");
+  if (clientId !== null && !UUID_RE.test(clientId))
+    throw new ApiError(400, "Invalid task creation identifier");
+  const title = validateTitle(req.body.title);
+  const body = validateBody(req.body.body);
+  const dueDate = validateDate(req.body.dueDate);
+  const client = await pool.connect();
+  let taskId; let newlyCreated = true;
+  try {
+    await client.query("BEGIN");
+    const room = await client.query(
+      `SELECT r.encryption_mode FROM rooms r JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$2
+       WHERE r.id=$1 FOR SHARE OF rm`, [roomId, req.user.id],
     );
-
-  // A source message has to be in the same room, or the task links across rooms
-  // and the message view would render a task it has no permission context for.
-  if (sourceMessageId) {
-    const source = await query(
-      `SELECT 1 FROM messages WHERE id = $1 AND room_id = $2 AND deleted_at IS NULL`,
-      [sourceMessageId, roomId],
-    );
-    if (source.rows.length === 0) {
-      throw new ApiError(400, "sourceMessageId is not a message in this room");
+    if (!room.rowCount) throw new ApiError(403, "Conversation unavailable");
+    if (room.rows[0].encryption_mode === "e2ee-v1")
+      throw new ApiError(409, "Tasks are unavailable in encrypted conversations");
+    if (clientId) {
+      const prior = await client.query(
+        "SELECT id,room_id FROM tasks WHERE created_by=$1 AND client_id=$2",
+        [req.user.id, clientId],
+      );
+      if (prior.rowCount) {
+        if (prior.rows[0].room_id !== roomId) throw new ApiError(409, "Task creation identifier was used in another conversation");
+        taskId = prior.rows[0].id;
+        newlyCreated = false;
+      }
     }
-  }
-
-  // The assignee must be in the room. Without this a task can be handed to
-  // someone who cannot open the room, and their digest — which filters on
-  // assignee_id within a room — will never surface it.
-  if (assigneeId) {
-    const assignee = await query(
-      `SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2`,
-      [roomId, assigneeId],
-    );
-    if (assignee.rows.length === 0) {
-      throw new ApiError(400, "assigneeId must be a member of this room");
+    if (newlyCreated) {
+    await checkAssignee(client, roomId, assigneeId);
+    if (decisionId) {
+      const linked = await client.query(
+        "SELECT 1 FROM decisions WHERE id=$1 AND room_id=$2 AND status='active' FOR SHARE",
+        [decisionId, roomId],
+      );
+      if (!linked.rowCount) throw new ApiError(400, "Choose an active decision from this conversation");
     }
-  }
-
-  if (
-    body !== undefined &&
-    body !== null &&
-    String(body).length > MAX_BODY_LENGTH
-  ) {
-    throw new ApiError(
-      400,
-      `body must be at most ${MAX_BODY_LENGTH} characters`,
+    if (sourceMessageId) {
+      const source = await client.query(
+        `SELECT 1 FROM messages m WHERE m.id=$1 AND m.room_id=$2 AND m.deleted_at IS NULL
+         AND message_visible(m.id,$3)`, [sourceMessageId, roomId, req.user.id],
+      );
+      if (!source.rowCount) throw new ApiError(400, "Choose a visible message from this conversation");
+    }
+    const inserted = await client.query(
+      `INSERT INTO tasks (room_id,source_message_id,title,body,assignee_id,due_date,created_by,client_id,decision_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (created_by,client_id) WHERE client_id IS NOT NULL DO NOTHING RETURNING id`,
+      [roomId, sourceMessageId || null, title, body, assigneeId, dueDate, req.user.id, clientId, decisionId],
     );
-  }
-
-  // The CTE inserts, then selects through the shared column list, so the 201
-  // response carries the same shape listTasks returns. A bare RETURNING * would
-  // hand back the raw columns with no room_name or assignee_name.
-  const result = await query(
-    `WITH inserted AS (
-       INSERT INTO tasks
-         (room_id, source_message_id, title, body, assignee_id, due_date, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *
-     )
-     SELECT ${TASK_COLUMNS}
-     FROM inserted t
-     INNER JOIN rooms r ON r.id = t.room_id
-     LEFT JOIN users a ON a.id = t.assignee_id`,
-    [
-      roomId,
-      sourceMessageId || null,
-      title.trim(),
-      body ? String(body).trim() : null,
-      assigneeId || null,
-      dueDate || null,
-      req.user.id,
-    ],
-  );
-
-  const task = result.rows[0];
-
-  // Announced only to the people who can see it: the assignee, the creator and
-  // the room's admins. Emitting to the room would have told every member that a
-  // private task exists, which the list query above deliberately hides from
-  // them. The caller still gets the task in the response, so the client that
-  // made the change is never left showing stale state.
+    if (inserted.rowCount) taskId = inserted.rows[0].id;
+    else {
+      const prior = await client.query("SELECT id,room_id FROM tasks WHERE created_by=$1 AND client_id=$2",
+        [req.user.id, clientId]);
+      if (!prior.rowCount || prior.rows[0].room_id !== roomId)
+        throw new ApiError(409, "Task creation identifier was used in another conversation");
+      taskId = prior.rows[0].id;
+      newlyCreated = false;
+    }
+    }
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+  const task = await payload(taskId, req.user.id);
   const io = req.app.get("io");
-  await emitTaskUpdated(io, task);
-
-  /*
-   * Tell the assignee.
-   *
-   * Two cases deliberately notify nobody, and both are guarded here rather than
-   * left to createNotification:
-   *
-   *   - No assignee. An unassigned task is nobody's to act on, and the digest
-   *     already filters on assignee_id, so it surfaces to nobody either.
-   *   - Self-assigned. createNotification throws 400 when actorId equals
-   *     recipientId, so letting it through would turn a perfectly ordinary
-   *     "make me a task" into a failed request. Skipped at the call site, the
-   *     same way message.service excludes the sender from a self-mention.
-   *
-   * Written after the task commits rather than inside the INSERT, because the
-   * notification references the task id.
-   */
-  let notificationRow = null;
-  if (task.assignee_id && task.assignee_id !== req.user.id) {
-    try {
-      notificationRow = await createNotification({
-        recipientId: task.assignee_id,
-        type: "task",
-        referenceId: task.id,
-        actorId: req.user.id,
-      });
-    } catch (err) {
-      // The task itself is created and correct. A failed notification must not
-      // undo that or fail the request — the assignee sees it on the board.
-      console.error("Could not write task notification", {
-        taskId: task.id,
-        assignee: task.assignee_id,
-        message: err.message,
-      });
-    }
+  if (newlyCreated) {
+    await publish(io, task);
+    await notifyAssignee(io, task, req.user.id);
   }
-
-  // Resolved and pushed only after the row exists, same as addMember's invite.
-  if (notificationRow) {
-    const presented = await presentNotification(notificationRow);
-    emitNotification(io, task.assignee_id, presented);
-  }
-
   return ok(res, task, 201);
 });
 
-// ---------- listTasks ----------
-// Cross-room by default, because the Tasks page is top-level. Optional
-// ?roomId for the per-room tab, ?status and ?assigneeId to narrow further.
 const listTasks = asyncHandler(async (req, res) => {
-  const { roomId, status, assigneeId } = req.query;
-
-  if (status && !STATUSES.includes(status)) {
-    throw new ApiError(400, `status must be one of: ${STATUSES.join(", ")}`);
-  }
-
-  // Visibility, not membership, is the scope. Three people may see a task: the
-  // assignee (it is theirs to do), the creator (otherwise an unassigned task
-  // would be invisible to the person who made it) and a room admin (otherwise
-  // nobody could moderate the board). Everyone else in the room is filtered out
-  // by the predicate rather than by a separate query, so the list and the
-  // single-task write path below can agree on one rule.
-  //
-  // $1 is pre-seeded because both branches reference it: the room-scoped branch
-  // repeats membership under a second parameter purely to return a 403 rather
-  // than an empty list.
+  const { roomId, status, assigneeId, decisionId, before } = req.query;
+  if (roomId && !UUID_RE.test(roomId)) throw new ApiError(400, "Invalid conversation");
+  if (status && !STATUSES.includes(status)) throw new ApiError(400, "Invalid task status");
+  if (assigneeId && !UUID_RE.test(assigneeId)) throw new ApiError(400, "Invalid assignee");
+  if (decisionId && !UUID_RE.test(decisionId)) throw new ApiError(400, "Invalid decision");
   const params = [req.user.id];
-  const filters = [
-    `(t.assignee_id = $1
-      OR t.created_by = $1
-      OR EXISTS (
-        SELECT 1 FROM room_members adm
-        WHERE adm.room_id = t.room_id AND adm.user_id = $1 AND adm.role = 'admin'
-      ))`,
-  ];
-
-  if (roomId) {
-    const membership = await query(
-      `SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2`,
-      [roomId, req.user.id],
-    );
-    if (membership.rows.length === 0) {
-      throw new ApiError(403, "You are not a member of this room");
+  const where = [];
+  if (roomId) { params.push(roomId); where.push(`t.room_id=$${params.length}`); }
+  if (status) { params.push(status); where.push(`t.status=$${params.length}`); }
+  if (assigneeId) { params.push(assigneeId); where.push(`t.assignee_id=$${params.length}`); }
+  if (decisionId) { params.push(decisionId); where.push(`t.decision_id=$${params.length}`); }
+  if (before) {
+    let cursor;
+    try { cursor = JSON.parse(Buffer.from(before, "base64url").toString("utf8")); }
+    catch { throw new ApiError(400, "Invalid task cursor"); }
+    if (!Number.isFinite(Date.parse(cursor?.created_at)) || !UUID_RE.test(cursor?.id) ||
+        cursor.due_date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(cursor.due_date))
+      throw new ApiError(400, "Invalid task cursor");
+    params.push(cursor.created_at, cursor.id);
+    const tie = `(t.created_at,t.id)<($${params.length - 1}::timestamptz,$${params.length}::uuid)`;
+    if (cursor.due_date === null) where.push(`t.due_date IS NULL AND ${tie}`);
+    else {
+      params.push(cursor.due_date);
+      where.push(`(t.due_date>$${params.length}::date OR t.due_date IS NULL OR
+        (t.due_date=$${params.length}::date AND ${tie}))`);
     }
-    params.push(roomId);
-    filters.push(`t.room_id = $${params.length}`);
-  } else {
-    // A task in a room you are not in is not merely filtered from the list, it
-    // should never have been selectable.
-    filters.push(
-      `t.room_id IN (SELECT room_id FROM room_members WHERE user_id = $1)`,
-    );
   }
-
-  if (status) {
-    params.push(status);
-    filters.push(`t.status = $${params.length}`);
-  }
-
-  if (assigneeId) {
-    params.push(assigneeId);
-    filters.push(`t.assignee_id = $${params.length}`);
-  }
-
-  // due_date ascending with NULLs last puts undated tasks after dated ones
-  // instead of treating them as infinitely overdue, which NULLS FIRST would do.
-  // created_at breaks ties so the order is stable across pages.
+  params.push(PAGE_SIZE + 1);
   const result = await query(
-    `SELECT ${TASK_COLUMNS}
-     ${TASK_JOINS}
-     WHERE ${filters.join(" AND ")}
-     ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC, t.id DESC`,
-    params,
+    `SELECT ${COLUMNS} ${JOINS} ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY t.due_date ASC NULLS LAST,t.created_at DESC,t.id DESC LIMIT $${params.length}`, params,
   );
-
-  return ok(res, { tasks: result.rows });
+  const tasks = result.rows.slice(0, PAGE_SIZE);
+  const last = tasks.at(-1);
+  return ok(res, { tasks, nextCursor: result.rowCount > PAGE_SIZE
+    ? Buffer.from(JSON.stringify({ due_date: last.due_date, created_at: last.created_at, id: last.id })).toString("base64url") : null });
 });
 
-// ---------- updateTaskStatus ----------
-// open -> in_progress -> done, emitting so the board updates live.
+const getTask = asyncHandler(async (req, res) => {
+  const task = await payload(req.params.taskId, req.user.id);
+  if (!task) throw new ApiError(404, "Task not found");
+  let cursorSql = "";
+  const params = [task.id];
+  if (req.query.before) {
+    let cursor;
+    try { cursor = JSON.parse(Buffer.from(req.query.before, "base64url").toString("utf8")); }
+    catch { throw new ApiError(400, "Invalid activity cursor"); }
+    if (!Number.isFinite(Date.parse(cursor?.created_at)) || !UUID_RE.test(cursor?.id))
+      throw new ApiError(400, "Invalid activity cursor");
+    params.push(cursor.created_at, cursor.id);
+    cursorSql = " AND (tu.created_at,tu.id)<($2::timestamptz,$3::uuid)";
+  }
+  const updates = await query(
+    `SELECT tu.id,tu.kind,tu.body,tu.old_status,tu.new_status,tu.created_at,
+      u.display_name AS author_name FROM task_updates tu JOIN users u ON u.id=tu.author_id
+      WHERE tu.task_id=$1${cursorSql} ORDER BY tu.created_at DESC,tu.id DESC LIMIT 21`, params,
+  );
+  const page = updates.rows.slice(0, 20);
+  const last = page.at(-1);
+  return ok(res, { task, updates: page, nextCursor: updates.rowCount > 20
+    ? Buffer.from(JSON.stringify({ created_at: last.created_at, id: last.id })).toString("base64url") : null });
+});
+
 const updateTaskStatus = asyncHandler(async (req, res) => {
-  const { taskId } = req.params;
-  const { status } = req.body;
-
-  if (!STATUSES.includes(status)) {
-    throw new ApiError(400, `status must be one of: ${STATUSES.join(", ")}`);
-  }
-
-  // The same three-way visibility rule as the list, read in the query that loads
-  // the task so there is no window between authorising and acting. A plain
-  // membership join let any member of the room move a task they were never
-  // meant to see.
-  const existing = await query(
-    `SELECT t.id, t.room_id
-       FROM tasks t
-       INNER JOIN room_members rm ON rm.room_id = t.room_id AND rm.user_id = $2
-      WHERE t.id = $1
-        AND (t.assignee_id = $2 OR t.created_by = $2 OR rm.role = 'admin')`,
-    [taskId, req.user.id],
-  );
-  if (existing.rows.length === 0) {
-    throw new ApiError(404, "Task not found");
-  }
-
-  // updated_at is set explicitly because nothing else maintains it, and the
-  // digest's entire time window is `updated_at > last_seen_at`. Leaving it at
-  // creation time would mean a task changed days ago never appears in anyone's
-  // catch-up feed.
-  const result = await query(
-    `WITH updated AS (
-       UPDATE tasks SET status = $2, updated_at = NOW()
-       WHERE id = $1
-       RETURNING *
-     )
-     SELECT ${TASK_COLUMNS}
-     FROM updated t
-     INNER JOIN rooms r ON r.id = t.room_id
-     LEFT JOIN users a ON a.id = t.assignee_id`,
-    [taskId, status],
-  );
-
-  const task = result.rows[0];
-
-  await emitTaskUpdated(req.app.get("io"), task);
-
+  const { status } = req.body || {};
+  if (!STATUSES.includes(status)) throw new ApiError(400, "Invalid task status");
+  const client = await pool.connect();
+  let task;
+  try {
+    await client.query("BEGIN");
+    const current = await client.query(
+      `SELECT t.status,t.assignee_id FROM tasks t JOIN room_members rm
+       ON rm.room_id=t.room_id AND rm.user_id=$2 WHERE t.id=$1 FOR UPDATE OF t, rm`,
+      [req.params.taskId, req.user.id],
+    );
+    if (!current.rowCount) throw new ApiError(404, "Task not found");
+    if (current.rows[0].assignee_id !== req.user.id)
+      throw new ApiError(403, "Only the assigned member can change progress");
+    if (current.rows[0].status !== status) {
+      await client.query("UPDATE tasks SET status=$2,updated_at=NOW() WHERE id=$1",
+        [req.params.taskId, status]);
+      await client.query(
+        `INSERT INTO task_updates(task_id,author_id,kind,old_status,new_status)
+         VALUES($1,$2,'status',$3,$4)`,
+        [req.params.taskId, req.user.id, current.rows[0].status, status],
+      );
+    }
+    task = await payload(req.params.taskId, req.user.id, client);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+  await publish(req.app.get("io"), task);
   return ok(res, task);
 });
 
-module.exports = { createTask, listTasks, updateTaskStatus, STATUSES };
+const addTaskUpdate = asyncHandler(async (req, res) => {
+  const body = req.body?.body;
+  if (typeof body !== "string" || body.trim().length < 1 || body.trim().length > 2000)
+    throw new ApiError(400, "Progress note must be 1–2,000 characters");
+  const client = await pool.connect();
+  let task;
+  try {
+    await client.query("BEGIN");
+    const current = await client.query(
+      `SELECT t.assignee_id FROM tasks t JOIN room_members rm
+       ON rm.room_id=t.room_id AND rm.user_id=$2 WHERE t.id=$1 FOR UPDATE OF t, rm`,
+      [req.params.taskId, req.user.id],
+    );
+    if (!current.rowCount) throw new ApiError(404, "Task not found");
+    if (current.rows[0].assignee_id !== req.user.id)
+      throw new ApiError(403, "Only the assigned member can add progress notes");
+    await client.query("INSERT INTO task_updates(task_id,author_id,kind,body) VALUES($1,$2,'note',$3)",
+      [req.params.taskId, req.user.id, body.trim()]);
+    await client.query("UPDATE tasks SET updated_at=NOW() WHERE id=$1", [req.params.taskId]);
+    task = await payload(req.params.taskId, req.user.id, client);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+  await publish(req.app.get("io"), task);
+  return ok(res, task, 201);
+});
+
+const editTask = asyncHandler(async (req, res) => {
+  const { title, body, dueDate, assigneeId } = req.body || {};
+  const fields = {
+    title: validateTitle(title), body: validateBody(body),
+    dueDate: validateDate(dueDate), assigneeId: assigneeId || null,
+  };
+  const client = await pool.connect();
+  let task; let previousAssignee;
+  try {
+    await client.query("BEGIN");
+    const current = await client.query(
+      `SELECT t.room_id,t.assignee_id,t.created_by,rm.role FROM tasks t
+       JOIN room_members rm ON rm.room_id=t.room_id AND rm.user_id=$2
+       WHERE t.id=$1 FOR UPDATE OF t, rm`, [req.params.taskId, req.user.id],
+    );
+    if (!current.rowCount) throw new ApiError(404, "Task not found");
+    const row = current.rows[0];
+    if (row.created_by !== req.user.id && row.role !== "admin")
+      throw new ApiError(403, "Only the creator or room admin can edit task details");
+    await checkAssignee(client, row.room_id, fields.assigneeId);
+    previousAssignee = row.assignee_id;
+    await client.query(
+      `UPDATE tasks SET title=$2,body=$3,due_date=$4,assignee_id=$5,updated_at=NOW()
+       WHERE id=$1`, [req.params.taskId, fields.title, fields.body, fields.dueDate, fields.assigneeId],
+    );
+    await client.query(
+      `INSERT INTO task_updates(task_id,author_id,kind,body) VALUES($1,$2,'details',$3)`,
+      [req.params.taskId, req.user.id,
+        previousAssignee !== fields.assigneeId ? "Assignment and task details updated" : "Task details updated"],
+    );
+    task = await payload(req.params.taskId, req.user.id, client);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+  const io = req.app.get("io");
+  await publish(io, task);
+  if (previousAssignee !== task.assignee_id) await notifyAssignee(io, task, req.user.id);
+  return ok(res, task);
+});
+
+module.exports = { createTask, listTasks, getTask, updateTaskStatus, addTaskUpdate, editTask, STATUSES };
