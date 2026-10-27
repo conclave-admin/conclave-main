@@ -54,12 +54,12 @@ html.dark {
 
 :root {
   --rail-w: 72px;
-  --list-w: 340px;
+  --list-w: 360px;
 }
 
 @media (min-width: 1280px) {
   :root {
-    --list-w: 380px;
+    --list-w: 400px;
   }
 }
 
@@ -299,6 +299,15 @@ html.dark {
 }
 .app-rail {
   background: rgb(var(--color-canvas));
+  border-right: 1px solid rgb(var(--color-line));
+}
+.app-rail-panel {
+  background: rgb(var(--color-canvas));
+  transition: width 180ms ease, box-shadow 180ms ease;
+}
+.app-rail-peek .app-rail-panel {
+  border-right: 1px solid rgb(var(--color-line));
+  box-shadow: 12px 0 28px rgb(15 23 42 / 0.14);
 }
 .app-page {
   background: rgb(var(--color-canvas));
@@ -352,7 +361,8 @@ html.dark {
   border-top: 1px solid rgb(var(--color-line));
 }
 .chat-row {
-  min-height: 84px;
+  min-height: 78px;
+  border-bottom: 1px solid rgb(var(--color-line) / 0.55);
 }
 .chat-row[aria-current="page"] {
   box-shadow: inset 3px 0 rgb(var(--color-brand));
