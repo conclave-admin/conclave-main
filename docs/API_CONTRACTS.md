@@ -286,28 +286,60 @@ A decision row:
 
 | Method | Path                 | Returns              | Notes                                                                                                      |
 | ------ | -------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------- |
-| GET    | /digest              | `{ items, summary }` | Cross-room. Each room is filtered by **its own** `last_seen_at`, so one unread room does not hide another. |
-| GET    | /digest/room/:roomId | `{ items, summary }` | Room-scoped.                                                                                               |
+| GET    | /digest              | `{ items, next_cursor, rooms, snapshot_at, summary }` | Cross-room. Each room is filtered by its own `digest_seen_at`. Accepts `cursor` to load older events. |
+| GET    | /digest/room/:roomId | `{ items, next_cursor, rooms, snapshot_at, summary }` | Room-scoped. Accepts `cursor`. |
+| POST   | /digest/read         | `{ rooms, digestSeenAt }` | Accepts `{ roomId?, roomIds?, observedAt? }`. Clears the selected room(s) through the observed snapshot. |
 
 ```json
 {
   "items": [
     {
       "id": "uuid",
-      "type": "decision | task | mention | file | activity",
+      "type": "decision | task | mention | file | pin",
+      "event_id": "stable event identifier",
+      "action": "recorded | edited | retracted | assigned | reassigned | progress | completed | reopened | note | created | mentioned | shared | pinned",
       "title": "…",
-      "metadata": "… or null",
+      "preview": "… or null",
+      "actor_name": "… or null",
+      "message_id": "uuid or null",
       "room_id": "uuid",
       "room_name": "Product & Engineering",
-      "created_at": "ISO"
+      "created_at": "ISO",
+      "sort_at": "ISO timestamp with microseconds",
+      "priority": 1
     }
   ],
-  "summary": { "headline": "5 meaningful updates", "summary": "…" }
+  "rooms": [{ "room_id": "uuid", "room_name": "Product & Engineering" }],
+  "snapshot_at": "ISO",
+  "next_cursor": "opaque cursor or null",
+  "summary": { "headline": "5 updates worth a look", "summary": "…" }
 }
 ```
 
-⚠️ `type` is the only display hint the backend sends. The type→label/colour
-mapping belongs in the client. **Handle an unknown `type` without throwing** — a
+Decision revisions and task creation/updates appear as separate events. Task
+progress notes are visible to every current room member. Opening an item does
+not mark the digest as read. The client sends `snapshot_at` as `observedAt` when
+clearing, so events timestamped after the view loaded remain in the digest.
+The digest contains direct mentions, decision and task changes, shared files,
+and room-wide pins made since that room's digest pointer. A file in a message
+that directly mentions the viewer appears through the mention, once. Ordinary message
+traffic stays in the chat list and does not create a digest item. The summary
+and chat-list catch-up card count these same items. Encrypted messages use
+generic labels instead of server-generated plaintext summaries.
+The viewer's own actions are excluded from catch-up items.
+Responses are capped at 50 items, ordered by priority and then newest first. The cursor carries
+the first page's snapshot and the last event position; use it to load older
+items without moving the snapshot. When `next_cursor` is present, the summary
+describes the latest page and the headline uses a `+` suffix. Within a loaded
+page, the client groups by room and puts direct mentions and assignments first.
+Each response reads all categories in one repeatable database snapshot.
+Task edit events preserve the title, assignment and due-date changes recorded
+at edit time, and status and note events snapshot the title shown at their creation.
+Older task updates created before the digest history migration
+have only their previously stored fields.
+
+`type` and `action` describe the event. Display copy and colours belong in the
+client. **Handle an unknown `type` or `action` without throwing** — a
 single unrecognised value should not take the page down.
 
 `type: "mention"` items come from the `message_mentions` table, joined by id —
