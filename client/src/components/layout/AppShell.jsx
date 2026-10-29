@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { ChatsProvider } from "@/contexts/ChatsContext";
 import { NotificationsProvider } from "@/contexts/NotificationsContext";
 import { PresenceProvider } from "@/contexts/PresenceContext";
@@ -94,8 +94,18 @@ export default function AppShell() {
   );
   const [railHovered, setRailHovered] = useState(false);
   const [railFocused, setRailFocused] = useState(false);
+  const [suppressRailPeek, setSuppressRailPeek] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const { pathname } = useLocation();
+  const pendingSidebarRoute = useRef(null);
+  const [pageTransition, setPageTransition] = useState(0);
   const isDesktop = useMediaQuery("(min-width: 768px)");
+
+  useLayoutEffect(() => {
+    if (pendingSidebarRoute.current !== pathname) return;
+    pendingSidebarRoute.current = null;
+    setPageTransition((value) => value + 1);
+  }, [pathname]);
 
   // Growing the window past md with the drawer open would leave an overlay on a
   // layout that no longer has one.
@@ -137,7 +147,15 @@ export default function AppShell() {
       ? "Collapse sidebar"
       : "Expand sidebar"
     : "Open menu";
-  const showRailLabels = expanded || railHovered || railFocused;
+  const showRailLabels = expanded || (!suppressRailPeek && (railHovered || railFocused));
+  const closeRailAfterNavigate = (to) => {
+    pendingSidebarRoute.current = to && to !== pathname ? to : null;
+    setExpanded(false);
+    setRailHovered(false);
+    setRailFocused(false);
+    setSuppressRailPeek(true);
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  };
 
   return (
     // Every provider here sits at the shell rather than at the root for the
@@ -159,14 +177,14 @@ export default function AppShell() {
             <aside
               className={`app-rail relative z-30 hidden min-h-0 md:block ${showRailLabels && !expanded ? "app-rail-peek" : ""}`}
               onMouseEnter={() => setRailHovered(true)}
-              onMouseLeave={() => setRailHovered(false)}
-              onFocusCapture={() => setRailFocused(true)}
+              onMouseLeave={() => { setRailHovered(false); setSuppressRailPeek(false); }}
+              onFocusCapture={() => { setRailFocused(true); setSuppressRailPeek(false); }}
               onBlurCapture={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget)) setRailFocused(false);
               }}
             >
               <div className={`app-rail-panel h-full ${showRailLabels ? "w-[240px]" : "w-[72px]"}`}>
-                <NavRail collapsed={!showRailLabels} pinned={expanded} onToggleExpanded={() => setExpanded((value) => !value)} />
+                <NavRail collapsed={!showRailLabels} pinned={expanded} onToggleExpanded={() => { setSuppressRailPeek(false); setExpanded((value) => !value); }} onNavigate={closeRailAfterNavigate} />
               </div>
             </aside>
 
@@ -178,7 +196,7 @@ export default function AppShell() {
                 onMenuClick={toggleSidebar}
                 menuLabel={sidebarLabel}
               />
-              <main className="min-h-0 min-w-0 overflow-hidden bg-canvas">
+              <main key={pageTransition} className={`min-h-0 min-w-0 overflow-hidden bg-canvas ${pageTransition ? "sidebar-page-enter" : ""}`}>
                 <Outlet context={{ setRoomHeader }} />
               </main>
               <BottomNav />
@@ -192,7 +210,7 @@ export default function AppShell() {
                   aria-hidden="true"
                 />
                 <div className="absolute left-0 top-0 h-full w-[min(280px,85vw)] overscroll-contain border-r border-line bg-surface shadow-modal">
-                  <NavRail onNavigate={() => setDrawerOpen(false)} />
+                  <NavRail onNavigate={(to) => { pendingSidebarRoute.current = to && to !== pathname ? to : null; setDrawerOpen(false); }} />
                 </div>
               </div>
             )}

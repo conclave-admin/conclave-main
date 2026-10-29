@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useOutletContext } from "react-router-dom";
+import { Link, useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import IconGroup from "@/assets/icons/group.svg?react";
 import IconSearch from "@/assets/icons/search.svg?react";
 import IconThread from "@/assets/icons/thread.svg?react";
@@ -33,12 +33,13 @@ const SEARCH_DEBOUNCE_MS = 250;
  * the workspace's address book by typing into this box. See users.service.js.
  */
 export default function NewChat() {
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { setRoomHeader } = useOutletContext();
   const { toast } = useToast();
 
   const [mode, setMode] = useState("dm");
-  const [term, setTerm] = useState("");
+  const [term, setTerm] = useState(searchParams.get("q") || "");
   const [results, setResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [selected, setSelected] = useState([]);

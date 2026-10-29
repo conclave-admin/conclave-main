@@ -114,6 +114,7 @@ export default function MessageTimeline({
   members = [],
   isAdmin,
   roomId,
+  readOnly = false,
   deliveryIds,
   typingUserIds = [],
   recordingUserIds = [],
@@ -545,7 +546,7 @@ export default function MessageTimeline({
     <MediaViewerProvider items={mediaItems} onJump={onJumpToMessage}>
       <div
         ref={contentRef}
-        className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-5 pt-4 md:px-7"
+        className="relative mx-auto flex w-full min-w-0 max-w-3xl flex-1 flex-col px-4 pb-5 pt-4 md:px-7"
       >
         {hasMore && (
           <div ref={topSentinelRef} className="py-2">
@@ -593,7 +594,7 @@ export default function MessageTimeline({
                 data-album-id={group.albumId || undefined}
                 className={
                   group.albumId && group.messages.length > 1
-                    ? "grid w-full grid-cols-2 items-start gap-2 rounded-2xl border border-line p-2"
+                    ? "grid w-full min-w-0 grid-cols-[repeat(2,minmax(0,1fr))] items-start gap-2 rounded-2xl border border-line p-2"
                     : ""
                 }
               >
@@ -604,7 +605,7 @@ export default function MessageTimeline({
                 the top with a void beneath it. */}
                     <div
                       data-message-id={message.id}
-                      className={`${group.albumId && group.messages.length > 1 ? "min-w-0" : message._consecutive ? "mt-0.5" : "mt-3"} ${highlightedId === message.id ? "message-jump-highlight rounded-2xl" : ""}`}
+                      className={`min-w-0 max-w-full ${group.albumId && group.messages.length > 1 ? "" : message._consecutive ? "mt-0.5" : "mt-3"} ${highlightedId === message.id ? "message-jump-highlight rounded-2xl" : ""}`}
                     >
                       <Message
                         message={message}
@@ -615,6 +616,7 @@ export default function MessageTimeline({
                         members={members}
                         isAdmin={isAdmin}
                         roomId={roomId}
+                        readOnly={readOnly}
                         replyTarget={replyTargetFor(message)}
                         deliveryIds={deliveryIds}
                         onMessageInfo={onMessageInfo}

@@ -140,6 +140,12 @@ export default function MessageComposer({
   const [emojiOpen, setEmojiOpen] = useState(false);
 
   const textareaRef = useRef(null);
+  useEffect(() => {
+    // Desktop chat apps put typing one keystroke away. On touch screens,
+    // opening the keyboard immediately would hide the conversation instead.
+    if (!disabled && window.matchMedia("(min-width: 768px) and (pointer: fine)").matches)
+      textareaRef.current?.focus({ preventScroll: true });
+  }, [activityScope, disabled]);
   const emojiTriggerRef = useRef(null);
   const selectionRef = useRef({ start: content.length, end: content.length });
   const callbacks = useMemo(() => ({ current: null }), [activityScope]);

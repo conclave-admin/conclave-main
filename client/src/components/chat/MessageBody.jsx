@@ -79,7 +79,7 @@ function rich(text, query) {
       return (
         <figure
           key={i}
-          className="my-2 min-w-0 rounded-lg border border-current/15 bg-black/10 p-3"
+          className="my-2 min-w-0 max-w-full overflow-hidden rounded-lg border border-current/15 bg-black/10 p-3"
         >
           {language && (
             <figcaption className="mb-2 text-[11px] opacity-70">
@@ -87,7 +87,7 @@ function rich(text, query) {
             </figcaption>
           )}
           <pre className="max-w-full overflow-x-auto whitespace-pre text-xs">
-            <code>{highlight(code, query)}</code>
+            <code className="block min-w-0">{highlight(code, query)}</code>
           </pre>
           <button
             type="button"

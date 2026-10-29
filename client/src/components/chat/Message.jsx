@@ -68,6 +68,7 @@ export default function Message({
   members = [],
   isAdmin,
   roomId,
+  readOnly = false,
   replyTarget,
   albumTile = false,
   deliveryIds,
@@ -90,7 +91,7 @@ export default function Message({
   const [reminderOpen, setReminderOpen] = useState(false);
   const bodyRef = useRef(null);
   const longPress = useLongPress(() => setMenuOpen(true), {
-    disabled: message.is_deleted || message._optimistic,
+    disabled: readOnly || message.is_deleted || message._optimistic,
   });
 
   const status = mine
@@ -108,7 +109,7 @@ export default function Message({
   const showAvatar = !albumTile && !mine && !message._consecutive;
 
   const bubbleClass = [
-    "message-bubble px-3.5 py-2.5 text-body [overflow-wrap:anywhere]",
+    "message-bubble min-w-0 max-w-full px-3.5 py-2.5 text-body [overflow-wrap:anywhere]",
     albumTile ? "pr-9" : "",
     "rounded-2xl",
     mine ? "message-bubble-out" : "message-bubble-in text-ink",
@@ -121,7 +122,7 @@ export default function Message({
 
   return (
     <article
-      className={`group relative flex items-start gap-2.5 ${mine ? "flex-row-reverse" : ""}`}
+      className={`group relative flex w-full min-w-0 max-w-full items-start gap-2.5 ${mine ? "flex-row-reverse" : ""}`}
     >
       {showAvatar ? (
         <Avatar
@@ -152,7 +153,7 @@ export default function Message({
           <span className="truncate text-label text-ink">{senderName}</span>
         )}
 
-        {!message._optimistic && !message.is_deleted && (
+        {!readOnly && !message._optimistic && !message.is_deleted && (
           <ReminderAction
             messageId={message.id}
             externalOpen={reminderOpen}
@@ -250,7 +251,7 @@ export default function Message({
             {/* Beside the body and out of the layout flow, so a row reserves no
                 indent. Hover devices reveal it on hover; touch devices hide it
                 and open the menu by long-press. */}
-            {!message._optimistic && (
+            {!readOnly && !message._optimistic && (
               <div
                 className={`absolute top-1 transition-opacity ${
                   albumTile
@@ -310,7 +311,7 @@ export default function Message({
         {/* Renders nothing until a reaction exists. The first one comes from the
             actions menu, so this row only appears once there is something to
             show or add to. */}
-        {!message.is_deleted && !message._optimistic && (
+        {!message.is_deleted && !message._optimistic && !readOnly && (
           <MessageReactions
             message={message}
             onToggle={(emoji) => onToggleReaction(message, emoji)}

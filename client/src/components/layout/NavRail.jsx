@@ -7,6 +7,10 @@ import { useChats } from "@/contexts/ChatsContext";
 import IconDecisions from "@/assets/icons/decisions.svg?react";
 import IconHome from "@/assets/icons/home.svg?react";
 import IconRecent from "@/assets/icons/recent.svg?react";
+import IconDigest from "@/assets/icons/digest.svg?react";
+import IconInbox from "@/assets/icons/work-inbox.svg?react";
+import IconProjects from "@/assets/icons/projects.svg?react";
+import IconSearch from "@/assets/icons/search.svg?react";
 import IconSettings from "@/assets/icons/settings.svg?react";
 import IconSignOut from "@/assets/icons/sign-out.svg?react";
 import IconTasks from "@/assets/icons/tasks.svg?react";
@@ -18,7 +22,10 @@ const primaryNav = [
   { to: "/activity", label: "Message activity", Icon: IconRecent },
   { to: "/tasks", label: "Tasks", Icon: IconTasks },
   { to: "/decisions", label: "Decisions", Icon: IconDecisions },
-  { to: "/digest", label: "Catch up", Icon: IconRecent },
+  { to: "/digest", label: "Catch up", Icon: IconDigest },
+  { to: "/work/inbox", label: "My work", Icon: IconInbox },
+  { to: "/work", label: "Projects", Icon: IconProjects, end: true },
+  { to: "/work/search", label: "Search all", Icon: IconSearch },
   { to: "/discover", label: "Discover rooms", Icon: IconPublic },
 ];
 
@@ -30,7 +37,7 @@ function RailItem({ to, end, label, Icon, badge = 0, collapsed, onNavigate }) {
     <NavLink
       to={to}
       end={end}
-      onClick={onNavigate}
+      onClick={() => onNavigate?.(to)}
       title={collapsed ? label : undefined}
       aria-label={collapsed ? label : undefined}
       className={({ isActive }) =>
@@ -82,7 +89,7 @@ export default function NavRail({ collapsed = false, pinned = false, onToggleExp
     <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain py-4">
       <NavLink
         to="/chats"
-        onClick={onNavigate}
+        onClick={() => onNavigate?.("/chats")}
         aria-label="Conclave, home"
         className={`mb-6 flex shrink-0 items-center ${collapsed ? "justify-center" : "px-6"}`}
       >
@@ -126,7 +133,7 @@ export default function NavRail({ collapsed = false, pinned = false, onToggleExp
 
         <NavLink
           to="/profile"
-          onClick={onNavigate}
+          onClick={() => onNavigate?.("/profile")}
           title={collapsed ? displayName : undefined}
           aria-label={collapsed ? `Profile, ${displayName}` : undefined}
           className={({ isActive }) =>

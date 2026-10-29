@@ -863,3 +863,25 @@ history policy, and account versus device clearing semantics. Apply migration
 `my_role`, `join_approval`, `member_can_send`, `member_can_invite`,
 `cleared_sequence`, and `cleared_at`; room list responses include personal clear
 state. Sequences must be handled as decimal strings without losing precision.
+# Connected work (first release)
+
+All `/work` routes require an access token. Project and brief content is
+server readable, so encrypted conversations cannot be attached to projects or
+given briefs. A room belongs to at most one project. Project creation and room
+attachment require room admin access; only the project creator can change its
+details, milestones, or automation rules. Project views include only rooms in
+which the caller is currently a member. Task organization requires the task
+creator or a room admin.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET / POST | `/work/projects` | List visible projects or create one with `name`, `description`, and 1–20 `roomIds`. |
+| GET / PATCH | `/work/projects/:projectId` | Read project, visible rooms, milestone progress, tasks, decisions, dependencies, and exact task counts; or update `name`, `description`, `status`. Task and decision lists are capped at 200 and 50; `truncated` signals the cap. |
+| POST / DELETE | `/work/projects/:projectId/rooms[/:roomId]` | Attach `roomId` or detach a room. Detaching clears task milestone links and dependencies involving that room. |
+| POST / PATCH | `/work/projects/:projectId/milestones[/:milestoneId]` | Create or update a milestone using `title`, `dueDate`, and, on update, `completed`. |
+| PATCH | `/work/tasks/:taskId/milestone` | Set `milestoneId` or `null`. |
+| POST / DELETE | `/work/tasks/:taskId/dependencies[/:dependsOnId]` | Add `dependsOnId` or remove it. Dependencies require both tasks in the same project and reject cycles. A blocked task cannot be completed. |
+| GET / PUT | `/work/rooms/:roomId/brief` | Read current brief and its 20 newest revisions; room admins save `body`, optional `sourceMessageId`, and current `version` for conflict detection. |
+| GET | `/work/search?q=` | Search accessible messages, files, tasks, decisions, rooms, and shared room members. At least two characters; at most 50 combined results. Encrypted message text is excluded. |
+| GET / PATCH | `/work/inbox` and `/work/inbox/state` | Read up to 100 actionable assignments, mentions, blocked and overdue tasks; mark an `eventKey` done or snoozed with `until` within 30 days. |
+| GET / POST / PATCH | `/work/projects/:projectId/automations[/:ruleId]` | List, create, or enable/pause a rule. One rule per trigger per project. `decision_recorded` creates an unassigned follow-up task; `task_overdue` notifies the assignee once per due date. Runs are recorded durably. |

@@ -13,6 +13,9 @@ const TITLES = [
   ["/settings", "Settings"],
   ["/profile", "Profile"],
   ["/new", "New chat"],
+  ["/work/inbox", "My work"],
+  ["/work/search", "Search all"],
+  ["/work", "Projects"],
 ];
 
 function titleFor(pathname) {

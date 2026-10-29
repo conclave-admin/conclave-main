@@ -1,0 +1,22 @@
+import { api } from "../lib/api";
+
+const data = async (promise) => (await promise).data.data;
+export const listProjects = () => data(api.get("/work/projects"));
+export const createProject = (payload) => data(api.post("/work/projects", payload));
+export const getProject = (id) => data(api.get(`/work/projects/${id}`));
+export const updateProject = (id, payload) => data(api.patch(`/work/projects/${id}`, payload));
+export const addProjectRoom = (id, roomId) => data(api.post(`/work/projects/${id}/rooms`, { roomId }));
+export const removeProjectRoom = (id, roomId) => data(api.delete(`/work/projects/${id}/rooms/${roomId}`));
+export const createMilestone = (id, payload) => data(api.post(`/work/projects/${id}/milestones`, payload));
+export const updateMilestone = (id, milestoneId, payload) => data(api.patch(`/work/projects/${id}/milestones/${milestoneId}`, payload));
+export const setTaskMilestone = (taskId, milestoneId) => data(api.patch(`/work/tasks/${taskId}/milestone`, { milestoneId }));
+export const addDependency = (taskId, dependsOnId) => data(api.post(`/work/tasks/${taskId}/dependencies`, { dependsOnId }));
+export const removeDependency = (taskId, dependsOnId) => data(api.delete(`/work/tasks/${taskId}/dependencies/${dependsOnId}`));
+export const getRoomBrief = (roomId) => data(api.get(`/work/rooms/${roomId}/brief`));
+export const saveRoomBrief = (roomId, payload) => data(api.put(`/work/rooms/${roomId}/brief`, payload));
+export const searchWork = (q) => data(api.get("/work/search", { params: { q } }));
+export const getWorkInbox = () => data(api.get("/work/inbox"));
+export const setWorkInboxState = (payload) => data(api.patch("/work/inbox/state", payload));
+export const listAutomations = (id) => data(api.get(`/work/projects/${id}/automations`));
+export const createAutomation = (id, payload) => data(api.post(`/work/projects/${id}/automations`, payload));
+export const setAutomation = (id, ruleId, enabled) => data(api.patch(`/work/projects/${id}/automations/${ruleId}`, { enabled }));

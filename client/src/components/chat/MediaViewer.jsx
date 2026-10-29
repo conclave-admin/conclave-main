@@ -211,6 +211,7 @@ function ViewerItem({ item, move, onJump, onClose }) {
               <video
                 src={src}
                 controls
+                autoPlay
                 playsInline
                 poster={attachment.preview_url || undefined}
                 aria-label={attachment.filename}
