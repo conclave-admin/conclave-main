@@ -397,6 +397,16 @@ html.dark {
   }
 }
 @media (prefers-reduced-motion: no-preference) {
+  .sidebar-page-enter {
+    animation: sidebar-page-enter 0.24s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  .sidebar-page-enter .app-page-content {
+    animation: none;
+  }
+  @keyframes sidebar-page-enter {
+    from { opacity: 0.78; transform: translateY(7px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
   .app-page-content {
     animation: app-content-enter 0.18s ease-out;
   }

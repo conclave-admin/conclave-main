@@ -145,6 +145,12 @@ async function createMessage({
                   OR (b.blocker_id = peer.user_id AND b.blocked_id = $2)
                WHERE peer.room_id = r.id AND peer.user_id <> $2
             ) AS blocked_in_conversation
+            , EXISTS (
+              SELECT 1 FROM room_members peer
+              INNER JOIN users peer_user ON peer_user.id = peer.user_id
+              WHERE peer.room_id = r.id AND peer.user_id <> $2
+                AND peer_user.deleted_at IS NULL
+            ) AS active_dm_peer
      FROM rooms r
      INNER JOIN room_members rm ON rm.room_id = r.id AND rm.user_id = $2
      WHERE r.id = $1`,
@@ -159,6 +165,9 @@ async function createMessage({
     membership.rows[0].blocked_in_conversation
   ) {
     throw new ApiError(403, "Messaging is unavailable for this conversation");
+  }
+  if (membership.rows[0].room_type === "dm" && !membership.rows[0].active_dm_peer) {
+    throw new ApiError(403, "This account was deleted. The conversation is read-only.");
   }
 
   // 2. If replying, verify the parent message exists in the same room
@@ -221,6 +230,16 @@ async function createMessage({
     }
 
     if (!isRetry) {
+      if (membership.rows[0].room_type === "dm") {
+        const peer = await client.query(
+          `SELECT 1 FROM room_members rm INNER JOIN users u ON u.id=rm.user_id
+           WHERE rm.room_id=$1 AND rm.user_id<>$2 AND u.deleted_at IS NULL
+           FOR SHARE OF u`,
+          [roomId, senderId],
+        );
+        if (!peer.rowCount)
+          throw new ApiError(403, "This account was deleted. The conversation is read-only.");
+      }
       if (threadRootId) {
         if (!/^[0-9a-f-]{36}$/i.test(threadRootId))
           throw new ApiError(400, "Invalid thread root");

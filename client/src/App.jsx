@@ -1,6 +1,6 @@
 import JoinRoom from "./pages/JoinRoom";
 import { lazy, Suspense } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import AppShell from "./components/layout/AppShell";
 import ProtectedRoute from "./components/routing/ProtectedRoute";
 import PublicOnlyRoute from "./components/routing/PublicOnlyRoute";
@@ -31,9 +31,21 @@ const RoomInfo = lazy(() => import("./pages/RoomInfo"));
 const Settings = lazy(() => import("./pages/Settings"));
 const MessageActivity = lazy(() => import("./pages/MessageActivity"));
 const Tasks = lazy(() => import("./pages/Tasks"));
+const ProjectsIndex = lazy(() => import("./pages/WorkProjects").then((m) => ({ default: m.ProjectsIndex })));
+const ProjectDetail = lazy(() => import("./pages/WorkProjects").then((m) => ({ default: m.ProjectDetail })));
+const WorkInbox = lazy(() => import("./pages/WorkInbox"));
+const WorkSearch = lazy(() => import("./pages/WorkSearch"));
+const RoomBrief = lazy(() => import("./pages/RoomBrief"));
 
 // Keep public-page illustrations and content outside the signed-in app bundle.
 const Landing = lazy(() => import("./pages/Landing"));
+
+// A conversation has room-scoped drafts, history, scroll and read state. Give
+// each room its own component lifetime when switching directly between chats.
+function RoomRoute() {
+  const { roomId } = useParams();
+  return <Room key={roomId} />;
+}
 
 /**
  * `/` is the public landing page.
@@ -106,7 +118,7 @@ export default function App() {
                       and the open conversation — both keyed off this URL so a
                       filtered or deep-linked view survives a reload. */}
                           <Route path="/chats" element={<Chats />}>
-                            <Route path=":roomId" element={<Room />} />
+                            <Route path=":roomId" element={<RoomRoute />} />
                             <Route path=":roomId/info" element={<RoomInfo />} />
                           </Route>
 
@@ -149,6 +161,11 @@ export default function App() {
                             element={<CatchUpDigestPage />}
                           />
                           <Route path="/tasks" element={<Tasks />} />
+                          <Route path="/work" element={<ProjectsIndex />} />
+                          <Route path="/work/projects/:projectId" element={<ProjectDetail />} />
+                          <Route path="/work/inbox" element={<WorkInbox />} />
+                          <Route path="/work/search" element={<WorkSearch />} />
+                          <Route path="/work/rooms/:roomId/brief" element={<RoomBrief />} />
                         </Route>
                       </Route>
 

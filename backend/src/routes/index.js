@@ -19,6 +19,7 @@ router.use("/encryption", require("./encryption.routes"));
 
 router.use("/push", require("./push.routes"));
 router.use("/sync", require("./sync.routes"));
+router.use("/work", require("./work.routes"));
 router.use("/auth", authRoutes);
 router.use("/users", usersRoutes);
 router.use("/rooms", require("./roomLifecycle.routes"));

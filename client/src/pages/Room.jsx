@@ -2,7 +2,6 @@ import { useSyncReconciler } from "../contexts/SyncContext";
 import { api } from "../lib/api";
 import ConversationPolicyNotice from "../components/chat/ConversationPolicyNotice";
 import ThreadPanel from "../components/chat/ThreadPanel";
-import { readPosition, savePosition } from "../lib/readingPosition";
 import { readDraft } from "../lib/drafts";
 import { conversationMessageVisible } from "../lib/clearedConversations";
 import { respondToRequest } from "../services/security.service";
@@ -60,23 +59,9 @@ export default function Room() {
   const { setRoomHeader } = useOutletContext();
   const { user } = useAuth();
   const viewerId = user?.id;
-  const positionScope = `${viewerId}:${roomId}`;
-  const [positionState, setPositionState] = useState(() => ({
-    scope: positionScope,
-    value: readPosition(viewerId, roomId),
-  }));
-  const storedPosition =
-    positionState.scope === positionScope
-      ? positionState.value
-      : readPosition(viewerId, roomId);
-  const setStoredPosition = (value) =>
-    setPositionState({ scope: positionScope, value });
-  useEffect(
-    () => setStoredPosition(readPosition(viewerId, roomId)),
-    [viewerId, roomId],
-  );
-  const historyAnchor =
-    anchorId || (!storedPosition?.atBottom ? storedPosition?.id : null);
+  // Ordinary conversation opens show current history. Only an explicit deep
+  // link requests an older slice around a particular message.
+  const historyAnchor = anchorId;
   const { toast } = useToast();
   const [browserOnline, setBrowserOnline] = useState(
     () => typeof navigator === "undefined" || navigator.onLine !== false,
@@ -130,8 +115,6 @@ export default function Room() {
       // Selected objects can outlive the filtered timeline. Drop their old text
       // without touching the composer's draft or the durable pending outbox.
       setReplyTo(null);
-      savePosition(viewerId, roomId, null);
-      setStoredPosition(null);
       setThreadRoot(null);
       setMessageInfo(null);
       setEditing(null);
@@ -155,6 +138,8 @@ export default function Room() {
   }, []);
 
   const members = room?.members || [];
+  const deletedDmPeer = room?.type === "dm" &&
+    !members.some((member) => member.id !== viewerId);
   const myRole = room?.my_role;
 
   const {
@@ -181,12 +166,6 @@ export default function Room() {
     lastSeenSequence,
   } = useMessages(roomError && !room ? null : roomId, members, historyAnchor);
 
-  useEffect(() => {
-    if (messagesError && !anchorId && storedPosition?.id) {
-      savePosition(viewerId, roomId, null);
-      setStoredPosition(null);
-    }
-  }, [messagesError, anchorId, viewerId, roomId, storedPosition?.id]);
   const threadRootSignatures = useMemo(() => {
     const roots = new Map();
     for (const message of messages) {
@@ -519,7 +498,7 @@ export default function Room() {
       <div
         ref={scrollContainerRef}
         data-message-scroll
-        className="row-start-2 min-h-0 overflow-y-auto overscroll-contain [overflow-anchor:none]"
+        className="row-start-2 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain [overflow-anchor:none]"
       >
         {/* Catch-up belongs to the cross-room digest. Room read pointers move
             as individual messages enter the viewport. */}
@@ -535,12 +514,13 @@ export default function Room() {
         ) : (
           <MessageTimeline
             messages={timelineMessages}
-            initialPosition={!anchorId ? storedPosition : null}
+            initialPosition={null}
             scrollContainerRef={scrollContainerRef}
             viewerId={viewerId}
             members={membersWithPointers}
             isAdmin={myRole === "admin"}
             roomId={roomId}
+            readOnly={deletedDmPeer}
             deliveryIds={deliveryIds}
             typingUserIds={typingUserIds}
             recordingUserIds={recordingUserIds}
@@ -562,7 +542,7 @@ export default function Room() {
             onToggleReaction={handleToggleReaction}
             onPin={handlePin}
             onUnpin={handleUnpin}
-            lastSeenSequence={lastSeenSequence}
+            lastSeenSequence={Math.max(Number(members.find((member) => member.id === viewerId)?.last_seen_sequence) || 0, lastSeenSequence)}
             onMessageVisible={handleMessageVisible}
             readsEnabled={
               isConnected &&
@@ -593,7 +573,11 @@ export default function Room() {
         )}
       </div>
 
-      {room?.superseded_by ? (
+      {deletedDmPeer ? (
+        <p role="status" className="row-start-3 border-t border-line bg-surface px-4 py-4 text-center text-body text-muted">
+          This account was deleted. You can still read your conversation.
+        </p>
+      ) : room?.superseded_by ? (
         <div className="row-start-3 border-t border-line p-4">
           <Button onClick={() => navigate(`/chats/${room.superseded_by}`)}>
             Continue in the encrypted conversation
@@ -668,12 +652,10 @@ export default function Room() {
             }}
             onSend={async (payload) => {
               await sendMessage(payload);
-              setStoredPosition(null);
               if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
             }}
             onSendMedia={async (items) => {
               await sendMedia(items);
-              setStoredPosition(null);
               if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
             }}
             isOnline={browserOnline && isConnected}

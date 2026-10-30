@@ -1,0 +1,28 @@
+const { Router } = require("express");
+const requireAuth = require("../middlewares/auth.middleware");
+const validateUuidParams = require("../middlewares/validateParams");
+const work = require("../controllers/work.controller");
+const discovery = require("../controllers/workDiscovery.controller");
+
+const router = Router();
+router.use(requireAuth, validateUuidParams);
+router.get("/search", discovery.search);
+router.get("/inbox", discovery.inbox);
+router.patch("/inbox/state", discovery.setInboxState);
+router.get("/projects", work.listProjects);
+router.post("/projects", work.createProject);
+router.get("/projects/:projectId", work.getProject);
+router.patch("/projects/:projectId", work.updateProject);
+router.post("/projects/:projectId/rooms", work.addProjectRoom);
+router.delete("/projects/:projectId/rooms/:roomId", work.removeProjectRoom);
+router.post("/projects/:projectId/milestones", work.createMilestone);
+router.patch("/projects/:projectId/milestones/:milestoneId", work.updateMilestone);
+router.get("/projects/:projectId/automations", discovery.listAutomations);
+router.post("/projects/:projectId/automations", discovery.createAutomation);
+router.patch("/projects/:projectId/automations/:ruleId", discovery.setAutomation);
+router.patch("/tasks/:taskId/milestone", work.setTaskMilestone);
+router.post("/tasks/:taskId/dependencies", work.addDependency);
+router.delete("/tasks/:taskId/dependencies/:dependsOnId", work.removeDependency);
+router.get("/rooms/:roomId/brief", work.getBrief);
+router.put("/rooms/:roomId/brief", work.putBrief);
+module.exports = router;

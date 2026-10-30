@@ -9,12 +9,14 @@ const {
 const STATUSES = ["open", "in_progress", "done"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PAGE_SIZE = 50;
-const COLUMNS = `t.id,t.room_id,t.source_message_id,t.decision_id,t.title,t.body,t.assignee_id,
+const COLUMNS = `t.id,t.room_id,t.source_message_id,t.decision_id,t.project_id,t.milestone_id,t.title,t.body,t.assignee_id,
  t.status,to_char(t.due_date,'YYYY-MM-DD') AS due_date,t.created_by,t.created_at,t.updated_at,
  r.name AS room_name,r.slug AS room_slug,d.title AS decision_title,d.status AS decision_status,a.display_name AS assignee_name,
  c.display_name AS creator_name,rm.role AS viewer_role,
  (t.assignee_id=$1::uuid) AS can_progress,
- (t.created_by=$1::uuid OR rm.role='admin') AS can_manage`;
+ (t.created_by=$1::uuid OR rm.role='admin') AS can_manage,
+ (SELECT COUNT(*)::int FROM task_dependencies dep JOIN tasks blocker ON blocker.id=dep.depends_on_id
+  WHERE dep.task_id=t.id AND blocker.status<>'done') AS open_blockers`;
 const JOINS = `FROM tasks t JOIN rooms r ON r.id=t.room_id
  JOIN room_members rm ON rm.room_id=t.room_id AND rm.user_id=$1
  LEFT JOIN decisions d ON d.id=t.decision_id
@@ -118,11 +120,12 @@ const createTask = asyncHandler(async (req, res) => {
       );
       if (!source.rowCount) throw new ApiError(400, "Choose a visible message from this conversation");
     }
+    const projectRow = await client.query("SELECT project_id FROM project_rooms WHERE room_id=$1", [roomId]);
     const inserted = await client.query(
-      `INSERT INTO tasks (room_id,source_message_id,title,initial_title,body,assignee_id,initial_assignee_id,due_date,initial_due_date,created_by,client_id,decision_id)
-       VALUES ($1,$2,$3,$3,$4,$5,$5,$6,$6,$7,$8,$9)
+      `INSERT INTO tasks (room_id,source_message_id,title,initial_title,body,assignee_id,initial_assignee_id,due_date,initial_due_date,created_by,client_id,decision_id,project_id)
+       VALUES ($1,$2,$3,$3,$4,$5,$5,$6,$6,$7,$8,$9,$10)
        ON CONFLICT (created_by,client_id) WHERE client_id IS NOT NULL DO NOTHING RETURNING id`,
-      [roomId, sourceMessageId || null, title, body, assigneeId, dueDate, req.user.id, clientId, decisionId],
+      [roomId, sourceMessageId || null, title, body, assigneeId, dueDate, req.user.id, clientId, decisionId, projectRow.rows[0]?.project_id || null],
     );
     if (inserted.rowCount) taskId = inserted.rows[0].id;
     else {
@@ -147,17 +150,19 @@ const createTask = asyncHandler(async (req, res) => {
 });
 
 const listTasks = asyncHandler(async (req, res) => {
-  const { roomId, status, assigneeId, decisionId, before } = req.query;
+  const { roomId, status, assigneeId, decisionId, projectId, before } = req.query;
   if (roomId && !UUID_RE.test(roomId)) throw new ApiError(400, "Invalid conversation");
   if (status && !STATUSES.includes(status)) throw new ApiError(400, "Invalid task status");
   if (assigneeId && !UUID_RE.test(assigneeId)) throw new ApiError(400, "Invalid assignee");
   if (decisionId && !UUID_RE.test(decisionId)) throw new ApiError(400, "Invalid decision");
+  if (projectId && !UUID_RE.test(projectId)) throw new ApiError(400, "Invalid project");
   const params = [req.user.id];
   const where = [];
   if (roomId) { params.push(roomId); where.push(`t.room_id=$${params.length}`); }
   if (status) { params.push(status); where.push(`t.status=$${params.length}`); }
   if (assigneeId) { params.push(assigneeId); where.push(`t.assignee_id=$${params.length}`); }
   if (decisionId) { params.push(decisionId); where.push(`t.decision_id=$${params.length}`); }
+  if (projectId) { params.push(projectId); where.push(`t.project_id=$${params.length}`); }
   if (before) {
     let cursor;
     try { cursor = JSON.parse(Buffer.from(before, "base64url").toString("utf8")); }
@@ -206,7 +211,12 @@ const getTask = asyncHandler(async (req, res) => {
   );
   const page = updates.rows.slice(0, 20);
   const last = page.at(-1);
-  return ok(res, { task, updates: page, nextCursor: updates.rowCount > 20
+  const dependencies = await query(
+    `SELECT blocker.id,blocker.title,blocker.status,blocker.room_id
+     FROM task_dependencies dep JOIN tasks blocker ON blocker.id=dep.depends_on_id
+     JOIN room_members rm ON rm.room_id=blocker.room_id AND rm.user_id=$2
+     WHERE dep.task_id=$1 ORDER BY blocker.created_at`, [task.id, req.user.id]);
+  return ok(res, { task, updates: page, dependencies: dependencies.rows, nextCursor: updates.rowCount > 20
     ? Buffer.from(JSON.stringify({ created_at: last.created_at, id: last.id })).toString("base64url") : null });
 });
 
@@ -225,6 +235,12 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
     if (!current.rowCount) throw new ApiError(404, "Task not found");
     if (current.rows[0].assignee_id !== req.user.id)
       throw new ApiError(403, "Only the assigned member can change progress");
+    if (status === "done") {
+      const blocked = await client.query(
+        `SELECT 1 FROM task_dependencies dep JOIN tasks blocker ON blocker.id=dep.depends_on_id
+         WHERE dep.task_id=$1 AND blocker.status<>'done' LIMIT 1`, [req.params.taskId]);
+      if (blocked.rowCount) throw new ApiError(409, "Complete blocking tasks first");
+    }
     if (current.rows[0].status !== status) {
       await client.query("UPDATE tasks SET status=$2,updated_at=NOW() WHERE id=$1",
         [req.params.taskId, status]);

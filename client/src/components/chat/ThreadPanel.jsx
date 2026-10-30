@@ -227,7 +227,8 @@ export default function ThreadPanel({
             </Button>
           </div>
         </div>
-        {!error && !expired && (
+        {!error && !expired && !(room.type === "dm" &&
+          !room.members?.some((member) => member.id !== user?.id)) && (
           <div className="chat-composer">
             <MessageComposer
               activityScope={`thread:${room.id}:${rootId}`}
