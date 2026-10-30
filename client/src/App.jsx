@@ -36,6 +36,8 @@ const ProjectDetail = lazy(() => import("./pages/WorkProjects").then((m) => ({ d
 const WorkInbox = lazy(() => import("./pages/WorkInbox"));
 const WorkSearch = lazy(() => import("./pages/WorkSearch"));
 const RoomBrief = lazy(() => import("./pages/RoomBrief"));
+const TeamHome = lazy(() => import("./pages/TeamHome"));
+const JoinTeam = lazy(() => import("./pages/JoinTeam"));
 
 // Keep public-page illustrations and content outside the signed-in app bundle.
 const Landing = lazy(() => import("./pages/Landing"));
@@ -141,6 +143,8 @@ export default function App() {
                           />
                           <Route path="/new" element={<NewChat />} />
                           <Route path="/discover" element={<DiscoverRooms />} />
+                          <Route path="/teams" element={<TeamHome />} />
+                          <Route path="/teams/:teamId" element={<TeamHome />} />
 
                           <Route path="/profile" element={<Profile />} />
                           <Route path="/settings" element={<Settings />} />
@@ -170,6 +174,7 @@ export default function App() {
                       </Route>
 
                       <Route path="/join" element={<JoinRoom />} />
+                      <Route path="/join-team" element={<JoinTeam />} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </Suspense>

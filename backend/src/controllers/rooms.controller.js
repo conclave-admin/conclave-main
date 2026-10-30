@@ -263,7 +263,7 @@ const listRooms = asyncHandler(async (req, res) => {
     `SELECT
        r.id,
        r.name,
-       r.type, r.encryption_mode, r.superseded_by,
+       r.type, r.encryption_mode, r.superseded_by, r.team_id,
        r.slug,
        r.avatar_url,
        r.created_by,
@@ -382,10 +382,10 @@ const discoverRooms = asyncHandler(async (req, res) => {
   }
   values.push(26, offset);
   const result = await query(
-    `SELECT r.id, r.name, r.description, r.slug, r.created_at,
+    `SELECT r.id, r.name, r.description, r.slug, r.created_at, r.team_id,
             (SELECT COUNT(*)::int FROM room_members rm WHERE rm.room_id = r.id) AS member_count
        FROM rooms r
-      WHERE r.type = 'public'
+      WHERE r.type = 'public' AND (r.team_id IS NULL OR r.team_discoverable)
         AND NOT EXISTS (SELECT 1 FROM room_members mine WHERE mine.room_id = r.id AND mine.user_id = $1)
         ${search}
       ORDER BY member_count DESC, r.created_at DESC, r.id DESC
@@ -403,10 +403,11 @@ const discoverRooms = asyncHandler(async (req, res) => {
 // transaction. Locking the room row serializes joins with visibility edits.
 const joinPublicRoom = asyncHandler(async (req, res) => {
   const approval = (
-    await query("SELECT join_approval FROM rooms WHERE id=$1", [
+    await query("SELECT join_approval,team_id FROM rooms WHERE id=$1", [
       req.params.roomId,
     ])
   ).rows[0];
+  if(approval?.team_id) throw new ApiError(409,'Request team membership to join this room');
   if (approval?.join_approval)
     return ok(
       res,

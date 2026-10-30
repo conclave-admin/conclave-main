@@ -277,17 +277,19 @@ async function dispatchMail(limit = 10, send) {
         ).rowCount
       )
         continue;
-      const valid = (
-        await query(
+      const valid = job.team_invite_id
+        ? (await query(`SELECT 1 FROM team_invites i JOIN teams t ON t.id=i.team_id
+          WHERE i.id=$1 AND i.revoked_at IS NULL AND i.expires_at>NOW()
+          AND i.uses<i.max_uses AND t.archived_at IS NULL`,[job.team_invite_id])).rowCount
+        : (await query(
           "SELECT 1 FROM account_tokens t JOIN users u ON u.id=t.user_id WHERE t.id=$1 AND t.consumed_at IS NULL AND t.expires_at>NOW() AND u.deleted_at IS NULL",
           [job.token_id],
-        )
-      ).rowCount;
+        )).rowCount;
       let outcome = "expired";
       if (valid && new Date(job.expires_at) > new Date()) {
         const transport = send || sendWithResend;
         await transport(decryptMail(job.encrypted_payload), {
-          idempotencyKey: `account-mail/${job.id}`,
+          idempotencyKey: `conclave-mail/${job.id}`,
         });
         outcome = "accepted";
       }
@@ -312,6 +314,16 @@ async function dispatchMail(limit = 10, send) {
     }
   }
   return jobs.rowCount;
+}
+async function queueTeamInvite(db, invite, token, email, teamName) {
+  if(!mailConfigured()) return false;
+  const url=new URL('/join-team',env.mail.frontendUrl);
+  url.hash=`token=${token}`;
+  const message={from:env.mail.from,to:email,subject:`Join ${teamName} on Conclave`,
+    text:`You have been invited to join ${teamName} on Conclave. Open this link before it expires:\n\n${url.href}\n\nIf you did not expect this invitation, ignore this email.`};
+  await db.query(`INSERT INTO account_mail_jobs(team_invite_id,encrypted_payload,expires_at)
+    VALUES($1,$2,$3)`,[invite.id,encryptMail(message),invite.expires_at]);
+  return true;
 }
 async function sendWithResend(mail, { idempotencyKey }) {
   const { data, error } = await new Resend(env.mail.apiKey).emails.send(mail, {
@@ -358,6 +370,7 @@ async function stop() {
   await work;
 }
 module.exports = {
+  queueTeamInvite,
   password,
   confirm,
   mailConfigured,

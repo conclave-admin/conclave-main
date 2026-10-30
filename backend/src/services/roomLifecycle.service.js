@@ -191,6 +191,7 @@ async function enter({ roomId, token, userId }) {
     ).rows[0];
     if (!room || room.type === "dm" || room.personal_for || room.superseded_by)
       throw new ApiError(404, "Room is not available to join");
+    if (room.team_id) throw new ApiError(409, "Request team membership to join this room");
     let link;
     if (token) {
       link = (
