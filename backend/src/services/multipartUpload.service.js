@@ -78,10 +78,7 @@ function validateRequest(body) {
   if (!Number.isInteger(size) || size <= 0 || size > limitFor(type))
     throw new ApiError(413, "File size exceeds its upload limit");
   return {
-    filename:
-      type === "application/vnd.conclave.encrypted"
-        ? "encrypted.bin"
-        : filename,
+    filename,
     mime_type: type,
     size,
     clientId,

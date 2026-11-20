@@ -251,7 +251,7 @@ async function personalRoom(userId) {
     if (!room) {
       room = (
         await db.query(
-          "INSERT INTO rooms(name,type,created_by,encryption_mode,personal_for,slug) VALUES('Saved messages','private',$1,'e2ee-v1',$1,$2) RETURNING id",
+          "INSERT INTO rooms(name,type,created_by,personal_for,slug) VALUES('Saved messages','private',$1,$1,$2) RETURNING id",
           [userId, `saved-${userId}`],
         )
       ).rows[0];
@@ -291,7 +291,6 @@ async function remind(userId, messageId, due) {
 }
 async function schedule(userId, roomId, payload, due, reviewId) {
   const room = await member(pool, roomId, userId);
-  let sealed = null;
   if (room.superseded_by)
     throw new ApiError(409, "Use the current conversation");
   if (
@@ -302,20 +301,7 @@ async function schedule(userId, roomId, payload, due, reviewId) {
     payload.forwardSource
   )
     throw new ApiError(400, "Schedule a text message only");
-  if (room.encryption_mode === "e2ee-v1") {
-    if (payload.content)
-      throw new ApiError(
-        400,
-        "Encrypt this message on your device before scheduling",
-      );
-    sealed = await require("./encryption.service").validateMessage(
-      pool,
-      roomId,
-      userId,
-      payload.clientId,
-      payload.encryptedPayload,
-    );
-  } else if (
+  if (
     typeof payload.content !== "string" ||
     !payload.content.trim() ||
     payload.content.length > 20000 ||
@@ -335,9 +321,7 @@ async function schedule(userId, roomId, payload, due, reviewId) {
   const safe = {
     roomId,
     clientId: payload.clientId,
-    ...(room.encryption_mode === "e2ee-v1"
-      ? { encryptedPayload: sealed }
-      : { content: payload.content }),
+    content: payload.content,
     ...(payload.threadRootId
       ? { threadRootId: validId(payload.threadRootId) }
       : {}),

@@ -54,10 +54,8 @@ async function project(db, projectId, userId, manage = false) {
   return result.rows[0];
 }
 async function plainRoom(db, roomId) {
-  const room = await db.query("SELECT encryption_mode FROM rooms WHERE id=$1", [roomId]);
+  const room = await db.query("SELECT id FROM rooms WHERE id=$1", [roomId]);
   if (!room.rowCount) throw new ApiError(404, "Conversation unavailable");
-  if (room.rows[0].encryption_mode === "e2ee-v1")
-    throw new ApiError(409, "Server-readable work is unavailable in encrypted conversations");
 }
 
 const listProjects = asyncHandler(async (req, res) => {

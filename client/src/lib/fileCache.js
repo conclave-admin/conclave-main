@@ -92,10 +92,9 @@ function transact(stores, mode, work) {
       new Promise((resolve, reject) => {
         const transaction = db.transaction(stores, mode);
         let out;
-        transaction.oncomplete = () =>
-          resolve(out && "result" in out ? out.result : out);
-        transaction.onerror = () => reject(transaction.error);
-        transaction.onabort = () => reject(transaction.error);
+        transaction.oncomplete = () => { resolve(out && "result" in out ? out.result : out); };
+        transaction.onerror = () => { reject(transaction.error); };
+        transaction.onabort = () => { reject(transaction.error); };
         try {
           out = work(transaction);
         } catch (error) {

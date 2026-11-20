@@ -107,7 +107,7 @@ async function sendToken(user, purpose, send) {
         purpose === "verify_email"
           ? "Verify your Conclave email"
           : "Reset your Conclave password",
-      text: `${purpose === "verify_email" ? "Verify your email address" : "Reset your password"} using this link within 30 minutes:\n\n${url.href}\n\nIf you did not request this, ignore this email. Conclave cannot recover encrypted history without your separate encryption recovery key.`,
+      text: `${purpose === "verify_email" ? "Verify your email address" : "Reset your password"} using this link within 30 minutes:\n\n${url.href}\n\nIf you did not request this, ignore this email.`,
     };
     if (send) await send(message);
     else

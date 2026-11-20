@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
-import { localConversationMessages } from "../../services/messages.service";
 import Modal from "../ui/Modal";
 import Input from "../ui/Input";
 import Button from "../ui/Button";
@@ -21,13 +20,10 @@ export default function ConversationSearch({ room, open, onClose }) {
     },
     [open, room.id],
   );
-  const encrypted = room.encryption_mode === "e2ee-v1";
   return (
     <Modal open={open} onClose={onClose} title="Search conversation" size="lg">
       <p className="mb-4 text-body text-muted">
-        {encrypted
-          ? "Searches decrypted messages available on this device. Older history may not be included. Search words stay on your device."
-          : "Search visible messages in this conversation."}
+        Search visible messages in this conversation.
       </p>
       <form
         className="space-y-3"
@@ -37,23 +33,9 @@ export default function ConversationSearch({ room, open, onClose }) {
           setBusy(true);
           setError("");
           try {
-            let found = encrypted
-              ? await localConversationMessages(room.id)
-              : (
-                  await api.get(`/messages/room/${room.id}/search`, {
-                    params: { q: query.trim() },
-                  })
-                ).data.data.messages;
-            if (encrypted)
-              found = found.filter(
-                (m) =>
-                  m._decrypted &&
-                  !m.is_deleted &&
-                  !m.deleted_at &&
-                  m.content
-                    ?.toLocaleLowerCase()
-                    .includes(query.trim().toLocaleLowerCase()),
-              );
+            let found = (await api.get(`/messages/room/${room.id}/search`, {
+              params: { q: query.trim() },
+            })).data.data.messages;
             found = found.filter(
               (m) =>
                 (!sender || m.sender_id === sender) &&

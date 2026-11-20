@@ -14,7 +14,7 @@ import { isDevAuthBypass } from "../config/devPreview";
 export const attachmentAccount = () =>
   getSessionUserId() || (isDevAuthBypass ? "preview" : "signed-out");
 export const attachmentCacheKey = (attachment, preview = false) =>
-  `media:${attachmentAccount()}:${preview ? "preview-v1:" : ""}${attachment.encrypted ? "decrypted-v1:" : ""}${attachment.url || attachment.id}`;
+  `media:${attachmentAccount()}:${preview ? "preview-v1:" : ""}${attachment.url || attachment.id}`;
 
 async function readError(error) {
   const data = error.response?.data;
@@ -40,13 +40,7 @@ export async function getAttachmentBlob(
   if (cached) return cached;
   if (!attachment.id) throw new Error("This file is not available yet.");
   try {
-    const transferAttachment = attachment.encrypted
-      ? {
-          ...attachment,
-          size: attachment.ciphertext_size,
-          mime_type: "application/vnd.conclave.encrypted",
-        }
-      : attachment;
+    const transferAttachment = attachment;
     const result = await downloadInChunks(
       transferAttachment,
       { signal, onProgress },
@@ -94,11 +88,6 @@ export async function getAttachmentBlob(
         };
       },
     );
-    if (attachment.encrypted) {
-      const { openFile, ready } = await import("../lib/cryptoProtocol");
-      await ready;
-      return openFile(result, attachment.crypto, attachment.mime_type);
-    }
     return result;
   } catch (error) {
     if (signal?.aborted || error.code === "ERR_CANCELED")
@@ -159,10 +148,6 @@ export async function getAttachmentPreviewBlob(attachment, { signal } = {}) {
       await saveLocalFile(key, blob);
     return blob;
   }
-  if (attachment.encrypted)
-    throw new Error(
-      "No encrypted preview is available. Open to download the original.",
-    );
   if (!attachment.id) throw new Error("Preview unavailable.");
   const preview = await getAttachmentPreviewUrl(attachment, { signal });
   if (!preview.url)
@@ -184,7 +169,6 @@ export function rememberUploadedFile(url, file, options = {}) {
       url,
       filename: file.name,
       mime_type: file.type,
-      encrypted: options.encrypted,
     },
     file,
   );

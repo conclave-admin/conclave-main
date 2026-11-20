@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import { ReminderAction } from "./MessageLater";
 import MessageBody from "./MessageBody";
 import Avatar from "@/components/ui/Avatar";
@@ -208,23 +207,7 @@ export default function Message({
               mine ? "items-end" : "items-start"
             }`}
           >
-            {message._cryptoError && (
-              <p
-                role="status"
-                className="max-w-full break-words text-metadata text-muted"
-              >
-                This message isn’t available on this device. Open Security and
-                recovery in Settings to connect or restore this device.
-                <Link
-                  to="/settings#security-recovery"
-                  className="ml-1 underline"
-                >
-                  Restore message access
-                </Link>
-              </p>
-            )}
             {message.content &&
-              !message._cryptoError &&
               (message.poll ? (
                 <PollCard
                   message={message}

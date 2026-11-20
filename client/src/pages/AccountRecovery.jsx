@@ -87,8 +87,7 @@ export default function AccountRecovery() {
               onChange={(e) => setConfirm(e.target.value)}
             />
             <p className="text-metadata text-muted">
-              Resetting your password signs out all devices. It does not recover
-              encrypted history; keep your separate encryption recovery key.
+              Resetting your password signs out all devices.
             </p>
           </>
         )}

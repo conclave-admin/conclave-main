@@ -33,7 +33,6 @@ async function state(roomId, userId) {
     join_approval: room.join_approval,
     member_can_send: room.member_can_send,
     member_can_invite: room.member_can_invite,
-    encryption_mode: room.encryption_mode,
     cleared_sequence: member.cleared_sequence,
     cleared_at: member.cleared_at,
     preferences: (
@@ -154,19 +153,6 @@ async function ready(db, room, userId) {
     ).rowCount
   )
     throw new ApiError(409, "This account is no longer active");
-  if (
-    room.encryption_mode === "e2ee-v1" &&
-    !(
-      await db.query(
-        `SELECT 1 FROM encryption_devices d JOIN auth_sessions s ON s.id=d.session_id WHERE d.user_id=$1 AND d.approved_at IS NOT NULL AND d.revoked_at IS NULL AND s.revoked_at IS NULL AND s.expires_at>NOW() LIMIT 1`,
-        [userId],
-      )
-    ).rowCount
-  )
-    throw new ApiError(
-      409,
-      "Set up an approved encryption device in Settings before joining",
-    );
 }
 async function enter({ roomId, token, userId }) {
   if (

@@ -28,16 +28,12 @@ production load.
 
 ## Conversation tools
 
-- **Search:** header search queries visible server history in readable rooms.
-  Encrypted conversations search decrypted history cached on the current device;
-  search words stay on that device. Sender/date filters, a 50-result bound and
-  source navigation are available. Searching cannot recover unavailable keys or
-  history that has never reached this device.
+- **Search:** header search queries visible server history. Sender/date filters, a 50-result bound and source navigation are available.
 - **Drafts:** text and reply context are saved in browser storage per account and
   conversation. Thread drafts are separate. Drafts are device-local, not a
   cross-device service. Browser storage failure leaves the in-memory composer
   usable but cannot guarantee restoration. Shared/untrusted browser profiles
-  should not be used for private drafts or decrypted offline history.
+  should not be used for private drafts or offline history.
 - **Reading position:** the device remembers an anchor and viewport offset per
   conversation. Missing/cleared/expired anchors fall back to current history.
   Explicit message links take priority over the saved position.
@@ -48,8 +44,7 @@ production load.
   unread positions and a separate composer. Message activity provides a Threads
   inbox. Reading a conversation and reading a thread use separate positions;
   the panel offers “Mark displayed replies read.” Replies retain ordinary
-  delivery/read receipts. New encrypted replies bind their thread root inside
-  the signed encrypted body.
+  delivery/read receipts.
 - **Formatting:** bold, italic, strike-through, inline code, fenced code blocks,
   copy-code and HTTP(S) links are rendered as escaped React nodes. Raw HTML is
   never executed. Link cards are explicitly expanded domain/URL previews; no
@@ -83,7 +78,7 @@ these broadcast mentions; normal member mentions remain available.
 Message activity collects personal bookmarks, private notes, threads, schedules
 and reminders. Bookmarks reference source messages; removal, personal clearing,
 expiry or lost membership makes the source unavailable. Private notes are an
-individual encrypted conversation whose membership cannot be expanded.
+individual private conversation whose membership cannot be expanded.
 
 Scheduling currently accepts **text**, including text in a thread through the
 API; the main conversation composer exposes the scheduling form. Media, polls,
@@ -91,15 +86,7 @@ forwards and scheduled broadcast mentions are not supported by this form.
 Dates use the device's timezone and are stored as UTC. The API accepts times
 from ten seconds to one year ahead and caps active schedules at 100 per user.
 
-For encrypted conversations the server stores a sealed payload and current
-recipient/device roster, never plaintext. At send time the existing encryption
-validator checks the current roster and permissions. Access/device changes stop
-the schedule with **Needs your review**. Review decrypts on the device and
-reseals replacement text for the current roster. Cancellation and publication
-serialize; once sent, cancellation cannot recall the message. Temporary server
-errors retry after one minute. Existing manual **media-upload** retry policy is
-unchanged. If a scheduled text is overdue during downtime, it sends after a
-worker recovers and permissions/roster checks pass.
+Scheduled message text is stored server-side. Cancellation and publication serialize; once sent, cancellation cannot recall the message. Temporary server errors retry after one minute. If a scheduled text is overdue during downtime, it sends after a worker recovers and permissions checks pass.
 
 Reminders create a private source-message notification, with transactional
 completion and a dedupe key per reminder. They carry no message body. Cleared,
@@ -119,7 +106,7 @@ The database's authorization visibility function rejects expired messages even
 before cleanup runs. Timeline, search, bookmarks, thread history and attachment
 access use that boundary. Open timelines also hide locally expired content and
 recheck on focus/resume. The worker tombstones up to 200 expired messages per
-iteration, clears ciphertext/plaintext and queues existing durable media cleanup.
+iteration, clears message content and queues existing durable media cleanup.
 The storage worker preserves objects still referenced by live messages/avatars.
 
 Previously downloaded/exported copies cannot be recalled. Already issued signed

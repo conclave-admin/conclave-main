@@ -28,8 +28,6 @@ object URL that is revoked when replaced or unmounted. Some WebM recordings
 omit a duration header; the player probes the end of the downloaded Blob to
 recover duration and seeking without an additional server request.
 
-Encrypted conversations use the existing ciphertext download and local decryption
-path. No decrypted audio or audio preview is sent to a transformation Worker.
 Playback remains available offline once the original is downloaded and cached;
 undownloaded originals need connectivity. Cache eviction, browser site-data
 removal, and account cache cleanup can remove offline availability. Existing
@@ -40,9 +38,9 @@ separate audio auto-download setting.
 
 - `client/test/voiceRecording.test.js`: container selection, codec normalization,
   correct extension/bytes, unsupported-format handling.
-- `client/e2e/security-encryption.spec.js`: actual fake-microphone browser recording,
+- `client/e2e/security-regressions.spec.js`: actual fake-microphone browser recording,
   preview/discard without a server message, recorded audio sending/playback,
-  encrypted and server-readable WAV downloading, speed/seeking, cached offline
+  WAV downloading, speed/seeking, cached offline
   playback and reuse after reload, plus mobile width checks.
 - `client/e2e/realtime-access.spec.js`: existing recording activity and cleanup
   regressions (backgrounding, navigation/late permissions, recorder failure).

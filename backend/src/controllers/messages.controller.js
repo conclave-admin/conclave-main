@@ -49,7 +49,6 @@ const sendMessage = asyncHandler(async (req, res) => {
     mentionedUserIds,
     clientId,
     forwardSource,
-    encryptedPayload,
   } = req.body;
 
   if (!roomId) {
@@ -68,7 +67,6 @@ const sendMessage = asyncHandler(async (req, res) => {
     albumId,
     mentionedUserIds,
     forwardSource,
-    encryptedPayload,
     io: req.app.get("io"),
   });
 
@@ -154,7 +152,7 @@ const listMessages = asyncHandler(async (req, res) => {
   let sql = `
     SELECT
       m.id,
-      m.state_version, m.encrypted_payload,
+      m.state_version,
       m.client_id,
       m.album_id,
       m.forwarded,
@@ -318,16 +316,6 @@ const searchMessages = asyncHandler(async (req, res) => {
     throw new ApiError(403, "You are not a member of this room");
   }
 
-  if (
-    (
-      await query(
-        "SELECT 1 FROM rooms WHERE id=$1 AND encryption_mode='e2ee-v1'",
-        [roomId],
-      )
-    ).rowCount
-  )
-    throw new ApiError(409, "Search encrypted messages on your device");
-
   // 2. Full-text search with ts_rank for relevance ordering.
   //    Deleted messages are excluded outright: a search should never be able
   //    to surface content the author has retracted. The attachments agg
@@ -345,7 +333,7 @@ const searchMessages = asyncHandler(async (req, res) => {
   const result = await query(
     `SELECT
        m.id,
-      m.state_version, m.encrypted_payload,
+      m.state_version,
        m.room_id,
        m.sender_id,
        m.client_id,
@@ -435,7 +423,6 @@ const editMessageHandler = asyncHandler(async (req, res) => {
     messageId,
     userId: req.user.id,
     content,
-    encryptedPayload: req.body.encryptedPayload,
     io,
   });
 

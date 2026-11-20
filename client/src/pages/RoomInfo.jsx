@@ -3,8 +3,6 @@ import ConversationManagement, {
   PersonalHistoryActions,
 } from "../components/chat/ConversationManagement";
 import SharedLinksBrowser from "../components/chat/SharedLinksBrowser";
-import ConversationEncryption from "../components/chat/ConversationEncryption";
-import EncryptedSearch from "../components/chat/EncryptedSearch";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import IconMoreVertical from "@/assets/icons/more-vertical.svg?react";
@@ -324,13 +322,6 @@ export default function RoomInfo() {
 
   return (
     <Page width="content">
-      <details className="mb-4 rounded-xl border border-line p-4">
-        <summary className="cursor-pointer text-label text-muted">
-          Security details
-        </summary>
-        <ConversationEncryption room={room} />
-      </details>
-      <EncryptedSearch room={room} />
       <section
         className="rounded-2xl border border-line bg-surface p-5 shadow-card md:p-7"
         aria-label={isDm ? "Conversation overview" : "Room overview"}
@@ -798,12 +789,6 @@ export default function RoomInfo() {
             onChange={(event) => setReportDetails(event.target.value)}
             maxLength={1000}
           />
-          {room?.encryption_mode === "e2ee-v1" && (
-            <p className="text-metadata text-muted">
-              Only the details you type here are shared with moderators.
-              Encrypted message content is not included automatically.
-            </p>
-          )}
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setReportTarget(null)}>
               Cancel

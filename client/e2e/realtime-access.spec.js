@@ -39,7 +39,7 @@ test("removal immediately hides the composer and invalidates cached room access"
     page.getByText("You no longer have access to this conversation."),
   ).toBeVisible();
   await expect(page.getByPlaceholder("Message…")).toHaveCount(0);
-  await page.getByRole("link", { name: "Chats", exact: true }).first().click();
+  await page.getByRole("link", { name: "Conclave, home" }).click();
   await expect(page).toHaveURL(/\/chats$/);
   await expect(
     page.getByRole("link").filter({ hasText: "Product & Engineering" }),

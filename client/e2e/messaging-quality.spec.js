@@ -59,7 +59,8 @@ test("open room keeps its mobile room header and form pages remain capped", asyn
 
   await page.setViewportSize({ width: 1920, height: 1000 });
   await page.goto("/settings");
-  const formContent = await page.locator("main > div > div").boundingBox();
+  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+  const formContent = await page.locator("main .app-page-content").boundingBox();
   expect(formContent).not.toBeNull();
   expect(formContent.width).toBeLessThanOrEqual(672);
 });
@@ -80,7 +81,7 @@ test("message actions open a thread panel with its reply action", async ({
     page.getByRole("complementary", { name: "Message thread" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Reply in thread" }),
+    page.getByRole("complementary", { name: "Message thread" }).getByRole("textbox", { name: "Message" }),
   ).toBeVisible();
 });
 
@@ -119,17 +120,12 @@ test("a direct message reads as a one-to-one conversation, not a room", async ({
   await expect(
     page.getByRole("heading", { name: "Conversation with Victor" }),
   ).toBeVisible();
-  await expect(
-    page.getByText("A private conversation between the two of you."),
-  ).toBeVisible();
+  await expect(page.getByText("Direct message", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "About Victor" }),
   ).toBeVisible();
   await expect(
     page.getByText("Product designer focused on clear, collaborative tools."),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Presence unavailable", { exact: true }).first(),
   ).toBeVisible();
   const commonGroups = page.locator(
     'section[aria-labelledby="common-groups-heading"]',
@@ -162,13 +158,9 @@ test("room information describes the room and its members", async ({
       "Deployment, config and release coordination for the product surface.",
     ),
   ).toBeVisible();
-  await expect(page.getByText("Created October 8, 2026")).toBeVisible();
-  await expect(page.getByText("Started by Amina Yusuf")).toBeVisible();
+  await expect(page.getByText("4 members", { exact: true }).first()).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Room members" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Presence unavailable", { exact: true }).first(),
   ).toBeVisible();
 });
 
@@ -188,8 +180,7 @@ test("profile shows a public-facing preview and account overview", async ({
   await expect(
     page.getByRole("region", { name: "Profile preview" }),
   ).toContainText("Amina Yusuf");
-  await expect(page.getByText("Member since")).toBeVisible();
-  await expect(page.getByText("Direct messages")).toBeVisible();
+  await expect(page.getByText("amina@conclave.local", { exact: true }).first()).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Edit your profile" }),
   ).toBeVisible();
@@ -268,6 +259,7 @@ test("a very long message wraps without horizontal overflow and accepts a reply"
     .locator("article")
     .filter({ hasText: "LONG-MSG-START paragraph 1:" })
     .last();
+  await longMessage.getByRole("button", { name: "Read more" }).click();
   await expect(longMessage).toContainText("paragraph 120:");
   const overflow = await page.evaluate(
     () =>

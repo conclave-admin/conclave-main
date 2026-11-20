@@ -2,7 +2,7 @@ const { pool, query } = require("../config/db");
 const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const { UUID: UUID_RE } = require("../utils/mediaPagination");
 const PAGE_SIZE = 50;
 
 function excerpt(value, fallback = "") {
@@ -244,7 +244,7 @@ const getRoomDigest = asyncHandler(async (req, res) => {
   // a name may have changed since those messages were written.
   const mentions = await read(
     `SELECT m.id,
-            CASE WHEN r.encryption_mode='e2ee-v1' THEN NULL ELSE m.content END AS content,
+            m.content AS content,
             m.created_at,
             to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_at,
             u.display_name AS sender_name
@@ -267,7 +267,7 @@ const getRoomDigest = asyncHandler(async (req, res) => {
   // 5. New attachments since last visit
   const files = await read(
     `SELECT a.id,
-            CASE WHEN r.encryption_mode='e2ee-v1' THEN 'Encrypted file' ELSE COALESCE(a.filename,'Shared file') END AS filename,
+            COALESCE(a.filename,'Shared file') AS filename,
             a.file_type, a.size_bytes, a.created_at,
             to_char(a.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_at,
             m.id AS message_id,
@@ -290,7 +290,7 @@ const getRoomDigest = asyncHandler(async (req, res) => {
   const pins = await read(
     `SELECT m.id, p.pinned_at AS created_at,
             to_char(p.pinned_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_at,
-            CASE WHEN r.encryption_mode='e2ee-v1' THEN NULL ELSE m.content END AS content,
+            m.content AS content,
             u.display_name AS actor_name
      FROM message_pins p JOIN messages m ON m.id=p.message_id
      JOIN rooms r ON r.id=m.room_id JOIN users u ON u.id=p.user_id
@@ -482,7 +482,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
   // absence of a text fallback.
   const mentions = await read(
     `SELECT m.id,
-            CASE WHEN r.encryption_mode='e2ee-v1' THEN NULL ELSE m.content END AS content,
+            m.content AS content,
             m.created_at,
             to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_at,
             m.room_id,
@@ -507,7 +507,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
   // 4. New attachments
   const files = await read(
     `SELECT a.id,
-            CASE WHEN r.encryption_mode='e2ee-v1' THEN 'Encrypted file' ELSE COALESCE(a.filename,'Shared file') END AS filename,
+            COALESCE(a.filename,'Shared file') AS filename,
             a.file_type, a.size_bytes, a.created_at,
             to_char(a.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_at,
             m.id AS message_id, m.room_id, r.name AS room_name, u.display_name AS sender_name
@@ -532,7 +532,7 @@ const getUserDigest = asyncHandler(async (req, res) => {
   const pins = await read(
     `SELECT m.id, m.room_id, r.name AS room_name, p.pinned_at AS created_at,
             to_char(p.pinned_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_at,
-            CASE WHEN r.encryption_mode='e2ee-v1' THEN NULL ELSE m.content END AS content,
+            m.content AS content,
             u.display_name AS actor_name
      FROM message_pins p JOIN messages m ON m.id=p.message_id
      JOIN rooms r ON r.id=m.room_id JOIN users u ON u.id=p.user_id

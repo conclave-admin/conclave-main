@@ -167,6 +167,7 @@ export default function MessageComposer({
   // keeps that flag beside the File without changing the list the dialog gets.
   const compressRef = useRef(new WeakSet());
 
+
   // Auto-grow. Reset to auto first so shrinking works, then clamp at five
   // lines — beyond that the box scrolls rather than eating the timeline.
   useEffect(() => {

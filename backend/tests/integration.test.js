@@ -1392,6 +1392,9 @@ dbTest("createTask returns the same shape listTasks returns", async () => {
       "decision_title",
       "due_date",
       "id",
+      "milestone_id",
+      "open_blockers",
+      "project_id",
       "room_id",
       "room_name",
       "room_slug",
@@ -4101,10 +4104,6 @@ async function createRoomVia(token, payload) {
   const body = await res.text();
   assert.equal(res.status, 201, body);
   const room = JSON.parse(body).data;
-  // These existing collaboration/history regressions exercise pre-encryption
-  // rooms. New-conversation encryption and request policy have their own real
-  // API checks in realtime-access.test.js; keep this legacy fixture explicit.
-  await query("UPDATE rooms SET encryption_mode='none' WHERE id=$1", [room.id]);
   await query("DELETE FROM dm_requests WHERE room_id=$1", [room.id]);
   return room;
 }

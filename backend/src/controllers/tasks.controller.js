@@ -87,12 +87,10 @@ const createTask = asyncHandler(async (req, res) => {
   try {
     await client.query("BEGIN");
     const room = await client.query(
-      `SELECT r.encryption_mode FROM rooms r JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$2
+      `SELECT r.id FROM rooms r JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$2
        WHERE r.id=$1 FOR SHARE OF rm`, [roomId, req.user.id],
     );
     if (!room.rowCount) throw new ApiError(403, "Conversation unavailable");
-    if (room.rows[0].encryption_mode === "e2ee-v1")
-      throw new ApiError(409, "Tasks are unavailable in encrypted conversations");
     if (clientId) {
       const prior = await client.query(
         "SELECT id,room_id FROM tasks WHERE created_by=$1 AND client_id=$2",

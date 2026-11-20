@@ -33,6 +33,10 @@ export default function TeamHome(){
     else setDetail(null);
   }catch(e){setError(errorText(e));}finally{setLoading(false);}},[teamId]);
   useEffect(()=>{void load();},[load]);
+  useEffect(()=>{
+    const clear=()=>{setTeamName('');setDescription('');setRoomName('');setProjectName('');setEmail('');setInvite(null);setError('');};
+    clear();
+  },[user?.id]);
   useEffect(()=>{setRoomHeader(detail?.team?.name || 'Teams');return()=>setRoomHeader(null);},[detail?.team?.name,setRoomHeader]);
   useEffect(()=>{if(teamId) work.listProjects().then(x=>setLegacyProjects(x.projects.filter(p=>!p.team_id))).catch(()=>{});},[teamId]);
   const act=async(fn)=>{setBusy(true);setError('');try{await fn();await load();}catch(e){setError(errorText(e));}finally{setBusy(false);}};
@@ -93,7 +97,7 @@ export default function TeamHome(){
           </section>}
           {admin&&detail.requests.length>0&&<section className={`${card} space-y-3`}><h2 className="text-h2">Join requests</h2>{detail.requests.map(request=><div key={request.user_id} className="rounded-xl border border-line p-3 text-body"><p><strong>{request.display_name}</strong> wants to join the team{request.source_room_id?' and a public room':''}.</p>{!current.archived_at&&<div className="mt-2 flex gap-2"><button className={secondary} disabled={busy} onClick={()=>void act(()=>teams.reviewRequest(teamId,request.user_id,'approve'))}>Approve</button><button className={secondary} disabled={busy} onClick={()=>void act(()=>teams.reviewRequest(teamId,request.user_id,'reject'))}>Reject</button></div>}</div>)}</section>}
           {admin&&<section className={`${card} space-y-3`}><h2 className="text-h2">Team settings</h2><button className={secondary} disabled={busy} onClick={()=>void act(()=>current.archived_at?teams.restoreTeam(teamId):teams.archiveTeam(teamId))}>{current.archived_at?'Restore team':'Archive team'}</button>
-            {current.my_role==='owner'&&<select className={field} aria-label="Transfer ownership" defaultValue="" onChange={e=>{if(e.target.value&&window.confirm('Transfer team ownership?')) void act(()=>teams.transferOwner(teamId,e.target.value));}}><option value="">Transfer ownership to…</option>{detail.members.filter(m=>m.id!==user?.id).map(m=><option value={m.id} key={m.id}>{m.display_name}</option>)}</select>}</section>}
+            {current.my_role==='owner'&&<select className={field} aria-label="Transfer ownership" disabled={busy} defaultValue="" onChange={e=>{if(e.target.value&&window.confirm('Transfer team ownership?')) void act(()=>teams.transferOwner(teamId,e.target.value));}}><option value="">Transfer ownership to…</option>{detail.members.filter(m=>m.id!==user?.id).map(m=><option value={m.id} key={m.id}>{m.display_name}</option>)}</select>}</section>}
           {current.my_role!=='owner'&&!current.archived_at&&<button className={secondary} disabled={busy} onClick={()=>{if(window.confirm('Leave this team and all its rooms?')) void act(async()=>{await teams.leaveTeam(teamId);navigate('/teams');});}}>Leave team</button>}
         </div>
       </div>

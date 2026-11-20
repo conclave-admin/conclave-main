@@ -324,8 +324,7 @@ The digest contains direct mentions, decision and task changes, shared files,
 and room-wide pins made since that room's digest pointer. A file in a message
 that directly mentions the viewer appears through the mention, once. Ordinary message
 traffic stays in the chat list and does not create a digest item. The summary
-and chat-list catch-up card count these same items. Encrypted messages use
-generic labels instead of server-generated plaintext summaries.
+and chat-list catch-up card count these same items.
 The viewer's own actions are excluded from catch-up items.
 Responses are capped at 50 items, ordered by priority and then newest first. The cursor carries
 the first page's snapshot and the last event position; use it to load older
@@ -414,8 +413,7 @@ progress owner until assigned. Room membership is checked on every request.
 `decisionId` must name an active decision in the same conversation. Task payloads
 include `decision_id`, `decision_title`, and `decision_status` when linked.
 
-Tasks are unavailable in end-to-end encrypted rooms because this workflow stores
-searchable server-side text. Source messages must be visible, undeleted messages
+Source messages must be visible, undeleted messages
 in the same room. Assignees must be current room members. Due dates are calendar
 strings (`YYYY-MM-DD`), and list pages are sorted by due date, with undated tasks
 last. Each page contains at most 50 tasks. Activity pages contain at most 20
@@ -813,51 +811,12 @@ an assertion that a recipient has not read the message.
 Mail configuration missing returns 503. An eviction failure may return 503 after
 durable revocation; this never means the session was restored.
 
-### Device encryption routes (`/encryption`, authenticated)
-
-| Method/path                 | Contract                                                                                                                                                                   |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /devices`              | Account `identityKey` and public device records; no private keys.                                                                                                          |
-| `POST /devices`             | `{id,boxKey,signingKey,label,identityKey,signature?}`. Base64url public keys. Identity signature required for initial/approved enrollment; otherwise pending until linked. |
-| `POST /devices/:id/approve` | Root-signed certificate and sealed link payload from approved device; pending enrollment expires in 15 minutes.                                                            |
-| `GET /devices/:id/link`     | Encrypted link payload, accessible only to target device's current session.                                                                                                |
-| `DELETE /devices/:id`       | `{password}`; revokes device and its login session.                                                                                                                        |
-| `GET /rooms/:id`            | Authorized roster of members, identities, and active approved devices.                                                                                                     |
-| `POST /rooms/:id/upgrade`   | Returns `{roomId}` for separate encrypted successor; legacy conversation stays server readable and becomes read only for new sends.                                        |
-| `GET /backup`               | `{payload,revision,updated_at}` encrypted key backup only.                                                                                                                 |
-| `PUT /backup`               | Opaque encrypted backup payload; recovery key never sent.                                                                                                                  |
-| `DELETE /backup`            | `{password}` confirmation.                                                                                                                                                 |
-| `POST /reset`               | `{password,confirmation:'RESET ENCRYPTION',device}`; irreversibly replaces identity/backup and revokes other sessions.                                                     |
-
-Room payloads expose `encryption_mode` (`none` or `e2ee-v1`) and
-`superseded_by`. New `dm`/`private` conversations are encrypted; new
-`group`/`department`/`public` remain server readable. All migration-era rooms
-remain `none` until explicit move.
-
-Encrypted sends use the normal message route/socket with `roomId`, `clientId`,
-`encryptedPayload`, and uploaded attachment references. Plaintext content,
-mentions, filename, MIME, caption, preview, dimensions, and file keys must not
-be included in the wire message. `encryptedPayload` contains scheme, room/client/
-sender context, revision, device ID, nonce, ciphertext, sorted per-device sealed
-keys, and device signature. Server persists `[Encrypted message]` as `content`
-and returns `encrypted_payload` with signed sender-certificate metadata; only
-authorized clients decrypt it. Retries reuse the same client ID and sealed wire
-payload. Edits use `{encryptedPayload}` with the next revision. Recipient-roster
-changes may return 409, requiring a new encrypted envelope on manual retry.
-
-Encrypted uploads use `application/vnd.conclave.encrypted`, `encrypted.bin`,
-and the `CCEF1` authenticated container. Both server and direct upload paths
-normalize the filename; image metadata is absent from server upload records.
-The ciphertext upload cap is 50 MiB. Authorized download/Range endpoints remain
-the transport; the browser decrypts and caches plaintext separately. Server
-search/tasks/decisions/polls/forwarding that would process encrypted content are
-rejected; local search covers only decrypted cached history.
+Message content and attachments are server-readable. Migration 061 removes the former message encryption endpoints and purges encrypted conversations. Room lifecycle retains `superseded_by`.
 
 ### Room lifecycle and personal history (migration 038)
 
 See [Rooms and personal history](ROOMS_AND_PERSONAL_HISTORY.md) for the endpoint
-contracts, invitation/approval rules, participant permission matrix, encrypted
-history policy, and account versus device clearing semantics. Apply migration
+contracts, invitation/approval rules, participant permission matrix, history policy, and account versus device clearing semantics. Apply migration
 038 before deploying this API/client. Existing public join clients must handle a
 `pending` result without opening the room. Room detail responses include
 `my_role`, `join_approval`, `member_can_send`, `member_can_invite`,
@@ -866,8 +825,7 @@ state. Sequences must be handled as decimal strings without losing precision.
 # Connected work (first release)
 
 All `/work` routes require an access token. Project and brief content is
-server readable, so encrypted conversations cannot be attached to projects or
-given briefs. A room belongs to at most one project. Project creation and room
+server readable. A room belongs to at most one project. Project creation and room
 attachment require room admin access; only the project creator can change its
 details, milestones, or automation rules. Project views include only rooms in
 which the caller is currently a member. Task organization requires the task
@@ -882,6 +840,6 @@ creator or a room admin.
 | PATCH | `/work/tasks/:taskId/milestone` | Set `milestoneId` or `null`. |
 | POST / DELETE | `/work/tasks/:taskId/dependencies[/:dependsOnId]` | Add `dependsOnId` or remove it. Dependencies require both tasks in the same project and reject cycles. A blocked task cannot be completed. |
 | GET / PUT | `/work/rooms/:roomId/brief` | Read current brief and its 20 newest revisions; room admins save `body`, optional `sourceMessageId`, and current `version` for conflict detection. |
-| GET | `/work/search?q=` | Search accessible messages, files, tasks, decisions, rooms, and shared room members. At least two characters; at most 50 combined results. Encrypted message text is excluded. |
+| GET | `/work/search?q=` | Search accessible messages, files, tasks, decisions, rooms, and shared room members. At least two characters; at most 50 combined results. |
 | GET / PATCH | `/work/inbox` and `/work/inbox/state` | Read up to 100 actionable assignments, mentions, blocked and overdue tasks; mark an `eventKey` done or snoozed with `until` within 30 days. |
 | GET / POST / PATCH | `/work/projects/:projectId/automations[/:ruleId]` | List, create, or enable/pause a rule. One rule per trigger per project. `decision_recorded` creates an unassigned follow-up task; `task_overdue` notifies the assignee once per due date. Runs are recorded durably. |

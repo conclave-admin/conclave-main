@@ -1,7 +1,7 @@
 # Rooms, conversation information, and personal history
 
 Phase 6 (GH-07–GH-16) builds on the existing voice-note, receipt, synchronization,
-and encrypted-media implementation. Apply migration
+and media implementation. Apply migration
 `038_room_lifecycle_and_personal_history.sql` before deploying this API/client.
 Run `cd backend && npm run migrate`; the migration ledger makes reruns safe.
 There are no new environment variables or packages.
@@ -20,22 +20,16 @@ information reconcile profile, privacy, membership, role, and room changes.
 Shared links list 25 source messages per page with a sequence cursor. Only
 HTTP(S) links are rendered, as external links without opener access. Source links
 use the existing message navigation/highlight behavior. Deleted and personally
-cleared messages are excluded. Encrypted links are extracted on the device from
-available decrypted cached messages; the UI explicitly says this is incomplete
-coverage. While online, encrypted information views revalidate cached message IDs
-against authorized snapshots before using their bodies. Offline views can only
-reflect available local data, not deletions that have not reached the device.
-The API does not inspect encrypted text or fetch external websites.
+cleared messages are excluded. Offline views reflect only local data and may not include later deletions. The API does not fetch external websites.
 
 Storage shows two distinct scopes:
 
-- Visible attachments in this conversation on the server (encrypted size includes
-  encryption overhead).
+- Visible attachments in this conversation on the server.
 - This account's cached media **across all conversations on this browser/device**.
 
 Removing downloaded copies requires confirmation, removes only that account's
 media cache, and refreshes usage. It does not remove other accounts' files,
-server originals, messages, keys, or pending outbox uploads. Files must be
+server originals, messages, or pending outbox uploads. Files must be
 fetched again to use them offline; an already-open viewer may retain its in-memory
 copy until closed. Browser storage can also be evicted by the browser.
 
@@ -79,26 +73,13 @@ membership independently of a link's later revocation.
 
 `join_approval` defaults false. When enabled, public joins and invitation joins
 create a pending request without membership or message/media access. Admins can
-approve/decline in room information. Approval rechecks invitation validity and
-encryption-device readiness. A status check never submits a new request after a
+approve/decline in room information. Approval rechecks invitation validity. A status check never submits a new request after a
 decline; reapplying is an explicit action. Direct addition by an admin remains an
-explicit admin admission and does not require a second approval. Encrypted direct
-additions also require an approved active device.
+explicit admin admission and does not require a second approval.
 
-## History and encryption policy
+## History policy
 
-Current members can read server-readable history, including history before joining,
-except messages cleared by their own account. Leaving/removal revokes subsequent
-authorized API, synchronization, realtime, and media access. Approval applicants
-have no membership access. Blocking does not erase shared-group history.
-
-New encrypted-room members need an approved, active encryption device. Membership
-makes them eligible for future envelopes; it does not disclose old message keys.
-Additional devices follow the existing explicit encrypted key-transfer/recovery
-flow. A server membership change cannot erase plaintext, downloaded files, keys,
-or screenshots already held on a device. Short-lived media links already issued
-retain their existing expiry; this is not a promise of recalling downloaded data.
-Public/legacy server-readable rooms are not silently converted to encryption.
+Current members can read visible server-stored history, including history before joining, except messages cleared by their own account. Leaving or removal revokes subsequent authorized API, synchronization, realtime and media access. Approval applicants have no membership access. Previously downloaded copies cannot be recalled.
 
 ## Preferences and clearing
 
@@ -128,8 +109,7 @@ It does not forge a read receipt or acknowledge media. Device-only clearing uses
 a local timestamp and does not affect server unread counts or other devices.
 
 Replies to unavailable history retain an unavailable-source state and cannot
-navigate to a hidden source. Locally decrypted encrypted search/media/links also
-apply personal boundaries. Pending outbox messages are preserved and remain
+navigate to a hidden source. Pending outbox messages are preserved and remain
 visible; a later accepted send receives a new sequence and appears after the clear.
 Clearing is a display/history action, not cryptographic erasure or deletion of
 independent collaboration records (tasks, decisions). It is not a backup wipe.
@@ -150,7 +130,7 @@ appropriate admin permission. IDs are UUID-validated, writes rate-limited.
 | `POST /:roomId/requests/:userId`        | `{decision:'approved'                                               | 'rejected'}` |
 | `POST /:roomId/handover`                | `{successorId}`; atomic promotion/demotion                          |
 | `POST /:roomId/clear`                   | Own monotonic `cleared_sequence`/`cleared_at`                       |
-| `GET /:roomId/links?before=<sequence>`  | `{messages,nextCursor}`; encrypted rooms use local data             |
+| `GET /:roomId/links?before=<sequence>`  | `{messages,nextCursor}`             |
 
 The existing public join endpoint returns `status: 'pending'` when approval is
 required; clients must not navigate into history until membership is granted.
@@ -161,8 +141,7 @@ refreshes the list to expose the next pending entries.
 
 Automated browser checks use real disposable PostgreSQL/Redis/API instances and
 mocked R2, with Chromium desktop/mobile emulation. They do not establish deployed
-R2 configuration, physical-device behavior, independent encryption security, or
-production load readiness. Those remain in Phases 5/7 and GH-01–GH-05/GH-17 onward.
+R2 configuration, physical-device behavior, or production load readiness. Those remain in Phases 5/7 and GH-01–GH-05/GH-17 onward.
 
 ### Local verification recorded on 23 October 2026
 

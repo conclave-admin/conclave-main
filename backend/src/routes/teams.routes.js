@@ -26,7 +26,7 @@ async function tx(fn) {
 }
 async function team(db, teamId, userId, allowed = ['owner','admin','member'], lock = false) {
   const result = await db.query(
-    `SELECT t.*,tm.role AS my_role FROM teams t JOIN team_members tm ON tm.team_id=t.id AND tm.user_id=$2
+    `SELECT t.*,tm.role AS my_role FROM teams t JOIN rooms r ON r.id=t.general_room_id JOIN team_members tm ON tm.team_id=t.id AND tm.user_id=$2
      WHERE t.id=$1 ${lock ? 'FOR UPDATE OF t' : ''}`,
     [validId(teamId), userId]);
   const row = result.rows[0];
@@ -35,6 +35,9 @@ async function team(db, teamId, userId, allowed = ['owner','admin','member'], lo
   return row;
 }
 function active(t) { if (t.archived_at) throw new ApiError(409, 'Team is archived'); }
+function creationMode(req) {
+  if (req.body?.encryptionMode && req.body.encryptionMode !== 'none') throw new ApiError(400, 'Encrypted conversations are unavailable');
+}
 async function slug(db, name) {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'general';
   for (let i=0;i<100;i++) {
@@ -80,13 +83,14 @@ router.post('/',rate({max:10}),wrap(async(req,res)=>{
   const description=trimmed(req.body?.description || '',2000,'description');
   const creationKey=validId(req.body?.creationKey);
   const result=await tx(async db=>{
+    creationMode(req);
     await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`${req.user.id}:${creationKey}`]);
-    const previous=(await db.query('SELECT * FROM teams WHERE created_by=$1 AND creation_key=$2',[req.user.id,creationKey])).rows[0];
+    const previous=(await db.query('SELECT t.* FROM teams t JOIN rooms r ON r.id=t.general_room_id WHERE t.created_by=$1 AND t.creation_key=$2',[req.user.id,creationKey])).rows[0];
     if(previous){if(previous.name!==name||previous.description!==description) throw new ApiError(409,'Creation key was used for another team');return {...previous,my_role:'owner'};}
     const t=(await db.query('INSERT INTO teams(name,description,created_by,owner_id,creation_key) VALUES($1,$2,$3,$3,$4) RETURNING *',[name,description,req.user.id,creationKey])).rows[0];
     await db.query(`INSERT INTO team_members(team_id,user_id,role) VALUES($1,$2,'owner')`,[t.id,req.user.id]);
-    const r=(await db.query(`INSERT INTO rooms(name,type,created_by,slug,encryption_mode,team_id)
-      VALUES('general','group',$1,$2,'none',$3) RETURNING id`,[req.user.id,await slug(db,`general-${t.id.slice(0,8)}`),t.id])).rows[0];
+    const r=(await db.query(`INSERT INTO rooms(name,type,created_by,slug,team_id)
+      VALUES('general','group',$1,$2,$3) RETURNING id`,[req.user.id,await slug(db,`general-${t.id.slice(0,8)}`),t.id])).rows[0];
     await roomMember(db,r.id,req.user.id,'admin',0,true);
     await db.query('UPDATE teams SET general_room_id=$2 WHERE id=$1',[t.id,r.id]);
     return {...t,general_room_id:r.id,my_role:'owner'};
@@ -96,7 +100,7 @@ router.post('/',rate({max:10}),wrap(async(req,res)=>{
 router.get('/',wrap(async(req,res)=>{
   const rows=await query(`SELECT t.id,t.name,t.description,t.general_room_id,t.archived_at,tm.role AS my_role,
     (SELECT count(*)::int FROM team_members x WHERE x.team_id=t.id) AS member_count
-    FROM teams t JOIN team_members tm ON tm.team_id=t.id AND tm.user_id=$1
+    FROM teams t JOIN rooms r ON r.id=t.general_room_id JOIN team_members tm ON tm.team_id=t.id AND tm.user_id=$1
     ORDER BY t.archived_at NULLS FIRST,t.created_at DESC LIMIT 100`,[req.user.id]);
   return ok(res,{teams:rows.rows});
 }));
@@ -107,7 +111,7 @@ router.get('/:teamId',wrap(async(req,res)=>{
       CASE WHEN $2::boolean THEN u.email END AS email
       FROM team_members tm JOIN users u ON u.id=tm.user_id
       WHERE tm.team_id=$1 AND u.deleted_at IS NULL ORDER BY tm.role='owner' DESC,tm.role='admin' DESC,u.display_name LIMIT 200`,[t.id,t.my_role!=='member']),
-    query(`SELECT r.id,r.name,r.type,r.encryption_mode,r.team_discoverable,rm.role AS my_role
+    query(`SELECT r.id,r.name,r.type,r.team_discoverable,rm.role AS my_role
       FROM rooms r JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$2
       WHERE r.team_id=$1 ORDER BY r.id=$3 DESC,r.name LIMIT 200`,[t.id,req.user.id,t.general_room_id]),
     query(`SELECT DISTINCT p.id,p.name,p.description,p.status FROM projects p
@@ -155,11 +159,9 @@ router.post('/:teamId/requests/:userId',wrap(async(req,res)=>{
     if(decision==='approve'){
       await joinTeam(db,t,userId);
       if(request.source_room_id){
-        const room=(await db.query('SELECT id,encryption_mode FROM rooms WHERE id=$1 AND team_id=$2',[request.source_room_id,t.id])).rows[0];
+        const room=(await db.query('SELECT id FROM rooms WHERE id=$1 AND team_id=$2',[request.source_room_id,t.id])).rows[0];
         if(room){
-          const approved=room.encryption_mode==='none'||(await db.query(`SELECT 1 FROM encryption_devices WHERE user_id=$1 AND approved_at IS NOT NULL AND revoked_at IS NULL LIMIT 1`,[userId])).rowCount>0;
-          if(approved){await roomMember(db,room.id,userId);roomStatus='joined';}
-          else {await db.query(`INSERT INTO team_pending_room_grants(team_id,user_id,room_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`,[t.id,userId,room.id]);roomStatus='pending-device';}
+          await roomMember(db,room.id,userId);roomStatus='joined';
         }
       }
     }
@@ -251,7 +253,7 @@ async function depart(req,res,userId){
     const rooms=(await db.query('SELECT id FROM rooms WHERE team_id=$1',[t.id])).rows.map(x=>x.id);
     await db.query(`DELETE FROM room_members WHERE user_id=$2 AND room_id=ANY($1::uuid[])`,[rooms,userId]);
     for(const roomId of rooms) await revokeRoomAccess(io,roomId,userId);
-    await db.query('UPDATE tasks SET assignee_id=NULL WHERE assignee_id=$2 AND room_id=ANY($1::uuid[]) AND status<>\'done\'',[rooms,userId]);
+    await db.query("UPDATE tasks SET assignee_id=NULL WHERE assignee_id=$2 AND room_id=ANY($1::uuid[]) AND status<>'done'",[rooms,userId]);
     await db.query('UPDATE team_invites SET revoked_at=NOW() WHERE team_id=$1 AND created_by=$2 AND revoked_at IS NULL',[t.id,userId]);
     await db.query('DELETE FROM team_pending_room_grants WHERE team_id=$1 AND user_id=$2',[t.id,userId]);
     await db.query('DELETE FROM team_members WHERE team_id=$1 AND user_id=$2',[t.id,userId]);
@@ -267,8 +269,9 @@ router.post('/:teamId/rooms',wrap(async(req,res)=>{
   const type=req.body?.type || 'group';
   if(!['group','public'].includes(type)) throw new ApiError(400,'Choose a group or public room');
   const result=await tx(async db=>{const t=await team(db,req.params.teamId,req.user.id,['owner','admin','member'],true);active(t);
-    const room=(await db.query(`INSERT INTO rooms(name,type,created_by,slug,encryption_mode,team_id)
-      VALUES($1,$2,$3,$4,'none',$5) RETURNING id,name,type,team_id`,[name,type,req.user.id,await slug(db,name),t.id])).rows[0];
+    creationMode(req);
+    const room=(await db.query(`INSERT INTO rooms(name,type,created_by,slug,team_id)
+      VALUES($1,$2,$3,$4,$5) RETURNING id,name,type,team_id`,[name,type,req.user.id,await slug(db,name),t.id])).rows[0];
     await roomMember(db,room.id,req.user.id,'admin');
     if(t.owner_id!==req.user.id) await roomMember(db,room.id,t.owner_id,'admin',0,true);
     else await db.query('UPDATE room_members SET team_owner_grant=TRUE,independent_admin=FALSE WHERE room_id=$1 AND user_id=$2',[room.id,req.user.id]);
@@ -293,9 +296,7 @@ async function roomTransfer(db,t,roomId,actorId,apply=false){
     WHERE rm.room_id=$1 AND NOT EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=$2 AND tm.user_id=rm.user_id)`,[roomId,t.id])).rows[0].count;
   const links=(await db.query(`SELECT count(*)::int AS count FROM project_rooms WHERE room_id=$1`,[roomId])).rows[0].count;
   const owner=(await db.query('SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2',[roomId,t.owner_id])).rowCount>0;
-  const approved=room.encryption_mode==='none'||(await db.query(`SELECT 1 FROM encryption_devices WHERE user_id=$1 AND approved_at IS NOT NULL AND revoked_at IS NULL LIMIT 1`,[t.owner_id])).rowCount>0;
-  const blockers=[...(external?[`${external} room members must join this team first`]:[]),...(links?['Remove the room from its existing project first']:[]),...(!approved?['Team owner needs an approved encryption device']:[]),
-    ...(room.encryption_mode!=='none'?['Encrypted room transfer needs a safe key transition before it can be enabled']:[])];
+  const blockers=[...(external?[`${external} room members must join this team first`]:[]),...(links?['Remove the room from its existing project first']:[])];
   if(apply){if(blockers.length) throw new ApiError(409,blockers.join('; '));
     await db.query('UPDATE rooms SET team_id=$2 WHERE id=$1',[roomId,t.id]);
     if(!owner) await roomMember(db,roomId,t.owner_id,'admin',room.message_sequence,true);

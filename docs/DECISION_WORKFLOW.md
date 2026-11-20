@@ -2,7 +2,6 @@
 
 Decisions are records of a choice already made, not proposals or votes. Any member of a server-readable collaboration room may record one. The author and room admins may correct or retract it; every revision remains visible to current room members. Retraction removes its room pin and appears in catch-up. Cards name the person who recorded the choice.
 
-Encrypted conversations cannot create shared decisions because this API stores searchable plaintext. The client explains that boundary. A future encrypted decision workflow needs its own device-side content, key distribution, search and recovery design before it is enabled.
 
 The creator supplies a stable `clientId` for retries. The API returns the first committed decision for that author and ID. The client keeps an unfinished form in session storage and reuses the ID until creation succeeds. Apply migration `044_decision_reliability.sql` before deploying the API and client.
 

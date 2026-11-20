@@ -71,9 +71,7 @@ export default function SharedLinksBrowser({ room, user }) {
         Shared links
       </h2>
       <p className="text-metadata text-muted">
-        {room.encryption_mode === "e2ee-v1"
-          ? "Only links in decrypted messages cached on this device are included."
-          : "Links from messages visible to your account."}{" "}
+        Links from messages visible to your account.
         Opening a link visits an external website.
       </p>
       {rows.map((message) => (

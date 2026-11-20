@@ -29,7 +29,6 @@
     "file-type": "^22.2.0",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
-    "libsodium-wrappers": "^0.8.4",
     "morgan": "^1.10.0",
     "multer": "^2.4.0",
     "pg": "^8.12.0",

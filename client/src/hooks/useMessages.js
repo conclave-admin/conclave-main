@@ -1,5 +1,4 @@
 import useExpiryClock from "./useExpiryClock";
-import { decryptMessage } from "../lib/encryption";
 import { useSyncReconciler } from "../contexts/SyncContext";
 import { mergeServerMessages } from "../lib/synchronization";
 import { getMessageSnapshots } from "../services/messages.service";
@@ -91,6 +90,7 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
   const retiredIds = useMemo(() => new Set(), [roomId, viewerId]);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+
 
   useEffect(() => {
     setClearedAt(getConversationClearTime(viewerId, roomId));
@@ -357,7 +357,6 @@ export default function useMessages(roomId, roomMembers = [], anchorId = null) {
     };
 
     const receive = async ({ message }) => {
-      message = await decryptMessage(message);
       if (!active) return;
       if (message.room_id !== roomId) return;
       if (message.sender_id !== viewerId && socket.connected)

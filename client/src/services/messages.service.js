@@ -2,11 +2,6 @@ import {
   conversationMessageVisible,
   applyAccountClear,
 } from "../lib/clearedConversations";
-import {
-  decryptMessage,
-  decryptMessages,
-  encryptEdit,
-} from "../lib/encryption";
 import { readRoomMessages } from "../lib/fileCache";
 import { getSessionUserId } from "../lib/session";
 import { api } from "../lib/api";
@@ -17,13 +12,7 @@ import {
   makePreviewLargeMessages,
 } from "../config/devPreview";
 
-async function decode(value) {
-  if (Array.isArray(value)) return Promise.all(value.map(decode));
-  if (value?.encrypted_payload) return decryptMessage(value);
-  if (value?.messages)
-    return { ...value, messages: await decryptMessages(value.messages) };
-  return value;
-}
+const decode = (value) => value;
 
 let largePreviewMessages;
 function previewHistory(roomId) {
@@ -84,9 +73,7 @@ export async function listMessages(roomId, before, afterSeq, around) {
  * A 403 from someone else's message is the server enforcing that, not a bug.
  */
 export async function editMessage(messageId, content, message) {
-  const body = message?.encrypted_payload
-    ? { encryptedPayload: await encryptEdit(message, content) }
-    : { content };
+  const body = { content };
   const { data } = await api.patch(`/messages/${messageId}`, body);
   return decode(data.data);
 }
@@ -204,7 +191,7 @@ export async function listPinnedMessages(roomId) {
       .map((message) => ({ ...message, room_id: roomId }));
   }
   const { data } = await api.get(`/messages/room/${roomId}/pinned`);
-  return decryptMessages(data.data.messages);
+  return data.data.messages;
 }
 
 // Inspect only locally available history. While online, revalidate those IDs
@@ -224,7 +211,6 @@ export async function localConversationMessages(roomId) {
     });
     rows = data.data.messages;
   }
-  rows = await decryptMessages(rows);
   if (getSessionUserId() !== userId) throw new Error("Account changed");
   return rows.filter((m) => conversationMessageVisible(m, userId, roomId));
 }
@@ -241,40 +227,7 @@ export async function listRoomMedia(
       room.cleared_sequence,
       room.cleared_at,
     );
-    if (room.encryption_mode === "e2ee-v1") {
-      const messages = await localConversationMessages(roomId);
-      const files = messages
-        .filter(
-          (m) =>
-            m._decrypted &&
-            conversationMessageVisible(m, getSessionUserId(), roomId) &&
-            !m.is_deleted &&
-            !m.deleted_at &&
-            (!after || new Date(m.created_at) > new Date(after)),
-        )
-        .flatMap((m) =>
-          (m.attachments || []).map((a) => ({
-            ...a,
-            message_id: m.id,
-            created_at: m.created_at,
-            sender_name: m.sender_name,
-          })),
-        )
-        .filter((a) =>
-          kind === "media"
-            ? /^(image|video)\//.test(a.mime_type || "")
-            : kind === "audio"
-              ? (a.mime_type || "").startsWith("audio/")
-              : !/^(image|video|audio)\//.test(a.mime_type || ""),
-        )
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      const start = cursor ? Number(cursor) : 0;
-      return {
-        media: files.slice(start, start + limit),
-        nextCursor: start + limit < files.length ? String(start + limit) : null,
-        localOnly: true,
-      };
-    }
+
   }
   if (isDevAuthBypass) {
     const rows = previewMessages

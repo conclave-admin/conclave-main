@@ -357,9 +357,6 @@ const deleteMe = asyncHandler(async (req, res) => {
     await client.query("DELETE FROM account_tokens WHERE user_id=$1", [
       req.user.id,
     ]);
-    await client.query("DELETE FROM encryption_backups WHERE user_id=$1", [
-      req.user.id,
-    ]);
     await client.query("DELETE FROM privacy_preferences WHERE user_id=$1", [
       req.user.id,
     ]);

@@ -234,23 +234,6 @@ export default function ChatRow({ room }) {
         label={`Actions for ${displayName}`}
         className="w-44"
       >
-        {room.last_message?._previewState && (
-          <button
-            type="button"
-            role="menuitem"
-            className="w-full px-3 py-2 text-left text-body text-brand"
-            onClick={() => {
-              setMenuOpen(false);
-              room.last_message._previewState === "keys"
-                ? navigate("/settings#security-recovery")
-                : refresh();
-            }}
-          >
-            {room.last_message._previewState === "keys"
-              ? "Restore message access"
-              : "Retry message preview"}
-          </button>
-        )}
         <button
           type="button"
           role="menuitem"

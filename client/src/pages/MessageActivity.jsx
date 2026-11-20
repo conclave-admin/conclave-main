@@ -3,7 +3,6 @@ import { ReviewSchedule } from "../components/chat/MessageLater";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { decryptMessages } from "../lib/encryption";
 import { useSyncReconciler } from "../contexts/SyncContext";
 import Page from "../components/layout/Page";
 import Button from "../components/ui/Button";
@@ -33,7 +32,7 @@ export default function MessageActivity() {
         .data.data;
       let result =
         tab === "saved"
-          ? await decryptMessages(data.messages)
+          ? data.messages
           : tab === "threads"
             ? data.threads
             : data;
@@ -137,16 +136,7 @@ export default function MessageActivity() {
             ) : tab === "saved" ? (
               <>
                 <p className="mb-2 text-label text-muted">{row.sender_name}</p>
-                {row._cryptoError ? (
-                  <Link
-                    to="/settings#security-recovery"
-                    className="text-brand underline"
-                  >
-                    Restore message access on this device
-                  </Link>
-                ) : (
-                  <MessageBody text={row.content || "Attachment"} />
-                )}
+                <MessageBody text={row.content || "Attachment"} />
                 <Link
                   to={`/chats/${row.room_id}?message=${row.id}`}
                   className="mt-2 inline-flex min-h-11 items-center text-brand"

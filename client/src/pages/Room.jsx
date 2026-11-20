@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import ConversationPolicyNotice from "../components/chat/ConversationPolicyNotice";
 import ThreadPanel from "../components/chat/ThreadPanel";
 import { readDraft } from "../lib/drafts";
+import { readPosition } from "../lib/readingPosition";
 import { conversationMessageVisible } from "../lib/clearedConversations";
 import { respondToRequest } from "../services/security.service";
 import { activeReadView } from "../lib/messageReads";
@@ -59,6 +60,10 @@ export default function Room() {
   const { setRoomHeader } = useOutletContext();
   const { user } = useAuth();
   const viewerId = user?.id;
+  const initialPosition = useMemo(
+    () => anchorId ? null : readPosition(viewerId, roomId),
+    [anchorId, viewerId, roomId],
+  );
   // Ordinary conversation opens show current history. Only an explicit deep
   // link requests an older slice around a particular message.
   const historyAnchor = anchorId;
@@ -514,7 +519,7 @@ export default function Room() {
         ) : (
           <MessageTimeline
             messages={timelineMessages}
-            initialPosition={null}
+            initialPosition={initialPosition}
             scrollContainerRef={scrollContainerRef}
             viewerId={viewerId}
             members={membersWithPointers}
@@ -533,12 +538,8 @@ export default function Room() {
               setEditDraft(message.content || "");
             }}
             onDelete={setDeleting}
-            onPromote={
-              room?.encryption_mode === "e2ee-v1" ? undefined : setPromoting
-            }
-            onFlagTask={
-              room?.encryption_mode === "e2ee-v1" ? undefined : setFlagging
-            }
+            onPromote={setPromoting}
+            onFlagTask={setFlagging}
             onToggleReaction={handleToggleReaction}
             onPin={handlePin}
             onUnpin={handleUnpin}
@@ -557,9 +558,7 @@ export default function Room() {
             }
             onMessageInfo={setMessageInfo}
             onOpenThread={setThreadRoot}
-            onForward={
-              room?.encryption_mode === "e2ee-v1" ? undefined : setForwarding
-            }
+            onForward={setForwarding}
             onJumpToMessage={jumpToMessage}
             jumpTargetId={jumpTarget?.id}
             onJumpLocated={handleJumpLocated}
@@ -580,10 +579,10 @@ export default function Room() {
       ) : room?.superseded_by ? (
         <div className="row-start-3 border-t border-line p-4">
           <Button onClick={() => navigate(`/chats/${room.superseded_by}`)}>
-            Continue in the encrypted conversation
+            Continue in the current conversation
           </Button>
           <p className="mt-2 text-metadata text-muted">
-            This legacy history remains server-readable.
+            This conversation has moved.
           </p>
         </div>
       ) : room?.message_request?.status === "declined" ? (
@@ -659,21 +658,9 @@ export default function Room() {
               if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
             }}
             isOnline={browserOnline && isConnected}
-            onCreatePoll={
-              room?.encryption_mode === "e2ee-v1"
-                ? undefined
-                : () => setCreatingPoll(true)
-            }
-            onCreateDecision={
-              room?.encryption_mode === "e2ee-v1"
-                ? undefined
-                : () => setPromoting({ manual: true })
-            }
-            onCreateTask={
-              room?.encryption_mode === "e2ee-v1"
-                ? undefined
-                : () => setFlagging({ manual: true })
-            }
+            onCreatePoll={() => setCreatingPoll(true)}
+            onCreateDecision={() => setPromoting({ manual: true })}
+            onCreateTask={() => setFlagging({ manual: true })}
             members={members}
             activityScope={roomId}
             onTyping={handleTyping}

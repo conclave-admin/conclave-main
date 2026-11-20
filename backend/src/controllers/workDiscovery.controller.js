@@ -14,7 +14,7 @@ const search = asyncHandler(async (req, res) => {
       LEFT(m.content,220) AS title,m.created_at
       FROM messages m JOIN rooms r ON r.id=m.room_id
       JOIN room_members rm ON rm.room_id=m.room_id AND rm.user_id=$1
-      WHERE r.encryption_mode<>'e2ee-v1' AND m.deleted_at IS NULL
+      WHERE m.deleted_at IS NULL
       AND message_visible(m.id,$1) AND position(lower($2) in lower(m.content))>0
       ORDER BY m.created_at DESC LIMIT 15`, params),
     query(`SELECT 'decision' AS type,d.id,d.room_id,r.name AS room_name,
@@ -32,7 +32,7 @@ const search = asyncHandler(async (req, res) => {
       FROM attachments a JOIN messages m ON m.id=a.message_id
       JOIN rooms r ON r.id=m.room_id
       JOIN room_members rm ON rm.room_id=m.room_id AND rm.user_id=$1
-      WHERE r.encryption_mode<>'e2ee-v1' AND m.deleted_at IS NULL
+      WHERE m.deleted_at IS NULL
       AND message_visible(m.id,$1)
       AND position(lower($2) in lower(COALESCE(a.filename,'')))>0
       ORDER BY a.created_at DESC LIMIT 15`, params),
@@ -66,7 +66,7 @@ const inbox = asyncHandler(async (req, res) => {
        WHERE t.assignee_id=$1 AND t.status<>'done'
        UNION ALL
        SELECT ('mention:'||m.id::text),'mention',m.id,m.room_id,r.name,
-         CASE WHEN r.encryption_mode='e2ee-v1' THEN 'Mentioned you' ELSE LEFT(m.content,160) END,
+         LEFT(m.content,160),
          m.created_at,NULL::date,0
        FROM message_mentions mm JOIN messages m ON m.id=mm.message_id
        JOIN rooms r ON r.id=m.room_id

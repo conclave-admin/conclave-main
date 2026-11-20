@@ -131,7 +131,6 @@ const EXTENSION_MIME_TYPES = new Map([
 function resolveMimetype(mimetype, filename) {
   const declared =
     typeof mimetype === "string" ? mimetype.trim().toLowerCase() : "";
-  if (declared === "application/vnd.conclave.encrypted") return declared;
   if (ALLOWED_MIME_TYPES.has(declared)) return declared;
   if (!UNKNOWN_MIME_TYPES.has(declared)) return null;
 
@@ -148,8 +147,7 @@ const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 
 function limitFor(mimetype) {
-  return mimetype === "application/vnd.conclave.encrypted" ||
-    mimetype.startsWith("video/")
+  return mimetype.startsWith("video/")
     ? MAX_VIDEO_BYTES
     : MAX_UPLOAD_BYTES;
 }
@@ -182,10 +180,7 @@ const uploadFile = asyncHandler(async (req, res) => {
 
   const { buffer, mimetype: declaredType, originalname } = req.file;
 
-  const filename =
-    declaredType === "application/vnd.conclave.encrypted"
-      ? "encrypted.bin"
-      : (originalname || "upload").trim() || "upload";
+  const filename = (originalname || "upload").trim() || "upload";
 
   // Resolve before storing so extension-based MIME fallbacks are persisted
   // consistently in both R2 object metadata and the upload record.

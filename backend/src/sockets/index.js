@@ -306,7 +306,6 @@ function registerSocketHandlers(io) {
         albumId,
         mentionedUserIds,
         forwardSource,
-        encryptedPayload,
         [ACTIVITY_ORDER]: order,
       }) => {
         if (!rateLimit.consume(`socket:${userId}:messages`, { max: 30 }))
@@ -326,7 +325,6 @@ function registerSocketHandlers(io) {
           albumId,
           mentionedUserIds,
           forwardSource,
-          encryptedPayload,
           io,
         });
 

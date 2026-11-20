@@ -22,17 +22,6 @@ async function account(request, name) {
   expect(result.status()).toBe(201);
   return (await result.json()).data;
 }
-async function openSecurity(page) {
-  const section = page
-    .locator("details")
-    .filter({
-      has: page.locator("summary").filter({ hasText: "Security and recovery" }),
-    })
-    .first();
-  await section.waitFor();
-  if (!(await section.evaluate((el) => el.open)))
-    await section.locator("summary").first().click();
-}
 async function login(page, session) {
   await page.goto("/login");
   await page.evaluate((s) => {
@@ -40,268 +29,8 @@ async function login(page, session) {
     localStorage.setItem("refreshToken", s.refreshToken);
     localStorage.setItem("conclave.session-user", JSON.stringify(s.user));
   }, session);
-  await page.goto("/settings");
-  await openSecurity(page);
-  await expect(
-    page.getByText("This device is ready for encrypted conversations.", {
-      exact: true,
-    }),
-  ).toBeVisible();
+  await page.goto("/chats");
 }
-test("real browsers encrypt text, offline drafts and files, receive privately and restore a key backup", async ({
-  page,
-  browser,
-  request,
-}, info) => {
-  const sender = await account(request, `${info.project.name}-sender`),
-    receiver = await account(request, `${info.project.name}-receiver`);
-  const receiverContext = await browser.newContext({
-    viewport: info.project.use.viewport,
-    isMobile: Boolean(info.project.use.isMobile),
-    hasTouch: Boolean(info.project.use.hasTouch),
-  });
-  try {
-    await login(page, sender);
-    const recipient = await receiverContext.newPage();
-    await login(recipient, receiver);
-    const created = await request.post(`${API}/rooms`, {
-      headers: { authorization: `Bearer ${sender.accessToken}` },
-      data: { type: "dm", memberIds: [receiver.user.id] },
-    });
-    expect(created.status()).toBe(201);
-    const room = (await created.json()).data;
-    expect(room.encryption_mode).toBe("e2ee-v1");
-    await recipient.goto(`/chats/${room.id}`);
-    await recipient
-      .getByRole("button", { name: "Accept request", exact: true })
-      .click();
-    await expect(
-      recipient.getByRole("textbox", { name: "Message", exact: true }),
-    ).toBeVisible();
-    await page.goto(`/chats/${room.id}`);
-    const composer = page.getByRole("textbox", {
-      name: "Message",
-      exact: true,
-    });
-    await expect(composer).toBeVisible();
-    const text = "E2EE-PRIVATE-TEXT ".repeat(180);
-    await composer.fill(text);
-    await composer.press("Enter");
-    await recipient
-      .getByRole("button", { name: "Read more", exact: true })
-      .first()
-      .click();
-    await expect(
-      recipient.locator("article").getByText(text.trim(), { exact: true }),
-    ).toBeVisible();
-    const stored = await request.get(`${API}/messages/room/${room.id}`, {
-      headers: { authorization: `Bearer ${receiver.accessToken}` },
-    });
-    const rows = (await stored.json()).data.messages;
-    expect(rows[0].content).toBe("[Encrypted message]");
-    expect(rows[0].encrypted_payload).toBeTruthy();
-    expect(JSON.stringify(rows)).not.toContain("E2EE-PRIVATE-TEXT");
-    await recipient.reload();
-    await recipient
-      .getByRole("button", { name: "Read more", exact: true })
-      .first()
-      .click();
-    await expect(
-      recipient.locator("article").getByText(text.trim(), { exact: true }),
-    ).toBeVisible();
-    await page.context().setOffline(true);
-    await composer.fill("E2EE-OFFLINE-QUEUED");
-    await composer.press("Enter");
-    await expect(
-      page
-        .locator("article")
-        .filter({ hasText: "E2EE-OFFLINE-QUEUED" })
-        .locator('[data-message-status="queued"]'),
-    ).toBeVisible();
-    await page.context().setOffline(false);
-    await expect(
-      recipient
-        .locator("article")
-        .getByText("E2EE-OFFLINE-QUEUED", { exact: true }),
-    ).toBeVisible();
-    const secret = Buffer.from("%PDF-1.4\nSECRET DOCUMENT CONTENT\n%%EOF");
-    await page.locator('input[type="file"][multiple]').first().setInputFiles({
-      name: "private-document.pdf",
-      mimeType: "application/pdf",
-      buffer: secret,
-    });
-    const editor = page.getByRole("dialog", {
-      name: "Send attachment",
-      exact: true,
-    });
-    await editor
-      .getByPlaceholder("Add a caption…")
-      .fill("E2EE-PRIVATE-CAPTION");
-    await editor.getByRole("button", { name: "Send", exact: true }).click();
-    await expect(
-      recipient
-        .locator("article")
-        .getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
-    ).toBeVisible();
-    const mediaRows = (
-      await (
-        await request.get(`${API}/messages/room/${room.id}`, {
-          headers: { authorization: `Bearer ${sender.accessToken}` },
-        })
-      ).json()
-    ).data.messages;
-    const fileRow = mediaRows.find((row) => row.attachments?.length);
-    expect(fileRow.attachments[0].filename).toBe("encrypted.bin");
-    expect(fileRow.attachments[0].mime_type).toBe(
-      "application/vnd.conclave.encrypted",
-    );
-    expect(JSON.stringify(mediaRows)).not.toContain("private-document.pdf");
-    expect(JSON.stringify(mediaRows)).not.toContain("E2EE-PRIVATE-CAPTION");
-    const downloadPromise = recipient.waitForEvent("download");
-    await recipient
-      .getByRole("button", {
-        name: "Download private-document.pdf",
-        exact: true,
-      })
-      .click();
-    const download = await downloadPromise;
-    expect(await fs.readFile(await download.path())).toEqual(secret);
-    expect(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth <= innerWidth,
-      ),
-    ).toBe(true);
-    await recipient.goto("/settings");
-    await openSecurity(recipient);
-    await recipient
-      .getByRole("button", {
-        name: "Create or replace encrypted backup",
-        exact: true,
-      })
-      .click();
-    const key = await recipient
-      .locator("code")
-      .filter({ hasText: /^[A-Za-z0-9_-]{43}$/ })
-      .textContent();
-    expect(key).toHaveLength(43);
-    await recipient
-      .getByLabel("Encryption recovery key", { exact: true })
-      .fill(key);
-    await recipient
-      .getByRole("button", { name: "Restore encrypted backup", exact: true })
-      .click();
-    await expect(
-      recipient.getByText("Encryption keys restored to this device.", {
-        exact: true,
-      }),
-    ).toBeVisible();
-    await recipient.goto(`/chats/${room.id}`);
-    await expect(
-      recipient
-        .locator("article")
-        .getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
-    ).toBeVisible();
-    await recipient.goto(`/chats/${room.id}/info`);
-    await recipient
-      .getByLabel("Search encrypted messages", { exact: true })
-      .fill("E2EE-PRIVATE-CAPTION");
-    await recipient
-      .getByRole("button", { name: "Search", exact: true })
-      .click();
-    const searchResult = recipient.getByRole("link", {
-      name: "E2EE-PRIVATE-CAPTION",
-      exact: true,
-    });
-    await expect(searchResult).toBeVisible();
-    const cleared = await request.post(`${API}/rooms/${room.id}/clear`, {
-      headers: { authorization: `Bearer ${receiver.accessToken}` },
-    });
-    expect(cleared.status()).toBe(200);
-    await expect(searchResult).toHaveCount(0);
-    await composer.fill("Encrypted message after personal clear");
-    await composer.press("Enter");
-    await recipient.goto(`/chats/${room.id}`);
-    await expect(
-      recipient
-        .locator("article")
-        .getByText("Encrypted message after personal clear", {
-          exact: true,
-        }),
-    ).toBeVisible();
-    await expect(
-      recipient
-        .locator("article")
-        .getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
-    ).toHaveCount(0);
-    await expect(
-      page
-        .locator("article")
-        .getByText("E2EE-PRIVATE-CAPTION", { exact: true }),
-    ).toBeVisible();
-  } finally {
-    await receiverContext.close();
-  }
-});
-
-test("a lost first registration response preserves device keys and a second tab reuses the identity", async ({
-  page,
-  request,
-  context,
-}, info) => {
-  const session = await account(
-    request,
-    `${info.project.name}-lost-registration`,
-  );
-  let lost = false;
-  const registrations = [];
-  await page.route("**/api/encryption/devices", async (route) => {
-    if (route.request().method() !== "POST") {
-      await route.continue();
-      return;
-    }
-    registrations.push(route.request().postDataJSON());
-    if (!lost) {
-      const response = await route.fetch();
-      expect(response.status()).toBe(201);
-      lost = true;
-      await route.abort("connectionreset");
-    } else await route.continue();
-  });
-  await page.goto("/login");
-  await page.evaluate((s) => {
-    localStorage.setItem("accessToken", s.accessToken);
-    localStorage.setItem("refreshToken", s.refreshToken);
-    localStorage.setItem("conclave.session-user", JSON.stringify(s.user));
-  }, session);
-  await page.goto("/settings");
-  await openSecurity(page);
-  await expect.poll(() => lost).toBe(true);
-  await page
-    .getByRole("button", { name: "Refresh encryption devices", exact: true })
-    .click();
-  await expect(
-    page.getByText("This device is ready for encrypted conversations.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  expect(registrations.length).toBeGreaterThan(1);
-  expect(new Set(registrations.map((r) => r.identityKey)).size).toBe(1);
-  expect(new Set(registrations.map((r) => r.id)).size).toBe(1);
-  const peer = await context.newPage();
-  await peer.goto("/settings");
-  await openSecurity(peer);
-  await expect(
-    peer.getByText("This device is ready for encrypted conversations.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  const codes = await page.locator("code").allTextContents(),
-    otherCodes = await peer.locator("code").allTextContents();
-  expect(codes[0]).toBe(otherCodes[0]);
-  expect(codes[1]).toBe(otherCodes[1]);
-  await peer.close();
-});
-
 function voiceWave() {
   const samples = 16000,
     bytes = Buffer.alloc(44 + samples * 2);
@@ -324,19 +53,18 @@ function voiceWave() {
     );
   return bytes;
 }
-for (const encrypted of [false, true])
-  test(`voice notes preview/discard and play cached ${encrypted ? "encrypted" : "server-readable"} audio offline`, async ({
+test(`voice notes preview/discard and play cached audio offline`, async ({
     page,
     browser,
     request,
   }, info) => {
     const sender = await account(
       request,
-      `${info.project.name}-voice-${encrypted}-sender`,
+      `${info.project.name}-voice-sender`,
     );
     const receiver = await account(
       request,
-      `${info.project.name}-voice-${encrypted}-receiver`,
+      `${info.project.name}-voice-receiver`,
     );
     const receiverContext = await browser.newContext({
       viewport: info.project.use.viewport,
@@ -350,7 +78,7 @@ for (const encrypted of [false, true])
       const created = await request.post(`${API}/rooms`, {
         headers: { authorization: `Bearer ${sender.accessToken}` },
         data: {
-          type: encrypted ? "dm" : "group",
+          type: "group",
           name: "Voice notes",
           memberIds: [receiver.user.id],
         },
@@ -358,10 +86,6 @@ for (const encrypted of [false, true])
       expect(created.status()).toBe(201);
       const room = (await created.json()).data;
       await recipient.goto(`/chats/${room.id}`);
-      if (encrypted)
-        await recipient
-          .getByRole("button", { name: "Accept request", exact: true })
-          .click();
       await page.goto(`/chats/${room.id}`);
       await page.context().grantPermissions(["microphone"]);
       await page
@@ -409,10 +133,10 @@ for (const encrypted of [false, true])
         .first();
       await expect(recordedCard).toBeVisible();
       await recordedCard
-        .getByRole("button", { name: /Download voice message/ })
+        .getByRole("button", { name: "Play Voice message" })
         .click();
       const recordedAudio = recordedCard.locator("audio");
-      await expect(recordedAudio).toBeVisible();
+      await expect(recordedAudio).toBeAttached();
       await expect
         .poll(() =>
           recordedAudio.evaluate(
@@ -437,15 +161,16 @@ for (const encrypted of [false, true])
       });
       await expect(editor.locator("audio")).toBeVisible();
       await editor.getByRole("button", { name: "Send", exact: true }).click();
+      await expect(recipient.getByRole("region", { name: "Voice message", exact: true })).toHaveCount(2);
       const card = recipient
         .getByRole("region", { name: "Voice message", exact: true })
         .last();
       await expect(card).toBeVisible();
       await card
-        .getByRole("button", { name: /Download voice message/ })
+        .getByRole("button", { name: "Play Voice message" })
         .click();
       const audio = card.locator("audio");
-      await expect(audio).toBeVisible();
+      await expect(audio).toBeAttached();
       await expect
         .poll(() => audio.evaluate((a) => a.readyState))
         .toBeGreaterThanOrEqual(1);
@@ -453,9 +178,9 @@ for (const encrypted of [false, true])
         card.getByText("Downloaded · available offline", { exact: true }),
       ).toBeVisible();
       await card
-        .getByRole("combobox", { name: "Voice message playback speed" })
-        .selectOption("1.5");
-      expect(await audio.evaluate((a) => a.playbackRate)).toBe(1.5);
+        .getByRole("button", { name: "Playback speed 1 times. Change speed" })
+        .click();
+      await expect.poll(() => audio.evaluate((a) => a.playbackRate)).toBe(1.5);
       await audio.evaluate((a) => {
         a.currentTime = 0.5;
       });
@@ -476,7 +201,7 @@ for (const encrypted of [false, true])
       const reopened = recipient
         .getByRole("region", { name: "Voice message", exact: true })
         .last();
-      await expect(reopened.locator("audio")).toBeVisible();
+      await expect(reopened.locator("audio")).toBeAttached();
       await receiverContext.setOffline(true);
       await reopened.locator("audio").evaluate((a) => a.play());
       await expect
@@ -487,7 +212,7 @@ for (const encrypted of [false, true])
         window.dispatchEvent(new Event("conclave:outbox-stop")),
       );
       await expect.poll(() => playing.evaluate((a) => a.paused)).toBe(true);
-      await expect(reopened.locator("audio")).toHaveCount(0);
+      await expect(reopened.locator("audio")).not.toHaveAttribute("src");
       await playing.dispose();
     } finally {
       await receiverContext.close();
@@ -548,7 +273,7 @@ test("phase6: information, shared links, storage and account clearing synchroniz
       headers: auth,
       multipart: {
         file: {
-          name: "phase6.wav",
+          name: "voice-phase6.wav",
           mimeType: "audio/wav",
           buffer: voiceWave(),
         },
@@ -578,8 +303,8 @@ test("phase6: information, shared links, storage and account clearing synchroniz
       name: "Voice message",
       exact: true,
     });
-    await voice.getByRole("button", { name: /Download voice message/ }).click();
-    await expect(voice.locator("audio")).toBeVisible();
+    await voice.getByRole("button", { name: "Play Voice message" }).click();
+    await expect(voice.locator("audio")).toBeAttached();
     await page.goto(`/chats/${id}`);
     await page
       .getByRole("button", { name: "Message info", exact: true })
@@ -610,7 +335,7 @@ test("phase6: information, shared links, storage and account clearing synchroniz
       mirror.getByLabel("Mute conversation", { exact: true }),
     ).toBeChecked();
     await expect(
-      peer.getByText(/This account’s media cache on this device: 0.03 MB/),
+      peer.getByText("Downloaded on this device: 0.03 MB", { exact: true }),
     ).toBeVisible();
     await peer
       .getByRole("button", { name: "Remove downloaded copies", exact: true })
@@ -619,7 +344,7 @@ test("phase6: information, shared links, storage and account clearing synchroniz
       .getByRole("button", { name: "Confirm cache removal", exact: true })
       .click();
     await expect(
-      peer.getByText(/This account’s media cache on this device: 0.00 MB/),
+      peer.getByText("Downloaded on this device: 0.00 MB", { exact: true }),
     ).toBeVisible();
     await expect(
       peer.getByRole("link", {
@@ -881,7 +606,8 @@ test("ux: drafts, rich long messages, local navigation, search, focus and emoji 
   await page.locator(`[data-message-id="${message.id}"]`).hover();
   if (info.project.name.includes("mobile"))
     await page
-      .locator(`[data-message-id="${message.id}"] strong`)
+      .locator(`[data-message-id="${message.id}"]`)
+      .getByText("Important update", { exact: true })
       .dispatchEvent("contextmenu");
   else
     await page

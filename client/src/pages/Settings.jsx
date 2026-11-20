@@ -1,7 +1,6 @@
 import AttentionSettings from "../components/settings/AttentionSettings";
 import { usePush } from "../contexts/PushContext";
 import PrivacySecuritySettings from "../components/settings/PrivacySecuritySettings";
-import EncryptionSettings from "../components/settings/EncryptionSettings";
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import useNetworkStatus from "@/hooks/useNetworkStatus";
@@ -145,16 +144,6 @@ export default function Settings() {
 
       <PrivacySecuritySettings />
       <AttentionSettings />
-      <details
-        id="security-recovery"
-        className="mt-6 rounded-xl border border-line p-4"
-        open={window.location.hash === "#security-recovery"}
-      >
-        <summary className="cursor-pointer text-label text-ink">
-          Security and recovery
-        </summary>
-        <EncryptionSettings />
-      </details>
 
       <section className="mt-8 rounded-xl border border-line bg-surface p-6">
         <h2 className="text-h2 text-ink">Appearance</h2>

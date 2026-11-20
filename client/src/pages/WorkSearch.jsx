@@ -27,7 +27,7 @@ export default function WorkSearch() {
     return () => { active = false; };
   }, [query]);
   return <Page width="content"><h1 className="text-h1">Search all</h1>
-    <p className="mt-2 text-body text-muted">Find messages, files, decisions, tasks, conversations and people you can access. Encrypted message content is excluded.</p>
+    <p className="mt-2 text-body text-muted">Find messages, files, decisions, tasks, conversations and people you can access.</p>
     <form className="mt-5 flex gap-2" onSubmit={(event) => { event.preventDefault(); setParams({ q: draft.trim() }); }}>
       <input aria-label="Search all work" type="search" value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={100} minLength={2}
         className="min-h-11 min-w-0 flex-1 rounded-lg border border-line bg-surface px-3 text-body" placeholder="Search across your work" />

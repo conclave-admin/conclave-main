@@ -134,7 +134,7 @@ async function run(io) {
   }
   // Existing tombstone triggers enqueue unreferenced R2 cleanup transactionally.
   await query(`WITH expired AS(SELECT id FROM messages WHERE expires_at<=NOW() AND deleted_at IS NULL ORDER BY expires_at FOR UPDATE SKIP LOCKED LIMIT 200),
- tombstoned AS(UPDATE messages m SET content=NULL,encrypted_payload=NULL,deleted_at=NOW() FROM expired e WHERE m.id=e.id RETURNING m.id)
+ tombstoned AS(UPDATE messages m SET content=NULL,deleted_at=NOW() FROM expired e WHERE m.id=e.id RETURNING m.id)
  DELETE FROM polls WHERE message_id IN(SELECT id FROM tombstoned)`);
 }
 function start(io) {

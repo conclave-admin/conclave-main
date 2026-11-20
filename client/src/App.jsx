@@ -8,7 +8,6 @@ import Spinner from "./components/ui/Spinner";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { PushProvider } from "./contexts/PushContext";
 import { SyncProvider } from "./contexts/SyncContext";
-import EncryptionLifecycle from "./components/settings/EncryptionLifecycle";
 import { RealtimeProvider } from "./contexts/RealtimeContext";
 import { OutboxProvider } from "./contexts/OutboxContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -26,7 +25,7 @@ const Notifications = lazy(() => import("./pages/Notifications"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Register = lazy(() => import("./pages/Register"));
 const AccountRecovery = lazy(() => import("./pages/AccountRecovery"));
-const Room = lazy(() => import("./pages/Room"));
+const Room = lazy(() => import("./pages/ConversationRoute"));
 const RoomInfo = lazy(() => import("./pages/RoomInfo"));
 const Settings = lazy(() => import("./pages/Settings"));
 const MessageActivity = lazy(() => import("./pages/MessageActivity"));
@@ -81,7 +80,6 @@ export default function App() {
     <ThemeProvider>
       <ToastProvider>
         <AuthProvider>
-          <EncryptionLifecycle />
           <RealtimeProvider>
             <SyncProvider>
               <PushProvider>
