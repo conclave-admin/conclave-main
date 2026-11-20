@@ -14,7 +14,7 @@ users; private room content remains membership-restricted.
 - Vercel: the static React build from `client/`.
 - Render: the persistent Express + Socket.IO process from `backend/`.
 - Supabase: PostgreSQL, using a session-pooler connection.
-- Redis: a compatible TCP Redis service, configured through `REDIS_URL`.
+- Redis: optional; configure `REDIS_URL` for multi-instance sharing.
 - Cloudinary: required for uploads; configure `CLOUDINARY_CLOUD_NAME`,
   `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` in the backend environment.
 
@@ -78,18 +78,19 @@ database is up to date. Never use `--baseline` unless all recorded migrations
 have actually been applied already. Do not delete an existing production database
 as a troubleshooting step.
 
-Configure `REDIS_URL` with a Redis TCP URL (`rediss://` for a TLS service).
-An HTTP REST Redis endpoint is not compatible with the existing client and
-Socket.IO adapter. Confirm the selected service supports Pub/Sub and its command
-budget fits presence heartbeats plus three Redis connections per API instance.
+For multi-instance deployments, configure `REDIS_URL` with a Redis TCP URL
+(`rediss://` for a TLS service) and set `SOCKET_REDIS_ADAPTER=true`. An HTTP REST
+Redis endpoint is not compatible with the node-redis client. Keep the adapter
+disabled for one API instance. Redis outages and Upstash quota errors do not
+block startup; optional state falls back to local memory.
 
-Presence uses one 45-second lease per socket, 15-second client heartbeats, a
-10-second expiry sweep, and periodic index reconciliation. Redis state is
-reconstructed from authenticated sockets after data loss; a full presence keyspace
-flush is not required for deployment or recovery. Do not remove another running
-instance's presence records on startup. Dead API-instance leases expire while
-healthy devices continue renewing independently. Shutdown drains presence cleanup
-before closing Redis and PostgreSQL.
+A single instance keeps presence and typing state locally. When shared Redis
+presence is enabled, socket leases last five minutes and refresh no more often
+than every four minutes; stale-socket cleanup runs once per minute only while
+sockets are connected, with full index reconciliation hourly. Nothing touches
+Redis on a timer while no users are connected. See
+[Redis operations](docs/redis.md) for the free-tier command-budget guidance.
+Shutdown drains presence cleanup before closing Redis and PostgreSQL.
 
 Deploy the presence API and client together. The client expects complete snapshots
 with separate connected and foreground-viewing rosters. Missing/outdated snapshots
@@ -119,14 +120,15 @@ free web-service plan and creates only the API service, with these settings:
 | Runtime        | Node 22                   |
 | Build          | `npm ci --omit=dev`       |
 | Start          | `sh docker-entrypoint.sh` |
-| Health path    | `/health`                 |
+| Health path    | `/healthz`                |
 
 Supply these values in Render's environment settings:
 
 | Variable        | Value                                                 |
 | --------------- | ----------------------------------------------------- |
 | `DATABASE_URL`  | Supabase session-pooler URL                           |
-| `REDIS_URL`     | Redis TCP connection URL                              |
+| `REDIS_URL`     | Optional Redis TCP connection URL                     |
+| `SOCKET_REDIS_ADAPTER` | `false` for one instance; enable only for 2+ instances |
 | `CLIENT_ORIGIN` | Exact frontend HTTPS origin, without a trailing slash |
 
 The Blueprint generates separate JWT signing secrets automatically. Keep them
@@ -135,8 +137,12 @@ provides `PORT`. Never put backend secrets in `VITE_*` variables.
 
 The start script applies pending migrations before starting Node. The migration
 runner serializes overlapping runners with an advisory lock. Server startup
-checks Postgres and connects Redis before listening. `/health` is a liveness
-check, not continuous database/cache readiness monitoring.
+requires PostgreSQL; Redis is optional and its connection failure does not block
+the API. `/healthz` is a dependency-free liveness check; `/ready` checks
+PostgreSQL and Redis.
+
+See [Redis operations](docs/redis.md) for the single-instance fallback and
+Upstash command-budget guidance.
 
 ## Vercel client
 
@@ -158,7 +164,7 @@ local auth-preview bypass.
 
 ## Acceptance before sharing
 
-- `/health` returns 200; `/api/nope` returns JSON 404; anonymous `/api/rooms` returns 401.
+- `/healthz` returns 200; `/api/nope` returns JSON 404; anonymous `/api/rooms` returns 401.
 - `/ready` returns 200 only when PostgreSQL and Redis both respond; it returns 503 without exposing provider errors otherwise.
 - Register/login with the intended access policy; confirm login contains no password hash.
 - Create a room and add a second tester using the existing API.

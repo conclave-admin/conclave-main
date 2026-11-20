@@ -47,11 +47,9 @@ async function interruption(notificationId) {
     !allowsInterruption(n, n.type, n.room_muted)
   )
     return { allowed: false, notification: n };
-  // Suppress only a known fresh foreground viewer. Redis failure defers push;
-  // it must not bypass an active user's interruption preferences.
+  // Suppress only a known fresh foreground viewer; the single-instance
+  // presence fallback keeps this policy available without Redis.
   const presence = require("./presence.service");
-  const { redisClient } = require("../config/redis");
-  if (!redisClient.isReady) throw new Error("Presence unavailable");
   const active = await presence.getRoomViewingUsers(n.room_id);
   return { allowed: !active.includes(n.recipient_id), notification: n };
 }

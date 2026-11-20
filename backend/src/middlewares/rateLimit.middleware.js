@@ -1,6 +1,6 @@
 const ApiError = require("../utils/ApiError");
 const { createHash } = require("node:crypto");
-const { redisClient } = require("../config/redis");
+const { isRedisReady, safe } = require("../config/redis");
 
 const buckets = new Map();
 
@@ -24,6 +24,12 @@ function rateLimit({
 } = {}) {
   return async (req, _res, next) => {
     try {
+      if (
+        req.method === "OPTIONS" ||
+        ["/health", "/healthz", "/ready"].includes(req.path) ||
+        /\.[a-z0-9]{1,10}$/i.test(req.path)
+      )
+        return next();
       const dimensions = [].concat(key(req)).filter(Boolean);
       const scope = `${req.baseUrl}${req.path}`;
       for (const dimension of dimensions) {
@@ -36,7 +42,6 @@ function rateLimit({
       }
       return next();
     } catch {
-      // Do not silently disable brute-force protection during a Redis outage.
       return next(
         new ApiError(503, "Request protection is temporarily unavailable."),
       );
@@ -45,19 +50,27 @@ function rateLimit({
 }
 
 async function consumeShared(id, { windowMs, max }) {
-  if (!redisClient.isOpen) {
-    if (process.env.NODE_ENV === "production")
-      throw new Error("Redis rate-limit store is unavailable");
+  if (
+    process.env.SOCKET_REDIS_ADAPTER !== "true" ||
+    !isRedisReady()
+  ) {
     return consume(id, { windowMs, max });
   }
   const digest = createHash("sha256").update(id).digest("hex");
-  const count = await redisClient.eval(
-    "local count = redis.call('INCR', KEYS[1]); if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]); end; return count",
-    {
-      keys: [`${process.env.RATE_LIMIT_KEY_PREFIX || "rate-limit"}:${digest}`],
-      arguments: [String(windowMs)],
-    },
+  const count = await safe(
+    (client) =>
+      client.eval(
+        "local count = redis.call('INCR', KEYS[1]); if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]); end; return count",
+        {
+          keys: [
+            `${process.env.RATE_LIMIT_KEY_PREFIX || "rate-limit"}:${digest}`,
+          ],
+          arguments: [String(windowMs)],
+        },
+      ),
+    undefined,
   );
+  if (count === undefined) return consume(id, { windowMs, max });
   return Number(count) <= max;
 }
 

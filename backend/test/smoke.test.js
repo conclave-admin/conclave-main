@@ -23,7 +23,7 @@ process.env.NODE_ENV = "test";
 process.env.DATABASE_URL =
   process.env.DATABASE_URL ||
   "postgres://app:app@127.0.0.1:5432/conclave_smoke";
-process.env.REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
+process.env.REDIS_URL = "";
 process.env.JWT_ACCESS_SECRET =
   process.env.JWT_ACCESS_SECRET || "smoke-test-access-secret";
 process.env.JWT_REFRESH_SECRET =
@@ -31,6 +31,7 @@ process.env.JWT_REFRESH_SECRET =
 process.env.CLIENT_ORIGIN =
   process.env.CLIENT_ORIGIN || "http://localhost:5173";
 
+require("../src/config/env").redisUrl = undefined;
 const app = require("../src/app");
 
 // Every route the frontend and the API contracts depend on. Listed explicitly
@@ -38,6 +39,7 @@ const app = require("../src/app");
 // browser. Method + full path, exactly as a client would call it.
 const EXPECTED_ROUTES = [
   // health (declared in app.js, outside /api)
+  ["GET", "/healthz", false],
   ["GET", "/health", false],
   ["GET", "/ready", false],
   // auth — deliberately public
@@ -164,6 +166,10 @@ test("every expected route is mounted", () => {
 });
 
 test("health check responds without auth", async () => {
+  const liveness = await fetch(`${baseUrl}/healthz`);
+  assert.equal(liveness.status, 200);
+  assert.equal(await liveness.text(), "ok");
+
   const res = await fetch(`${baseUrl}/health`);
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { status: "ok" });

@@ -1,18 +1,88 @@
-const { redisClient } = require("../config/redis");
+const { redisClient, isRedisReady, safe } = require("../config/redis");
 const { query } = require("../config/db");
 const activity = require("./conversationActivity.service");
 
 // A lease belongs to one socket, never an entire user. The sorted-set member
 // contains the owner so a crash can be cleaned up even if its hash is missing.
-const LEASE_MS = 45000;
+const LEASE_MS = 5 * 60 * 1000;
 const LEASES = "presence:leases";
 const userRoomsKey = (id) => `user:${id}:rooms`;
 const socketRoomsKey = (id) => `socket:${id}:rooms`;
 const socketKey = (id) => `presence:socket:${id}`;
 const roomUserSocketsKey = (room, user) => `room:${room}:user:${user}:sockets`;
 const memberKey = (user, socket) => `${user}:${socket}`;
-const ready = () => redisClient.isReady;
+const ready = () =>
+  process.env.SOCKET_REDIS_ADAPTER === "true" && isRedisReady();
 const pendingCleanup = new Set();
+const localSockets = new Map();
+const localUsers = new Map();
+const localRooms = new Map();
+const localSocketRooms = new Map();
+const REDIS_FAILED = Symbol("redis-failed");
+
+function localRenewSocket(userId, socketId, activity = {}) {
+  const previous = localSockets.get(socketId);
+  localSockets.set(socketId, {
+    userId,
+    foreground: activity.foreground === true,
+    roomId: activity.foreground === true ? activity.roomId || null : null,
+  });
+  if (!localUsers.has(userId)) localUsers.set(userId, new Set());
+  localUsers.get(userId).add(socketId);
+  return (
+    !previous ||
+    previous.userId !== userId ||
+    previous.foreground !== (activity.foreground === true) ||
+    previous.roomId !== (activity.foreground === true ? activity.roomId || null : null)
+  );
+}
+
+function localJoinRoom(userId, roomId, socketId) {
+  if (!localRooms.has(roomId)) localRooms.set(roomId, new Map());
+  const users = localRooms.get(roomId);
+  if (!users.has(userId)) users.set(userId, new Set());
+  users.get(userId).add(socketId);
+  if (!localSocketRooms.has(socketId)) localSocketRooms.set(socketId, new Set());
+  localSocketRooms.get(socketId).add(roomId);
+}
+
+function localLeaveRoom(userId, roomId, socketId) {
+  const users = localRooms.get(roomId);
+  const sockets = users?.get(userId);
+  if (!sockets) return false;
+  sockets.delete(socketId);
+  localSocketRooms.get(socketId)?.delete(roomId);
+  if (sockets.size) return false;
+  users.delete(userId);
+  if (users.size === 0) localRooms.delete(roomId);
+  return true;
+}
+
+function localDevicesForUsers(userIds) {
+  return new Map(
+    userIds.map((userId) => [
+      userId,
+      [...(localUsers.get(userId) || [])]
+        .map((id) => ({ id, ...localSockets.get(id) }))
+        .filter((device) => device.userId === userId),
+    ]),
+  );
+}
+
+function localRoomDeviceUsers(roomId, viewingOnly) {
+  const users = localRooms.get(roomId);
+  if (!users) return [];
+  const devices = localDevicesForUsers([...users.keys()]);
+  return [...users].filter(([userId, sockets]) =>
+    sockets.size > 0 &&
+    devices.get(userId).some(
+      (device) =>
+        !viewingOnly ||
+        ((device.foreground === "1" || device.foreground === true) &&
+          device.roomId === roomId),
+    ),
+  ).map(([userId]) => userId);
+}
 function trackCleanup(work) {
   pendingCleanup.add(work);
   work.then(
@@ -25,9 +95,10 @@ async function drainCleanup() {
   while (pendingCleanup.size) await Promise.allSettled([...pendingCleanup]);
 }
 
-async function scanKeys(pattern) {
+async function scanKeys(pattern, client = redisClient) {
+  if (!client) return [];
   const found = [];
-  for await (const item of redisClient.scanIterator({
+  for await (const item of client.scanIterator({
     MATCH: pattern,
     COUNT: 100,
   })) {
@@ -41,10 +112,15 @@ async function renewSocket(
   socketId,
   { foreground = false, roomId = null, order } = {},
 ) {
-  if (!ready()) return false;
+  const localChanged = localRenewSocket(userId, socketId, {
+    foreground,
+    roomId,
+  });
+  if (!ready()) return localChanged;
   const now = Date.now();
-  return Boolean(
-    await redisClient.eval(
+  const changed = await safe(
+    (client) =>
+      client.eval(
       `
     local old = redis.call('ZSCORE', KEYS[1], ARGV[1])
     local changed = not old or tonumber(old) <= tonumber(ARGV[2])
@@ -57,7 +133,7 @@ async function renewSocket(
     redis.call('SADD', KEYS[4], ARGV[6])
     return changed and 1 or 0
   `,
-      {
+        {
         keys: [
           LEASES,
           socketKey(socketId),
@@ -74,35 +150,56 @@ async function renewSocket(
           socketId,
           Number.isSafeInteger(order) ? String(order) : "",
         ],
-      },
-    ),
+        },
+      ),
+    REDIS_FAILED,
   );
+  return changed === REDIS_FAILED ? localChanged : Boolean(changed);
 }
 
 async function socketConnected(userId, socketId) {
   await renewSocket(userId, socketId);
-  return ready() ? redisClient.sCard(`user:${userId}:sockets`) : 1;
+  if (!ready()) return localUsers.get(userId)?.size || 1;
+  const count = await safe(
+    (client) => client.sCard(`user:${userId}:sockets`),
+    REDIS_FAILED,
+  );
+  return count === REDIS_FAILED
+    ? localUsers.get(userId)?.size || 1
+    : count;
 }
 async function userDisconnected(userId) {
-  if (!ready()) return;
-  await redisClient.eval(
+  if (!ready()) {
+    localUsers.delete(userId);
+    return;
+  }
+  await safe(
+    (client) =>
+      client.eval(
     "if redis.call('SCARD', KEYS[1]) == 0 then redis.call('SREM', KEYS[2], ARGV[1]) end; return 1",
-    {
+        {
       keys: [`user:${userId}:sockets`, "online_users"],
       arguments: [userId],
-    },
+        },
+      ),
+    undefined,
   );
 }
 
 async function userJoinedRoom(userId, roomId, socketId = `legacy:${userId}`) {
+  localJoinRoom(userId, roomId, socketId);
   if (!ready()) return;
-  await redisClient
-    .multi()
-    .sAdd(roomUserSocketsKey(roomId, userId), socketId)
-    .sAdd(socketRoomsKey(socketId), roomId)
-    .sAdd(userRoomsKey(userId), roomId)
-    .sAdd(`room:${roomId}:online`, userId)
-    .exec();
+  await safe(
+    async (client) =>
+      client
+        .multi()
+        .sAdd(roomUserSocketsKey(roomId, userId), socketId)
+        .sAdd(socketRoomsKey(socketId), roomId)
+        .sAdd(userRoomsKey(userId), roomId)
+        .sAdd(`room:${roomId}:online`, userId)
+        .exec(),
+    REDIS_FAILED,
+  );
 }
 async function userLeftRoom(
   userId,
@@ -110,9 +207,12 @@ async function userLeftRoom(
   socketId = `legacy:${userId}`,
   expiredAt = null,
 ) {
-  if (!ready()) return false;
-  return Boolean(
-    await redisClient.eval(
+  const localChanged =
+    expiredAt === null ? localLeaveRoom(userId, roomId, socketId) : false;
+  if (!ready()) return localChanged;
+  const result = await safe(
+    (client) =>
+      client.eval(
       `
     local deadline = redis.call('ZSCORE', KEYS[7], ARGV[5])
     if ARGV[4] ~= '' and deadline and tonumber(deadline) > tonumber(ARGV[4]) then return 0 end
@@ -121,7 +221,7 @@ async function userLeftRoom(
     if redis.call('SCARD', KEYS[1]) > 0 then return 0 end
     redis.call('DEL', KEYS[1], KEYS[6]); redis.call('SREM', KEYS[3], ARGV[2]); redis.call('SREM', KEYS[4], ARGV[3]); return 1
   `,
-      {
+        {
         keys: [
           roomUserSocketsKey(roomId, userId),
           socketRoomsKey(socketId),
@@ -138,14 +238,27 @@ async function userLeftRoom(
           expiredAt === null ? "" : String(expiredAt),
           memberKey(userId, socketId),
         ],
-      },
-    ),
+        },
+      ),
+    REDIS_FAILED,
   );
+  if (result === REDIS_FAILED) return localChanged;
+  if (result) localLeaveRoom(userId, roomId, socketId);
+  return Boolean(result);
 }
 async function revokeUserRoom(userId, roomId) {
-  if (!ready()) return;
   await activity.clearRoomUser(roomId, userId);
-  await redisClient.eval(
+  for (const socketId of localRooms.get(roomId)?.get(userId) || []) {
+    localSocketRooms.get(socketId)?.delete(roomId);
+    const socket = localSockets.get(socketId);
+    if (socket?.roomId === roomId) socket.roomId = null;
+  }
+  localRooms.get(roomId)?.delete(userId);
+  if (localRooms.get(roomId)?.size === 0) localRooms.delete(roomId);
+  if (!ready()) return;
+  await safe(
+    (client) =>
+      client.eval(
     `
     local sockets = redis.call('SMEMBERS', KEYS[1])
     for _, id in ipairs(sockets) do
@@ -155,7 +268,7 @@ async function revokeUserRoom(userId, roomId) {
     end
     redis.call('DEL', KEYS[1], KEYS[4]); redis.call('SREM', KEYS[2], ARGV[1]); redis.call('SREM', KEYS[3], ARGV[2]); return 1
   `,
-    {
+        {
       keys: [
         roomUserSocketsKey(roomId, userId),
         userRoomsKey(userId),
@@ -163,21 +276,45 @@ async function revokeUserRoom(userId, roomId) {
         `typing:${roomId}:${userId}`,
       ],
       arguments: [roomId, userId],
-    },
+        },
+      ),
+    undefined,
   );
 }
 
 // Compare the deadline inside the same Lua transaction as removal. A heartbeat
 // racing the sweep wins if it has already renewed this device's lease.
+async function removeLocalSocket(userId, socketId, clearActivity = true) {
+  const localRoomsLeft = [];
+  for (const roomId of localSocketRooms.get(socketId) || []) {
+    if (localLeaveRoom(userId, roomId, socketId))
+      localRoomsLeft.push(roomId);
+  }
+  localSocketRooms.delete(socketId);
+  localSockets.delete(socketId);
+  const localUserSockets = localUsers.get(userId);
+  localUserSockets?.delete(socketId);
+  if (localUserSockets?.size === 0) localUsers.delete(userId);
+  const localActivityRooms = clearActivity
+    ? await activity.clearSocket(userId, socketId)
+    : [];
+  return [...new Set([...localRoomsLeft, ...localActivityRooms])];
+}
 async function removeSocket(userId, socketId, expiredAt = null) {
-  if (!ready()) return [];
+  if (!ready()) return removeLocalSocket(userId, socketId);
   const deadline =
     expiredAt === null
       ? null
-      : await redisClient.zScore(LEASES, memberKey(userId, socketId));
+      : await safe(
+          (client) => client.zScore(LEASES, memberKey(userId, socketId)),
+          REDIS_FAILED,
+        );
+  if (deadline === REDIS_FAILED) return removeLocalSocket(userId, socketId);
   if (deadline !== null && Number(deadline) > expiredAt) return [];
   const activityRooms = [];
-  const rooms = await redisClient.eval(
+  const rooms = await safe(
+    (client) =>
+      client.eval(
     `
     local deadline = redis.call('ZSCORE', KEYS[1], ARGV[1])
     if ARGV[4] ~= '' and deadline and tonumber(deadline) > tonumber(ARGV[4]) then return {} end
@@ -196,7 +333,7 @@ async function removeSocket(userId, socketId, expiredAt = null) {
     if redis.call('SCARD', KEYS[4]) == 0 then redis.call('SREM', KEYS[6], ARGV[2]) end
     return rooms
   `,
-    {
+        {
       keys: [
         LEASES,
         socketKey(socketId),
@@ -211,23 +348,53 @@ async function removeSocket(userId, socketId, expiredAt = null) {
         socketId,
         expiredAt === null ? "" : String(expiredAt),
       ],
-    },
+        },
+      ),
+    REDIS_FAILED,
   );
+  if (rooms === REDIS_FAILED) return removeLocalSocket(userId, socketId);
+  const localResult = await removeLocalSocket(userId, socketId, false);
   // The lease is gone before clearing activity, so delayed starts cannot revive it.
-  if (!(await redisClient.zScore(LEASES, memberKey(userId, socketId))))
+  const remainingLease = await safe(
+    (client) => client.zScore(LEASES, memberKey(userId, socketId)),
+    REDIS_FAILED,
+  );
+  if (remainingLease === REDIS_FAILED) return localResult;
+  if (!remainingLease)
     activityRooms.push(...(await activity.clearSocket(userId, socketId)));
   return [...new Set([...rooms, ...activityRooms])];
 }
 async function cleanupSocketFromRooms(userId, socketId) {
   return removeSocket(userId, socketId);
 }
-async function socketDisconnected(userId, socketId) {
-  await removeSocket(userId, socketId);
-  return ready() ? redisClient.sCard(`user:${userId}:sockets`) : 0;
+async function socketDisconnected(userId, _socketId) {
+  if (!ready()) return localUsers.get(userId)?.size || 0;
+  const count = await safe(
+    (client) => client.sCard(`user:${userId}:sockets`),
+    REDIS_FAILED,
+  );
+  return count === REDIS_FAILED
+    ? localUsers.get(userId)?.size || 0
+    : count;
 }
 async function cleanupUserFromRooms(userId) {
-  if (!ready()) return [];
-  const rooms = await redisClient.sMembers(userRoomsKey(userId));
+  const localUserRooms = [...new Set(
+    [...(localUsers.get(userId) || [])].flatMap((socketId) => [
+      ...(localSocketRooms.get(socketId) || []),
+    ]),
+  )];
+  if (!ready()) {
+    for (const roomId of localUserRooms) await revokeUserRoom(userId, roomId);
+    return localUserRooms;
+  }
+  const rooms = await safe(
+    (client) => client.sMembers(userRoomsKey(userId)),
+    REDIS_FAILED,
+  );
+  if (rooms === REDIS_FAILED) {
+    for (const roomId of localUserRooms) await revokeUserRoom(userId, roomId);
+    return localUserRooms;
+  }
   for (const room of rooms) await revokeUserRoom(userId, room);
   return rooms;
 }
@@ -235,43 +402,56 @@ async function cleanupUserFromRooms(userId) {
 async function devicesForUsers(userIds, now = Date.now()) {
   const devices = new Map(userIds.map((id) => [id, []]));
   if (!userIds.length) return devices;
-  const indexes = redisClient.multi();
-  for (const id of userIds) indexes.sMembers(`user:${id}:sockets`);
-  const groups = await indexes.exec();
-  const entries = groups.flatMap((ids, index) =>
-    ids.map((id) => ({ id, userId: userIds[index] })),
+  const local = localDevicesForUsers(userIds);
+  if (!ready()) return local;
+  const result = await safe(
+    async (client) => {
+      const indexes = client.multi();
+      for (const id of userIds) indexes.sMembers(`user:${id}:sockets`);
+      const groups = await indexes.exec();
+      const entries = groups.flatMap((ids, index) =>
+        ids.map((id) => ({ id, userId: userIds[index] })),
+      );
+      if (!entries.length) return devices;
+      const batch = client.multi();
+      for (const { id, userId } of entries)
+        batch.zScore(LEASES, memberKey(userId, id)).hGetAll(socketKey(id));
+      const results = await batch.exec();
+      entries.forEach(({ id, userId }, index) => {
+        if (
+          Number(results[index * 2]) > now &&
+          results[index * 2 + 1]?.userId === userId
+        )
+          devices.get(userId).push({ id, ...results[index * 2 + 1] });
+      });
+      return devices;
+    },
+    REDIS_FAILED,
   );
-  if (!entries.length) return devices;
-  const batch = redisClient.multi();
-  for (const { id, userId } of entries)
-    batch.zScore(LEASES, memberKey(userId, id)).hGetAll(socketKey(id));
-  const results = await batch.exec();
-  entries.forEach(({ id, userId }, index) => {
-    if (
-      Number(results[index * 2]) > now &&
-      results[index * 2 + 1]?.userId === userId
-    )
-      devices.get(userId).push({ id, ...results[index * 2 + 1] });
-  });
-  return devices;
+  return result === REDIS_FAILED ? local : result;
 }
 async function liveDevices(userId, now) {
   return (await devicesForUsers([userId], now)).get(userId);
 }
 async function isUserOnline(userId) {
-  return ready() && (await liveDevices(userId)).length > 0;
+  return ready()
+    ? (await liveDevices(userId)).length > 0
+    : (localUsers.get(userId)?.size || 0) > 0;
 }
 async function isViewingRoom(userId, roomId) {
-  return (
-    ready() &&
-    (await liveDevices(userId)).some(
-      (device) => device.foreground === "1" && device.roomId === roomId,
-    )
+  return (await liveDevices(userId)).some(
+    (device) =>
+      (device.foreground === "1" || device.foreground === true) &&
+      device.roomId === roomId,
   );
 }
 async function getOnlineUsers() {
-  if (!ready()) return [];
-  const ids = await redisClient.sMembers("online_users");
+  if (!ready()) return [...localUsers.keys()];
+  const ids = await safe(
+    (client) => client.sMembers("online_users"),
+    REDIS_FAILED,
+  );
+  if (ids === REDIS_FAILED) return [...localUsers.keys()];
   return (
     await Promise.all(
       ids.map(async (id) => ((await isUserOnline(id)) ? id : null)),
@@ -285,13 +465,24 @@ async function getRoomViewingUsers(roomId) {
   return roomDeviceUsers(roomId, true);
 }
 async function roomDeviceUsers(roomId, viewingOnly) {
-  if (!ready()) return [];
-  const ids = await redisClient.sMembers(`room:${roomId}:online`);
+  if (!ready()) return localRoomDeviceUsers(roomId, viewingOnly);
+  const ids = await safe(
+    (client) => client.sMembers(`room:${roomId}:online`),
+    REDIS_FAILED,
+  );
+  if (ids === REDIS_FAILED) return localRoomDeviceUsers(roomId, viewingOnly);
   if (!ids.length) return [];
   const devices = await devicesForUsers(ids);
-  const batch = redisClient.multi();
-  for (const id of ids) batch.sMembers(roomUserSocketsKey(roomId, id));
-  const subscriptions = await batch.exec();
+  const subscriptions = await safe(
+    async (client) => {
+      const batch = client.multi();
+      for (const id of ids) batch.sMembers(roomUserSocketsKey(roomId, id));
+      return batch.exec();
+    },
+    REDIS_FAILED,
+  );
+  if (subscriptions === REDIS_FAILED)
+    return localRoomDeviceUsers(roomId, viewingOnly);
   return ids.filter((id, index) => {
     const subscribed = new Set(subscriptions[index]);
     return devices
@@ -327,7 +518,6 @@ const unavailable = (roomId) => ({
   checkedAt: Date.now(),
 });
 async function getRoomPresence(roomId, db = { query }) {
-  if (!ready()) return unavailable(roomId);
   try {
     const members = await db.query(
       "SELECT user_id FROM room_members WHERE room_id = $1",
@@ -345,7 +535,9 @@ async function getRoomPresence(roomId, db = { query }) {
       if (devices.length) onlineUserIds.push(id);
       if (
         devices.some(
-          (device) => device.foreground === "1" && device.roomId === roomId,
+          (device) =>
+            (device.foreground === "1" || device.foreground === true) &&
+            device.roomId === roomId,
         )
       )
         viewingUserIds.push(id);
@@ -403,21 +595,30 @@ function filterPresence(snapshot, viewerId, pairs = []) {
 }
 async function publishRoomPresence(io, roomId, db = { query }, actorId = null) {
   const adapter = io.of?.("/").adapter;
+  const localAdapterUnavailable =
+    adapter?.pubClient &&
+    (!adapter.pubClient.isReady || !isRedisReady());
+  const targetIo = localAdapterUnavailable ? io.local || io : io;
   const snapshot = await getRoomPresence(roomId, db);
-  if (adapter?.pubClient && !adapter.pubClient.isReady) {
-    (io.local || io).to(roomId).emit("room-presence", unavailable(roomId));
-    return;
-  }
   // fetchSockets supplies the intersection of room subscription and recipient
   // identity, including devices on other instances. Never use a union of rooms.
-  if (!io.in) {
-    io.to(roomId).emit("room-presence", unavailable(roomId));
+  if (!targetIo.in) {
+    targetIo.to(roomId).emit("room-presence", unavailable(roomId));
     return;
   }
-  const subscribers = await io.in(roomId).fetchSockets();
+  let subscribers;
+  try {
+    subscribers = await targetIo.in(roomId).fetchSockets();
+  } catch (error) {
+    console.warn("Could not fetch presence subscribers", {
+      message: error.message,
+    });
+    targetIo.to(roomId).emit("room-presence", unavailable(roomId));
+    return;
+  }
   const members = new Set(snapshot.memberIds || []);
   if (!snapshot.available) {
-    io.to(roomId).emit("room-presence", unavailable(roomId));
+    targetIo.to(roomId).emit("room-presence", unavailable(roomId));
     return;
   }
   const pairs = await db.query(
@@ -456,7 +657,7 @@ async function publishRoomPresence(io, roomId, db = { query }, actorId = null) {
         .filter((row) => row.last_seen && row.last_active_at)
         .map((row) => [row.id, row.last_active_at]),
     );
-    const target = io.to(socketIds);
+    const target = targetIo.to(socketIds);
     target.emit("room-presence", payload);
     target.emit("room-typing", payload);
     if (actorId) {
@@ -517,9 +718,14 @@ async function publishUserPresence(io, userId) {
 
 async function sweepStaleSockets(now = Date.now()) {
   if (!ready()) return { userIds: [], roomIds: [] };
-  const expired = await redisClient.zRangeByScore(LEASES, 0, now, {
-    LIMIT: { offset: 0, count: 500 },
-  });
+  const expired = await safe(
+    (client) =>
+      client.zRangeByScore(LEASES, 0, now, {
+        LIMIT: { offset: 0, count: 500 },
+      }),
+    REDIS_FAILED,
+  );
+  if (expired === REDIS_FAILED) return { userIds: [], roomIds: [] };
   const users = new Set();
   const rooms = new Set();
   for (const member of expired) {
@@ -539,62 +745,75 @@ async function sweepStaleUsers() {
 // incremental and each removal rechecks its lease atomically.
 async function reconcilePresenceIndexes() {
   if (!ready()) return;
-  for (const key of await scanKeys("user:*:sockets")) {
-    const userId = key.split(":")[1];
-    for (const id of await redisClient.sMembers(key)) {
-      if (!(await redisClient.zScore(LEASES, memberKey(userId, id))))
+  await safe(
+    async (client) => {
+    for (const key of await scanKeys("user:*:sockets", client)) {
+      const userId = key.split(":")[1];
+      for (const id of await client.sMembers(key)) {
+        if (!(await client.zScore(LEASES, memberKey(userId, id))))
+          await removeSocket(userId, id, Date.now());
+        if (!isRedisReady()) return;
+      }
+    }
+    for (const key of await scanKeys("room:*:user:*:sockets", client)) {
+      const [, roomId, , userId] = key.split(":");
+      for (const id of await client.sMembers(key)) {
+        await userLeftRoom(userId, roomId, id, Date.now());
+        if (!isRedisReady()) return;
+      }
+    }
+    for (const key of await scanKeys("presence:socket:*", client)) {
+      const id = key.slice("presence:socket:".length);
+      const userId = await client.hGet(key, "userId");
+      if (userId && !(await client.zScore(LEASES, memberKey(userId, id))))
         await removeSocket(userId, id, Date.now());
+      if (!isRedisReady()) return;
     }
-  }
-  for (const key of await scanKeys("room:*:user:*:sockets")) {
-    const [, roomId, , userId] = key.split(":");
-    for (const id of await redisClient.sMembers(key))
-      await userLeftRoom(userId, roomId, id, Date.now());
-  }
-  for (const key of await scanKeys("presence:socket:*")) {
-    const id = key.slice("presence:socket:".length);
-    const userId = await redisClient.hGet(key, "userId");
-    if (userId && !(await redisClient.zScore(LEASES, memberKey(userId, id))))
-      await removeSocket(userId, id, Date.now());
-  }
-  for (const key of await scanKeys("room:*:online")) {
-    const roomId = key.split(":")[1];
-    for (const userId of await redisClient.sMembers(key)) {
-      await redisClient.eval(
-        `
+    for (const key of await scanKeys("room:*:online", client)) {
+      const roomId = key.split(":")[1];
+      for (const userId of await client.sMembers(key)) {
+        await client.eval(
+          `
         if redis.call('SCARD', KEYS[1]) == 0 then
           redis.call('SREM', KEYS[2], ARGV[1]); redis.call('SREM', KEYS[3], ARGV[2])
         end; return 1
       `,
-        {
-          keys: [roomUserSocketsKey(roomId, userId), key, userRoomsKey(userId)],
-          arguments: [userId, roomId],
-        },
-      );
+          {
+            keys: [
+              roomUserSocketsKey(roomId, userId),
+              key,
+              userRoomsKey(userId),
+            ],
+            arguments: [userId, roomId],
+          },
+        );
+      }
     }
-  }
-  for (const key of await scanKeys("user:*:rooms")) {
-    const userId = key.split(":")[1];
-    for (const roomId of await redisClient.sMembers(key)) {
-      await redisClient.eval(
-        `
+    for (const key of await scanKeys("user:*:rooms", client)) {
+      const userId = key.split(":")[1];
+      for (const roomId of await client.sMembers(key)) {
+        await client.eval(
+          `
         if redis.call('SCARD', KEYS[1]) == 0 then
           redis.call('SREM', KEYS[2], ARGV[1]); redis.call('SREM', KEYS[3], ARGV[2])
         end; return 1
       `,
-        {
-          keys: [
-            roomUserSocketsKey(roomId, userId),
-            key,
-            `room:${roomId}:online`,
-          ],
-          arguments: [roomId, userId],
-        },
-      );
+          {
+            keys: [
+              roomUserSocketsKey(roomId, userId),
+              key,
+              `room:${roomId}:online`,
+            ],
+            arguments: [roomId, userId],
+          },
+        );
+      }
     }
-  }
-  for (const userId of await redisClient.sMembers("online_users"))
-    await userDisconnected(userId);
+    for (const userId of await client.sMembers("online_users"))
+      await userDisconnected(userId);
+    },
+    undefined,
+  );
 }
 const sweeps = new Map();
 function startHeartbeatSweep(io) {
@@ -602,15 +821,19 @@ function startHeartbeatSweep(io) {
   let running = false;
   let lastReconciled = 0;
   const run = async () => {
-    if (running || !ready()) return;
+    if (
+      running ||
+      !ready() ||
+      (io.engine && io.engine.clientsCount === 0)
+    )
+      return;
     running = true;
     try {
-      if (Date.now() - lastReconciled > 60000) {
+      if (Date.now() - lastReconciled > 60 * 60 * 1000) {
         await reconcilePresenceIndexes();
         lastReconciled = Date.now();
       }
       const { userIds, roomIds } = await sweepStaleSockets();
-      roomIds.push(...(await activity.sweepExpired()));
       for (const user of userIds) await publishUserPresence(io, user);
       for (const room of roomIds) await publishRoomPresence(io, room);
     } catch (error) {
@@ -621,7 +844,7 @@ function startHeartbeatSweep(io) {
       running = false;
     }
   };
-  const timer = setInterval(() => trackCleanup(run()), 10000);
+  const timer = setInterval(() => trackCleanup(run()), 60 * 1000);
   timer.unref?.();
   sweeps.set(io, timer);
 }

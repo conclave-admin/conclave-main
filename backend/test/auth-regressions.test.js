@@ -91,3 +91,41 @@ test("auth rate limits apply to both address and normalized account key", async 
     "the same account is limited across source addresses and letter case",
   );
 });
+
+test("single-instance shared limiter falls back to local buckets", async () => {
+  const previous = process.env.SOCKET_REDIS_ADAPTER;
+  process.env.SOCKET_REDIS_ADAPTER = "false";
+  try {
+    const id = `single-instance-${Date.now()}`;
+    assert.equal(
+      await rateLimit.consumeShared(id, { max: 1, windowMs: 60_000 }),
+      true,
+    );
+    assert.equal(
+      await rateLimit.consumeShared(id, { max: 1, windowMs: 60_000 }),
+      false,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.SOCKET_REDIS_ADAPTER;
+    else process.env.SOCKET_REDIS_ADAPTER = previous;
+  }
+});
+
+test("rate-limit middleware skips preflight and static asset requests", async () => {
+  const limiter = rateLimit({ max: 0 });
+  for (const req of [
+    { method: "OPTIONS", path: "/api/auth/login" },
+    { method: "GET", path: "/assets/app.js" },
+    { method: "GET", path: "/healthz" },
+  ]) {
+    let forwarded;
+    await limiter(
+      { ...req, baseUrl: "/api", ip: "192.0.2.20" },
+      null,
+      (error) => {
+        forwarded = error;
+      },
+    );
+    assert.equal(forwarded, undefined);
+  }
+});
