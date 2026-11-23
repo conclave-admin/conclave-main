@@ -1,3 +1,9 @@
+import IconDownload from "../../assets/icons/download.svg?react";
+import IconMessage from "../../assets/icons/message.svg?react";
+import IconPrevious from "../../assets/icons/chevron-left.svg?react";
+import IconNext from "../../assets/icons/chevron-right.svg?react";
+import IconPlus from "../../assets/icons/plus.svg?react";
+import IconMinus from "../../assets/icons/minus.svg?react";
 import {
   createContext,
   useContext,
@@ -7,14 +13,17 @@ import {
   useState,
 } from "react";
 import Modal from "../ui/Modal";
+import MessageSendState from "./MessageSendState";
 import useAttachmentImage from "../../hooks/useAttachmentImage";
 import useAttachmentDownload from "../../hooks/useAttachmentDownload";
 import { saveAttachmentToDevice } from "../../services/attachments.service";
+import useMediaQuery from "../../hooks/useMediaQuery";
 const Context = createContext(null);
 export const useMediaViewer = () => useContext(Context);
 
-function ViewerItem({ item, move, onJump, onClose }) {
+function ViewerItem({ item, move, onJump, onClose, deliveryActions }) {
   const { attachment, message } = item;
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const image = attachment.mime_type?.startsWith("image/");
   const preview = useAttachmentImage(attachment, { enabled: image });
   const download = useAttachmentDownload(attachment);
@@ -126,26 +135,37 @@ function ViewerItem({ item, move, onJump, onClose }) {
     if (blob) saveAttachmentToDevice(attachment, blob);
   };
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      data-media-offline={download.persisted ? "true" : "false"}
+      className="flex h-full min-h-0 flex-col"
+    >
       <div className="flex shrink-0 flex-wrap items-center justify-center gap-3 border-b border-line px-3 py-2 text-label">
         {image && (
           <>
             <button
               type="button"
+              className="viewer-icon-button"
+              title="Zoom out"
               aria-label="Zoom out"
               onClick={() => setZoom((v) => Math.max(1, v - 0.5))}
             >
-              −
+              <IconMinus className="h-5 w-5" aria-hidden="true" />
             </button>
             <span aria-live="polite">{Math.round(zoom * 100)}%</span>
             <button
               type="button"
+              className="viewer-icon-button"
+              title="Zoom in"
               aria-label="Zoom in"
               onClick={() => setZoom((v) => Math.min(4, v + 0.5))}
             >
-              +
+              <IconPlus className="h-5 w-5" aria-hidden="true" />
             </button>
-            <button type="button" onClick={() => setZoom(1)}>
+            <button
+              type="button"
+              className="min-h-11 rounded-full px-3 hover:bg-white/10"
+              onClick={() => setZoom(1)}
+            >
               Reset zoom
             </button>
           </>
@@ -154,25 +174,30 @@ function ViewerItem({ item, move, onJump, onClose }) {
           type="button"
           onClick={save}
           disabled={download.status === "downloading"}
-          className="text-brand disabled:opacity-50"
+          aria-label="Download"
+          title="Download"
+          className="viewer-icon-button disabled:opacity-50"
         >
-          Download
+          <IconDownload className="h-5 w-5" aria-hidden="true" />
         </button>
         {onJump && (
           <button
             type="button"
+            aria-label="Show message"
+            title="Show message"
+            className="viewer-icon-button"
             onClick={() => {
               onClose();
               onJump(message);
             }}
           >
-            Show message
+            <IconMessage className="h-5 w-5" aria-hidden="true" />
           </button>
         )}
       </div>
       <div
         data-testid="media-viewer-surface"
-        className="min-h-0 flex-1 overflow-auto bg-canvas p-3"
+        className="viewer-stage min-h-0 flex-1 overflow-auto p-3"
         style={{ touchAction: image ? "none" : "pan-y" }}
         onPointerDown={pointerDown}
         onPointerMove={pointerMove}
@@ -194,6 +219,8 @@ function ViewerItem({ item, move, onJump, onClose }) {
                 style={
                   zoom === 1
                     ? {
+                        height: "100%",
+                        width: "100%",
                         maxHeight: "100%",
                         maxWidth: "100%",
                         margin: "auto",
@@ -211,7 +238,7 @@ function ViewerItem({ item, move, onJump, onClose }) {
               <video
                 src={src}
                 controls
-                autoPlay
+                autoPlay={!reducedMotion}
                 playsInline
                 poster={attachment.preview_url || undefined}
                 aria-label={attachment.filename}
@@ -226,35 +253,25 @@ function ViewerItem({ item, move, onJump, onClose }) {
           </p>
         )}
       </div>
-      <div className="max-h-36 shrink-0 overflow-auto border-t border-line px-4 py-3 text-metadata">
+      <div className="viewer-caption max-h-36 shrink-0 overflow-auto px-4 py-3 text-metadata">
+        {message._outbox && deliveryActions && (
+          <MessageSendState
+            message={message}
+            onRetry={deliveryActions.onRetry}
+            onCancel={deliveryActions.onCancel}
+          />
+        )}
         <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
           {message.content}
         </p>
-        <p role="status">
-          {download.status === "downloading"
-            ? `Downloading ${Math.round(download.progress * 100)}%`
-            : download.status === "downloaded"
-              ? download.persisted
-                ? "Downloaded · available offline"
-                : "Available this visit · could not save offline"
-              : download.status === "failed"
-                ? "Download failed"
-                : "Original not downloaded"}
-        </p>
-        {download.status === "downloading" && (
+        {!download.automatic && download.status === "downloading" && (
           <>
-            <progress
-              max="1"
-              value={download.progress}
-              aria-label={`Downloading ${attachment.filename}`}
-              className="w-full accent-brand"
-            />
             <button type="button" onClick={download.cancel}>
               Cancel download
             </button>
           </>
         )}
-        {download.error && (
+        {!download.automatic && download.error && (
           <p role="alert" className="break-words text-error">
             {download.error}
           </p>
@@ -270,10 +287,54 @@ function ViewerItem({ item, move, onJump, onClose }) {
     </div>
   );
 }
-export function MediaViewerProvider({ items, onJump, children }) {
+function ViewerThumbnail({ item, selected, number, onSelect }) {
+  const preview = useAttachmentImage(item.attachment);
+  return (
+    <button
+      type="button"
+      aria-label={`View media ${number}`}
+      aria-pressed={selected}
+      onClick={onSelect}
+      className={`h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 ${selected ? "border-violet-400 ring-2 ring-violet-400/30" : "border-transparent opacity-60 hover:opacity-100"}`}
+    >
+      {preview.src ? (
+        <img src={preview.src} alt="" className="h-full w-full object-cover" />
+      ) : (
+        <span className="text-xs">{number}</span>
+      )}
+    </button>
+  );
+}
+export function MediaViewerProvider({
+  items,
+  onJump,
+  onView,
+  deliveryActions,
+  children,
+}) {
   const [activeKey, setActiveKey] = useState(null);
   const index = items.findIndex((item) => item.key === activeKey);
   const active = index >= 0 ? items[index] : null;
+  useEffect(() => {
+    if (!active || !onView) return undefined;
+    const view = () => {
+      if (
+        document.visibilityState === "visible" &&
+        document.hasFocus() &&
+        navigator.onLine !== false
+      )
+        Promise.resolve(onView(active.message)).catch(() => {});
+    };
+    view();
+    window.addEventListener("focus", view);
+    window.addEventListener("online", view);
+    document.addEventListener("visibilitychange", view);
+    return () => {
+      window.removeEventListener("focus", view);
+      window.removeEventListener("online", view);
+      document.removeEventListener("visibilitychange", view);
+    };
+  }, [active?.key, onView]);
   const close = () => setActiveKey(null);
   const move = (delta) =>
     setActiveKey((key) => {
@@ -290,7 +351,7 @@ export function MediaViewerProvider({ items, onJump, children }) {
           (entry) =>
             entry.attachment === attachment ||
             (attachment.id && entry.attachment.id === attachment.id) ||
-            entry.attachment.url === attachment.url,
+            (attachment.url && entry.attachment.url === attachment.url),
         );
         if (item) setActiveKey(item.key);
       },
@@ -302,6 +363,7 @@ export function MediaViewerProvider({ items, onJump, children }) {
       {children}
       <Modal
         open={Boolean(active)}
+        className="media-viewer-dialog"
         onClose={close}
         title={
           <span className="block max-w-[75vw] truncate">
@@ -318,21 +380,28 @@ export function MediaViewerProvider({ items, onJump, children }) {
                 disabled={index === 0}
                 aria-label="Previous media"
                 onClick={() => move(-1)}
-                className="disabled:opacity-30"
+                className="viewer-icon-button disabled:opacity-30"
               >
-                Previous
+                <IconPrevious className="h-6 w-6" aria-hidden="true" />
               </button>
-              <span>
-                {index + 1} of {items.length}
-              </span>
+              <div className="min-w-0 text-center">
+                {active.message.sender_name && (
+                  <p className="truncate font-semibold">
+                    {active.message.sender_name}
+                  </p>
+                )}
+                <span className="text-xs text-white/60">
+                  {index + 1} of {items.length}
+                </span>
+              </div>
               <button
                 type="button"
                 disabled={index === items.length - 1}
                 aria-label="Next media"
                 onClick={() => move(1)}
-                className="disabled:opacity-30"
+                className="viewer-icon-button disabled:opacity-30"
               >
-                Next
+                <IconNext className="h-6 w-6" aria-hidden="true" />
               </button>
             </div>
             <div className="min-h-0 flex-1">
@@ -342,8 +411,30 @@ export function MediaViewerProvider({ items, onJump, children }) {
                 move={move}
                 onJump={onJump}
                 onClose={close}
+                deliveryActions={deliveryActions}
               />
             </div>
+            {items.length > 1 && (
+              <div
+                className="viewer-filmstrip flex shrink-0 justify-center gap-2 overflow-x-auto p-3"
+                aria-label="Media thumbnails"
+              >
+                {items
+                  .slice(
+                    Math.max(0, index - 4),
+                    Math.min(items.length, index + 5),
+                  )
+                  .map((item, offset) => (
+                    <ViewerThumbnail
+                      key={item.key}
+                      item={item}
+                      selected={item.key === activeKey}
+                      number={Math.max(0, index - 4) + offset + 1}
+                      onSelect={() => setActiveKey(item.key)}
+                    />
+                  ))}
+              </div>
+            )}
           </div>
         )}
       </Modal>

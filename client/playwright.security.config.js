@@ -1,13 +1,14 @@
 import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "security-encryption.spec.js",
+  testMatch: "security-regressions.spec.js",
   outputDir: "./e2e/test-results/security",
   workers: 1,
   timeout: 120000,
   expect: { timeout: 25000 },
   use: {
     baseURL: "http://localhost:5188",
+    actionTimeout: 15000,
     launchOptions: {
       args: [
         "--use-fake-device-for-media-stream",

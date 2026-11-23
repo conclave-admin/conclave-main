@@ -8,7 +8,6 @@ import Spinner from "./components/ui/Spinner";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { PushProvider } from "./contexts/PushContext";
 import { SyncProvider } from "./contexts/SyncContext";
-import EncryptionLifecycle from "./components/settings/EncryptionLifecycle";
 import { RealtimeProvider } from "./contexts/RealtimeContext";
 import { OutboxProvider } from "./contexts/OutboxContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -23,19 +22,26 @@ const DecisionDetail = lazy(() => import("./pages/DecisionDetail"));
 const Login = lazy(() => import("./pages/Login"));
 const NewChat = lazy(() => import("./pages/NewChat"));
 const Notifications = lazy(() => import("./pages/Notifications"));
+const MemberProfile = lazy(() => import("./pages/MemberProfile"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Register = lazy(() => import("./pages/Register"));
 const AccountRecovery = lazy(() => import("./pages/AccountRecovery"));
-const Room = lazy(() => import("./pages/Room"));
+const Room = lazy(() => import("./pages/ConversationRoute"));
 const RoomInfo = lazy(() => import("./pages/RoomInfo"));
 const Settings = lazy(() => import("./pages/Settings"));
 const MessageActivity = lazy(() => import("./pages/MessageActivity"));
 const Tasks = lazy(() => import("./pages/Tasks"));
-const ProjectsIndex = lazy(() => import("./pages/WorkProjects").then((m) => ({ default: m.ProjectsIndex })));
-const ProjectDetail = lazy(() => import("./pages/WorkProjects").then((m) => ({ default: m.ProjectDetail })));
+const ProjectsIndex = lazy(() =>
+  import("./pages/WorkProjects").then((m) => ({ default: m.ProjectsIndex })),
+);
+const ProjectDetail = lazy(() =>
+  import("./pages/WorkProjects").then((m) => ({ default: m.ProjectDetail })),
+);
 const WorkInbox = lazy(() => import("./pages/WorkInbox"));
 const WorkSearch = lazy(() => import("./pages/WorkSearch"));
 const RoomBrief = lazy(() => import("./pages/RoomBrief"));
+const TeamHome = lazy(() => import("./pages/TeamHome"));
+const JoinTeam = lazy(() => import("./pages/JoinTeam"));
 
 // Keep public-page illustrations and content outside the signed-in app bundle.
 const Landing = lazy(() => import("./pages/Landing"));
@@ -79,7 +85,6 @@ export default function App() {
     <ThemeProvider>
       <ToastProvider>
         <AuthProvider>
-          <EncryptionLifecycle />
           <RealtimeProvider>
             <SyncProvider>
               <PushProvider>
@@ -141,8 +146,14 @@ export default function App() {
                           />
                           <Route path="/new" element={<NewChat />} />
                           <Route path="/discover" element={<DiscoverRooms />} />
+                          <Route path="/teams" element={<TeamHome />} />
+                          <Route path="/teams/:teamId" element={<TeamHome />} />
 
                           <Route path="/profile" element={<Profile />} />
+                          <Route
+                            path="/profile/:userId"
+                            element={<MemberProfile />}
+                          />
                           <Route path="/settings" element={<Settings />} />
                           <Route
                             path="/notifications"
@@ -162,14 +173,21 @@ export default function App() {
                           />
                           <Route path="/tasks" element={<Tasks />} />
                           <Route path="/work" element={<ProjectsIndex />} />
-                          <Route path="/work/projects/:projectId" element={<ProjectDetail />} />
+                          <Route
+                            path="/work/projects/:projectId"
+                            element={<ProjectDetail />}
+                          />
                           <Route path="/work/inbox" element={<WorkInbox />} />
                           <Route path="/work/search" element={<WorkSearch />} />
-                          <Route path="/work/rooms/:roomId/brief" element={<RoomBrief />} />
+                          <Route
+                            path="/work/rooms/:roomId/brief"
+                            element={<RoomBrief />}
+                          />
                         </Route>
                       </Route>
 
                       <Route path="/join" element={<JoinRoom />} />
+                      <Route path="/join-team" element={<JoinTeam />} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </Suspense>

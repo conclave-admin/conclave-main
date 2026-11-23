@@ -53,7 +53,6 @@ export function createOutbox({
   upload,
   prepare,
   prepareMetadata,
-  prepareEncryption,
   prepareSend,
   cancelUpload,
   remember,
@@ -169,10 +168,6 @@ export function createOutbox({
           };
           await checkpoint(item);
         }
-        if (prepareEncryption && !item.media.encrypted) {
-          item = await prepareEncryption(item);
-          await checkpoint(item);
-        }
         const attachment = await upload(
           item.media.uploadBlob || item.media.blob,
           {
@@ -183,10 +178,8 @@ export function createOutbox({
               item = { ...item, media: { ...item.media, session } };
               await checkpoint(item);
             },
-            metadata: item.media.encrypted ? {} : item.media.metadata,
-            filename: item.media.encrypted
-              ? "encrypted.bin"
-              : item.media.filename,
+            metadata: item.media.metadata,
+            filename: item.media.filename,
             signal: controller.signal,
             onProgress: (progress) => {
               if (!stopped && !controller.signal.aborted)
@@ -207,9 +200,7 @@ export function createOutbox({
         await checkpoint(item);
       }
       if (item.media && item.payload.attachments?.[0]) {
-        await remember(item.payload.attachments[0].url, item.media.blob, {
-          encrypted: item.media.encrypted,
-        });
+        await remember(item.payload.attachments[0].url, item.media.blob);
       }
       if (!canSend() || controller.signal.aborted || stopped)
         throw new DOMException("Offline", "AbortError");
@@ -273,12 +264,6 @@ export function createOutbox({
           payload: { ...item.payload, attachments: [] },
           sendAttempted: false,
         };
-      if (
-        status === 409 &&
-        error.definitive &&
-        /Encryption recipients changed/.test(error.message || "")
-      )
-        item = { ...item, wirePayload: undefined, sendAttempted: false };
       const retryable =
         !error.permanent &&
         (!status || status >= 500 || [408, 429].includes(status));

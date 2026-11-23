@@ -1,6 +1,6 @@
 import { NavLink, useLocation, useMatch } from "react-router-dom";
 import { useNotifications } from "@/contexts/NotificationsContext";
-import wordmarkUrl from "@/assets/brand/conclave-wordmark.svg";
+import Logo from "./landing/Logo";
 import IconMenu from "../assets/icons/menu.svg?react";
 import IconNotify from "../assets/icons/notify.svg?react";
 
@@ -70,13 +70,7 @@ export default function Navbar({
             aria-label="Conclave, home"
             className="md:hidden"
           >
-            <img
-              src={wordmarkUrl}
-              alt=""
-              width="128"
-              height="34"
-              className="h-8 w-auto"
-            />
+            <Logo />
           </NavLink>
 
           {!inChats && (
@@ -113,7 +107,7 @@ export default function Navbar({
               type="button"
               onClick={onMenuClick}
               aria-label={menuLabel}
-              className={iconButton}
+              className={`${iconButton} md:hidden`}
             >
               <IconMenu className="h-6 w-6" aria-hidden="true" />
             </button>

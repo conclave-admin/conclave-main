@@ -115,13 +115,11 @@ router.get(
   wrap(async (req, res) => {
     const room = (
       await query(
-        "SELECT r.encryption_mode FROM rooms r JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$2 WHERE r.id=$1",
+        "SELECT r.id FROM rooms r JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$2 WHERE r.id=$1",
         [req.params.roomId, req.user.id],
       )
     ).rows[0];
     if (!room) throw new ApiError(404, "Conversation not found");
-    if (room.encryption_mode === "e2ee-v1")
-      throw new ApiError(409, "Browse encrypted links on this device");
     const before = req.query.before;
     if (
       before !== undefined &&

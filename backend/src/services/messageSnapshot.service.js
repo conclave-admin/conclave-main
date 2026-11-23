@@ -14,7 +14,7 @@ async function snapshots(roomId, viewerId, ids) {
     )
       throw new ApiError(403, "You are not a member of this room");
     const result = await db.query(
-      `SELECT m.id,m.encrypted_payload,m.state_version,m.client_id,m.album_id,m.forwarded,m.room_sequence,m.room_id,m.sender_id,
+      `SELECT m.id,m.state_version,m.client_id,m.album_id,m.forwarded,m.room_sequence,m.room_id,m.sender_id,
       u.profile_version AS sender_profile_version,u.display_name AS sender_name,u.avatar_url AS sender_avatar,
       CASE WHEN m.deleted_at IS NOT NULL THEN NULL ELSE m.content END AS content,
       m.deleted_at IS NOT NULL AS is_deleted,m.thread_root_id,m.expires_at,m.reply_to_id,m.edited_at,m.deleted_at,m.created_at,

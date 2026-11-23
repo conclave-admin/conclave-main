@@ -14,9 +14,8 @@ users; private room content remains membership-restricted.
 - Vercel: the static React build from `client/`.
 - Render: the persistent Express + Socket.IO process from `backend/`.
 - Supabase: PostgreSQL, using a session-pooler connection.
-- Redis: optional; configure `REDIS_URL` for multi-instance sharing.
-- Cloudinary: required for uploads; configure `CLOUDINARY_CLOUD_NAME`,
-  `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` in the backend environment.
+- Redis: a compatible TCP Redis service, configured through `REDIS_URL`.
+- R2: primary upload storage; configure the R2 variables in `backend/.env.example`, bucket CORS, multipart lifecycle, and preview Worker bindings. Cloudinary credentials are needed only to support retained legacy files.
 
 This preserves the existing architecture. Render supports persistent WebSocket
 connections. Free web services can sleep, so allow for slow initial connections;
@@ -41,7 +40,7 @@ Sources: [Render WebSockets](https://render.com/docs/websocket),
    accepting real users or user-generated content.
 5. Perform a backup restore drill against a disposable database and record the
    verified recovery point and recovery time. Configure provider alerts for API,
-   PostgreSQL, Redis and Cloudinary outages.
+   PostgreSQL, Redis and object-storage outages.
 
 ## Local checks and CI
 
@@ -220,28 +219,25 @@ and historical acknowledgement times cannot be reconstructed. No new environment
 variables or services are required. Deploy the API and client together so ticks
 use send-time summaries and automatic reads use foreground viewport checks.
 
-## Phase 5 privacy and encryption rollout
+## Privacy and account-security rollout
 
-1. Apply migrations `036_privacy_and_account_security.sql` and
-   `037_device_encryption.sql` with `cd backend && npm run migrate` before
-   starting the updated API. Existing rooms retain server-readable history.
-2. Deploy API instances and client together. Redis adapter and durable sync
-   dispatcher must run on each instance for session/device invalidations.
-3. Configure the Resend API with `RESEND_API_KEY`, `RESEND_FROM` (a sender
-   on a verified domain),
-   `APP_PUBLIC_URL`, and stable `MAIL_ENCRYPTION_KEY` (32 random bytes in
-   base64url). Use backend `.env.example`; never expose secrets through Vite.
-   Mail jobs are encrypted in PostgreSQL and dispatched by the API every five
-   seconds. Keep the queue key identical across instances. No extra mail daemon
-   is required. Test actual Resend inbox delivery before enabling recovery to users.
-4. Serve HTTPS and support Web Locks, IndexedDB, and WebAssembly. Back up the
-   database and mail queue key securely; those backups cannot decrypt message
-   content without device keys. Users must save their separate recovery keys.
-5. Read [PRIVACY_AND_ENCRYPTION.md](docs/PRIVACY_AND_ENCRYPTION.md) before product
-   claims. The custom protocol has no forward secrecy/ratchet or independent
-   audit; schedule independent security review and real-device testing before
-   broad rollout. `group` and `department` remain server-readable collaboration
-   even if membership is restricted; explicit `private` rooms and DMs encrypt.
+1. Back up the database and inspect migration 061 before rollout: it removes
+   former E2EE conversations and associated data and queues storage cleanup.
+   Run the complete migration chain with `npm run migrate` from the repository
+   root only against the intended deployment database. Historical migration 037
+   remains part of that chain; it is not a feature to enable independently.
+2. Deploy API and client together. Run the Redis adapter and durable sync
+   dispatcher on each instance for session invalidation and shared rate limits.
+3. Configure `RESEND_API_KEY`, a verified `RESEND_FROM`, `APP_PUBLIC_URL`, and
+   stable `MAIL_ENCRYPTION_KEY` as described in `backend/.env.example`. Keep
+   secrets on the server. Test real verification and recovery inbox delivery.
+4. Apply migrations 062 and 063 before deploying notification preferences.
+   Message previews and in-app alerts default on; users can disable them.
+   Hidden tabs defer interruptions to browser push. Complete real push acceptance.
+5. Serve HTTPS. Messages and attachments are server-readable, not end-to-end
+   encrypted. Protect database/storage backups and the mail queue key. See
+   [current privacy policy](docs/PRIVACY_AND_ENCRYPTION.md) and record deployment
+   evidence in [the release checklist](docs/RELEASE_EVIDENCE.md).
 
 Verification: run `npm test && npm run test:db` from `backend`, then `npm test`,
 `npx playwright test --config playwright.security.config.js`, and

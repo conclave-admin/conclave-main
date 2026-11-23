@@ -4,7 +4,7 @@ Source: `issue.md`, reviewed 23 October 2026. These are drafts for manual creati
 
 Use each **Title** as the GitHub issue title and copy its description, source, dependencies, and acceptance criteria into the body. Labels are suggestions; create or map them to your repository’s labels. Draft IDs below are local references, not GitHub issue numbers.
 
-Completed Phase 1–3 and Phase 5 implementation items are excluded. Remaining Phase 4–5 release acceptance is included. Related open checkboxes are grouped, with source IDs retained. Where existing work overlaps an open checkbox, the draft asks for verification and demonstrated fixes rather than assuming the feature is absent. The detailed Phase 5 section takes precedence over its stale “Not started” entry in the tracker summary.
+Completed Phase 1–3 and Phase 5 implementation items are excluded. Remaining Phase 4–5 release acceptance is included. Related open checkboxes are grouped, with source IDs retained. Where existing work overlaps an open checkbox, the draft asks for verification and demonstrated fixes rather than assuming the feature is absent. Current messages and attachments are server-readable after migration 061; historical encryption work is retired.
 
 Phase 6 drafts GH-06–GH-16 are retained with completion status for tracking.
 Their local implementation is complete; see `docs/ROOMS_AND_PERSONAL_HISTORY.md`
@@ -12,7 +12,7 @@ and the latest Phase 6 progress entry in `issue.md` for evidence and rollout.
 
 ## Suggested order
 
-1. P1: verify live push/email and complete encryption security/storage/protocol reviews.
+1. P1: verify live push/email and verify current server-readable privacy controls.
 2. P2: production media, CI, physical devices, release evidence, then Phase 6 product work; use load/accessibility findings to reprioritize.
 3. P3: calling, events, and additional collaboration.
 
@@ -21,10 +21,7 @@ and the latest Phase 6 progress entry in `issue.md` for evidence and rollout.
 | Draft | Priority | Title                                                                   | Tracker source                                                  |
 | ----- | -------- | ----------------------------------------------------------------------- | --------------------------------------------------------------- |
 | GH-01 | P1       | Verify background and closed-app Web Push on deployed devices           | Phase 4: remaining acceptance check                             |
-| GH-02 | P1       | Complete an independent encryption protocol and security review         | Phase 5: independent protocol/security review acceptance        |
 | GH-03 | P1       | Configure Resend and verify real verification/recovery email delivery   | Phase 5: Resend email acceptance                                |
-| GH-04 | P1       | Design stronger local protection for device keys and decrypted data     | Phase 5: secure local key storage review acceptance             |
-| GH-05 | P1       | Design forward secrecy, key rotation, and compromise recovery           | Phase 5: ratcheting/rotation design review acceptance           |
 | GH-06 | P2       | Complete the voice-note playback and recording experience               | 6.1, 6.2, 6.3                                                   |
 | GH-07 | P2       | Verify receipt details and live updates across conversation info pages  | 6.4, 6.8                                                        |
 | GH-08 | P2       | Add shared-link browsing to conversation information                    | 6.5                                                             |
@@ -42,8 +39,8 @@ and the latest Phase 6 progress entry in `issue.md` for evidence and rollout.
 | GH-20 | P2       | Bound large-history rendering and media-session memory use              | 7.4, 7.5                                                        |
 | GH-21 | P2       | Audit fair rate limiting across API instances and transports            | 7.6                                                             |
 | GH-22 | P2       | Run sustained messaging load and network-failure scenarios              | 7.7                                                             |
-| GH-23 | P2       | Add browser messaging and encryption checks to CI                       | 7.8                                                             |
-| GH-24 | P2       | Complete real-device HTTPS, privacy, and encryption acceptance          | 7.9; Phase 5: deployed HTTPS and real-device/browser acceptance |
+| GH-23 | P2       | Add browser messaging and security checks to CI                       | 7.8                                                             |
+| GH-24 | P2       | Complete real-device HTTPS and privacy acceptance          | 7.9; Phase 5: deployed HTTPS and real-device/browser acceptance |
 | GH-25 | P2       | Complete accessibility and reduced-motion verification                  | 7.10                                                            |
 | GH-26 | P2       | Maintain a deployed release-evidence and blocker checklist              | 7.11; Phase 7 acceptance checks                                 |
 | GH-27 | P2       | Complete moderation review tools and operational enforcement workflow   | 7.12, 7.13                                                      |
@@ -73,21 +70,7 @@ Push implementation exists, but provider and closed-app delivery have only been 
 
 ## GH-02
 
-**Title:** Complete an independent encryption protocol and security review
-**Priority:** P1
-**Suggested labels:** `P1`, `security`, `encryption`, `release`
-**Tracker source:** Phase 5: independent protocol/security review acceptance
-
-### Description
-
-The custom encryption protocol has functional coverage but no independent audit. Commission review before making audited-security claims.
-
-### Acceptance criteria
-
-- [ ] Review identity trust, certificates, device linking/revocation, signed envelopes, attachment binding, backups, and lost-key reset.
-- [ ] Include malicious-server assumptions, replay/downgrade risks, multi-device races, and browser-origin threats in the threat model.
-- [ ] Track and resolve release-blocking findings; retain appropriate confidentiality for exploit details.
-- [ ] Publish an accurate security/limitations statement and review sign-off.
+**Status:** Retired after migration 061 removed former message E2EE. No implementation or release task remains for this former encryption feature.
 
 ## GH-03
 
@@ -111,41 +94,15 @@ domain verification and deployed delivery remain to be documented separately.
 - [ ] Verify the sending domain and configure RESEND_API_KEY, RESEND_FROM, APP_PUBLIC_URL, and the stable mail encryption key on the deployment.
 - [ ] Receive and complete real verification and password-reset links; verify expiry and single-use behavior.
 - [ ] Confirm queue retry/idempotency behavior during provider failure without logging tokens or credentials.
-- [ ] Confirm reset revokes existing sessions and explains that password recovery cannot recover encryption keys.
+- [ ] Confirm reset revokes existing sessions and preserves account privacy and clears obsolete local session data.
 
 ## GH-04
 
-**Title:** Design stronger local protection for device keys and decrypted data
-**Priority:** P1
-**Suggested labels:** `P1`, `security`, `encryption`, `architecture`
-**Tracker source:** Phase 5: secure local key storage review acceptance
-
-### Description
-
-Device keys currently rely on IndexedDB and a trusted browser origin/OS. Evaluate stronger local protection without claiming a browser vault is an OS keychain.
-
-### Acceptance criteria
-
-- [ ] Document threats and current exposure of keys, pending drafts, and decrypted caches.
-- [ ] Compare practical browser and future native key-storage options, including unlock and recovery tradeoffs.
-- [ ] Record a reviewed architecture decision and implementation follow-ups with logout, remote-revocation, and account-deletion semantics.
+**Status:** Retired after migration 061 removed former message E2EE. No implementation or release task remains for this former encryption feature.
 
 ## GH-05
 
-**Title:** Design forward secrecy, key rotation, and compromise recovery
-**Priority:** P1
-**Suggested labels:** `P1`, `security`, `encryption`, `architecture`
-**Tracker source:** Phase 5: ratcheting/rotation design review acceptance
-
-### Description
-
-The current signed-envelope protocol has no forward secrecy or post-compromise ratchet. Decide how stronger guarantees could be introduced safely.
-
-### Acceptance criteria
-
-- [ ] Evaluate established protocol/library options against multi-device and private-room requirements.
-- [ ] Define rotation, device addition/removal, identity change, offline delivery, and backup/history behavior.
-- [ ] Document a versioned migration strategy and obtain security review before implementation or stronger product claims.
+**Status:** Retired after migration 061 removed former message E2EE. No implementation or release task remains for this former encryption feature.
 
 ## GH-06
 
@@ -164,7 +121,7 @@ Implemented inline audio playback, speed/seeking/duration controls, explicit pre
 - [x] Provide inline playback, seeking, duration, playback speed, and accessible controls.
 - [x] Allow previewing and discarding a recording before sending.
 - [x] Integrate cached/offline playback and the existing recording indicators, including cleanup on interruption.
-- [x] Verify encrypted and server-readable conversation behavior without exposing decrypted audio to server preview services.
+- [x] Verify authenticated server-readable voice-message behavior; former encrypted media behavior is retired.
 
 ### Verification
 
@@ -199,13 +156,13 @@ Audited sender-only receipt information and added open-dialog synchronization fo
 
 ### Description
 
-Add a shared-links view alongside shared media, with appropriate access and encryption boundaries.
+Add a shared-links view alongside shared media, with appropriate membership and history-visibility boundaries.
 
 ### Acceptance criteria
 
 - [x] Provide link listing, navigation to the source message, and bounded pagination or incremental loading.
 - [x] Exclude deleted, personally cleared, or unauthorized messages according to the documented history policy.
-- [x] For encrypted conversations, derive links from locally decrypted data and clearly describe incomplete local coverage.
+- [x] Apply membership and personal-history visibility rules to shared links. Former local encrypted extraction is retired.
 
 ## GH-09
 
@@ -474,7 +431,7 @@ Establish measured reliability/resource targets and verify sustained behavior un
 
 ## GH-23
 
-**Title:** Add browser messaging and encryption checks to CI
+**Title:** Add browser messaging and security checks to CI
 **Status:** Implemented locally — remote push/PR run still needs acceptance
 **Priority:** P2
 **Suggested labels:** `P2`, `ci`, `testing`, `reliability`
@@ -490,13 +447,13 @@ has not been recorded.
 ### Acceptance criteria
 
 - [x] Install browser prerequisites and run selected desktop/mobile messaging and recovery suites.
-- [x] Run the disposable real-API encryption suite with PostgreSQL/Redis and mocked storage/email.
+- [x] Run the disposable real-API security suite with PostgreSQL/Redis and mocked storage/email.
 - [x] Publish failure traces/screenshots and keep live-service tests explicitly gated without leaking credentials.
 - [ ] Isolate ports/databases and clean up resources; verify checks run on pull requests and pushes.
 
 ## GH-24
 
-**Title:** Complete real-device HTTPS, privacy, and encryption acceptance
+**Title:** Complete real-device HTTPS and privacy acceptance
 **Priority:** P2
 **Suggested labels:** `P2`, `mobile`, `validation`, `release`
 **Tracker source:** 7.9; Phase 5: deployed HTTPS and real-device/browser acceptance
@@ -549,7 +506,7 @@ Consolidate actual deployment evidence and unresolved blockers so completion is 
 ### Acceptance criteria
 
 - [ ] Record build/version, migrations, environment, test date, and sanitized results for each release candidate.
-- [ ] Link push, Resend, encryption review, media, devices, accessibility, CI, and load outcomes.
+- [ ] Link push, Resend, privacy review, media, devices, accessibility, CI, and load outcomes.
 - [ ] Document unresolved blockers and explicit release decisions; do not present mocked coverage as live-provider proof.
 - [ ] Update issue.md phase status only when corresponding acceptance checks are satisfied.
 
@@ -567,7 +524,7 @@ Report submission exists, but review, investigation, and enforcement operations 
 ### Acceptance criteria
 
 - [ ] Provide authorized review/triage, investigation context, decisions, and enforcement actions with auditable access.
-- [ ] Handle encrypted content according to the explicit-report policy without automatic decrypted-history disclosure.
+- [ ] Restrict report investigation to authorized platform moderators, with minimum necessary context and audited access.
 - [ ] Document operational roles, response/escalation process, retention/access rules, and action verification.
 - [ ] Demonstrate a report moving from submission through review to an enforced outcome.
 
@@ -668,7 +625,9 @@ Continue developing Conclave’s collaboration strengths with concrete, prioriti
 ## Coverage notes
 
 - Phase 4 remaining background/closed-app acceptance: GH-01.
-- Phase 5 independent review: GH-02; Resend: GH-03; local storage: GH-04; ratcheting/rotation design: GH-05; deployed HTTPS/R2/devices: GH-19 and GH-24.
+- Phase 5 retired E2EE tasks: GH-02/GH-04/GH-05; Resend: GH-03; deployed HTTPS/R2/devices: GH-19 and GH-24.
 - Every numbered open item 6.1–6.16, 7.1–7.13, and 8.1–8.5 is referenced in the index.
 - Phase 6–8 acceptance checks are included in the corresponding issue criteria, with overall release evidence in GH-26.
 - Claims about outstanding work come from the tracker. This drafting task did not re-audit the code, run tests, or verify live providers.
+
+Current deferred feature designs: [DEFERRED_FEATURES.md](docs/DEFERRED_FEATURES.md). Release evidence: [RELEASE_EVIDENCE.md](docs/RELEASE_EVIDENCE.md).

@@ -136,7 +136,7 @@ async function pushWorker() {
     },
   };
 }
-test("closed-app push shows only generic content and ignores stale account bindings", async () => {
+test("closed-app push ignores stale account bindings and falls back to generic content", async () => {
   const f = await pushWorker();
   await f.event("push", {
     data: {
@@ -148,24 +148,50 @@ test("closed-app push shows only generic content and ignores stale account bindi
     },
   });
   assert.equal(f.shown.length, 0);
+  // No title/body/tag in the payload falls back to the fully generic form —
+  // the same shape the server still sends when the recipient disabled
+  // previews or the subject type has nothing safe to show.
   await f.event("push", {
     data: {
       json: () => ({
         id: "notification",
         bindingId: "binding",
-        body: "Private secret",
       }),
     },
   });
   assert.equal(f.shown.length, 1);
+  assert.equal(f.shown[0].title, "Conclave");
   assert.equal(f.shown[0].body, "You have new activity in Conclave");
   assert.equal(f.shown[0].tag, "conclave:notification");
-  assert.equal(f.shown[0].renotify, false);
+  assert.equal(f.shown[0].renotify, true);
+  assert.equal(f.shown[0].icon, "/apple-touch-icon.png");
   f.setBinding(null);
   await f.event("push", {
     data: { json: () => ({ id: "later", bindingId: "binding" }) },
   });
   assert.equal(f.shown.length, 1);
+});
+test("an opted-in preview payload is shown with its conversation-grouped tag", async () => {
+  const f = await pushWorker();
+  await f.event("push", {
+    data: {
+      json: () => ({
+        id: "notification",
+        bindingId: "binding",
+        title: "Priya Shah",
+        body: "Can you review the draft before standup?",
+        tag: "conclave:room:room-1",
+      }),
+    },
+  });
+  assert.equal(f.shown.length, 1);
+  assert.equal(f.shown[0].title, "Priya Shah");
+  assert.equal(
+    f.shown[0].body,
+    "Can you review the draft before standup?",
+  );
+  assert.equal(f.shown[0].tag, "conclave:room:room-1");
+  assert.equal(f.shown[0].renotify, true);
 });
 test("foreground conversation suppresses interruption and notification clicks remain on this origin", async () => {
   const f = await pushWorker();

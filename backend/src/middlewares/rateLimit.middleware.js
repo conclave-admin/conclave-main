@@ -49,11 +49,10 @@ function rateLimit({
   };
 }
 
-async function consumeShared(id, { windowMs, max }) {
-  if (
-    process.env.SOCKET_REDIS_ADAPTER !== "true" ||
-    !isRedisReady()
-  ) {
+async function consumeShared(id, { windowMs = 60_000, max = 30 } = {}) {
+  if (!redisClient.isReady) {
+    if (process.env.NODE_ENV === "production")
+      throw new Error("Redis rate-limit store is unavailable");
     return consume(id, { windowMs, max });
   }
   const digest = createHash("sha256").update(id).digest("hex");
@@ -74,6 +73,19 @@ async function consumeShared(id, { windowMs, max }) {
   return Number(count) <= max;
 }
 
+// Socket callers need a retryable status, just like HTTP callers, when the
+// shared store fails. Never fall back to a per-process budget in production.
+async function requireShared(id, options, message) {
+  let allowed;
+  try {
+    allowed = await consumeShared(id, options);
+  } catch {
+    throw new ApiError(503, "Request protection is temporarily unavailable.");
+  }
+  if (!allowed) throw new ApiError(429, message);
+}
+
 rateLimit.consume = consume;
 rateLimit.consumeShared = consumeShared;
+rateLimit.requireShared = requireShared;
 module.exports = rateLimit;

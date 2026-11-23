@@ -151,13 +151,9 @@ export function AuthProvider({ children }) {
     window.dispatchEvent(new Event("conclave:sync-stop"));
     window.dispatchEvent(new Event("conclave:outbox-stop"));
     try {
-      await (await import("../lib/encryption")).forgetLocalEncryption(user.id);
+      await clearLocalData();
     } finally {
-      try {
-        await clearLocalData();
-      } finally {
-        setUser(null);
-      }
+      setUser(null);
     }
   }
   const value = useMemo(

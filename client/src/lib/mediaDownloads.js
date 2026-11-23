@@ -2,8 +2,32 @@
 // Byte storage and transport are injected for deterministic cancellation tests.
 export function createMediaDownloads({ keyFor, read, fetchFile, cache }) {
   const records = new Map();
+  let backgroundActive = 0;
+  const backgroundQueue = [];
+  function pumpBackground() {
+    while (backgroundActive < 2 && backgroundQueue.length) {
+      const job = backgroundQueue.shift();
+      if (job.signal.aborted) {
+        job.reject(new DOMException("Cancelled", "AbortError"));
+        continue;
+      }
+      backgroundActive++;
+      job.resolve(() => {
+        backgroundActive--;
+        pumpBackground();
+      });
+    }
+  }
+  function backgroundSlot(signal) {
+    return new Promise((resolve, reject) => {
+      backgroundQueue.push({ signal, resolve, reject });
+      pumpBackground();
+    });
+  }
+
   const empty = () => ({
     status: "available",
+    automatic: false,
     checking: true,
     progress: 0,
     blob: null,
@@ -32,24 +56,32 @@ export function createMediaDownloads({ keyFor, read, fetchFile, cache }) {
     const revision = ++entry.revision;
     const blob = await read(entry.attachment).catch(() => null);
     if (revision !== entry.revision || entry.flight) return;
+    const available = entry.state.blob || blob;
     update(entry, {
       checking: false,
-      status: blob ? "downloaded" : "available",
-      blob,
-      persisted: Boolean(blob),
+      status: available ? "downloaded" : "available",
+      blob: available,
+      persisted: Boolean(blob) && !entry.attachment.local_blob,
       error: "",
     });
   }
   function start(attachment, { automatic = false } = {}) {
     const entry = record(attachment);
     if (entry.flight) {
-      if (!automatic) entry.flight.automatic = false;
+      if (!automatic) {
+        entry.flight.automatic = false;
+        update(entry, { automatic: false });
+      }
       return entry.flight.promise;
     }
+    // Opening/playing an already loaded file must not enter a transfer state.
+    // Explicit cache invalidation and session changes clear this buffer.
+    if (entry.state.blob) return Promise.resolve(entry.state.blob);
     const controller = new AbortController();
     const revision = ++entry.revision;
     update(entry, {
       status: "downloading",
+      automatic,
       checking: false,
       progress: 0,
       error: "",
@@ -57,17 +89,29 @@ export function createMediaDownloads({ keyFor, read, fetchFile, cache }) {
     const promise = (async () => {
       try {
         const cached = await read(attachment);
-        const blob =
-          cached ||
-          (await fetchFile(attachment, {
-            signal: controller.signal,
-            onProgress: (progress) => {
-              if (!controller.signal.aborted) update(entry, { progress });
-            },
-          }));
+        let blob = cached;
+        if (!blob) {
+          const release = automatic
+            ? await backgroundSlot(controller.signal)
+            : () => {};
+          try {
+            if (controller.signal.aborted)
+              throw new DOMException("Cancelled", "AbortError");
+            blob = await fetchFile(attachment, {
+              signal: controller.signal,
+              onProgress: (progress) => {
+                if (!controller.signal.aborted) update(entry, { progress });
+              },
+            });
+          } finally {
+            release();
+          }
+        }
         if (controller.signal.aborted)
           throw new DOMException("Cancelled", "AbortError");
-        const persisted = Boolean(cached) || (await cache(attachment, blob));
+        const persisted = attachment.local_blob
+          ? false
+          : Boolean(cached) || (await cache(attachment, blob));
         if (controller.signal.aborted || revision !== entry.revision)
           throw new DOMException("Cancelled", "AbortError");
         update(entry, { status: "downloaded", blob, persisted, progress: 1 });
@@ -83,7 +127,11 @@ export function createMediaDownloads({ keyFor, read, fetchFile, cache }) {
           });
         return null;
       } finally {
-        if (entry.flight?.controller === controller) entry.flight = null;
+        if (entry.flight?.controller === controller) {
+          entry.flight = null;
+          if (!entry.listeners.size && records.get(entry.key) === entry)
+            records.delete(entry.key);
+        }
       }
     })();
     entry.flight = { controller, promise, automatic };
@@ -100,6 +148,7 @@ export function createMediaDownloads({ keyFor, read, fetchFile, cache }) {
         // StrictMode can resubscribe in the same turn. Release unused byte buffers.
         queueMicrotask(() => {
           if (!entry.listeners.size) {
+            if (entry.flight?.automatic) return;
             entry.revision += 1;
             entry.flight?.controller.abort();
             if (records.get(entry.key) === entry) records.delete(entry.key);
@@ -122,8 +171,9 @@ export function createMediaDownloads({ keyFor, read, fetchFile, cache }) {
         if (!entry.flight) check(entry);
       });
     },
-    invalidate(keys) {
+    invalidate(keys, accountPrefix) {
       records.forEach((entry) => {
+        if (accountPrefix && !entry.key.startsWith(accountPrefix)) return;
         if (keys && !keys.includes(entry.key)) return;
         entry.revision += 1;
         entry.flight?.controller.abort();

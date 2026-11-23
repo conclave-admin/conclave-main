@@ -509,64 +509,7 @@ test("an expired unclaimed upload can be uploaded again without changing the mes
   assert.equal(h.received[0].client_id, "a");
 });
 
-test("encrypted uploads persist ciphertext first, hide file metadata on the wire and retain a real local bubble", async () => {
-  const uploadBlob = new Blob(["CCEF1-encrypted-file-bytes"], {
-    type: "application/vnd.conclave.encrypted",
-  });
-  let uploadOptions, uploadedBytes;
-  const h = harness({
-    prepareMetadata: async () => ({
-      width: 40,
-      height: 30,
-      preview_url: "data:image/jpeg;base64,PRIVATE",
-    }),
-    prepareEncryption: async (entry) => ({
-      ...entry,
-      media: {
-        ...entry.media,
-        encrypted: true,
-        uploadBlob,
-        crypto: { key: "device-only-key" },
-      },
-    }),
-    upload: async (blob, options) => {
-      uploadOptions = options;
-      uploadedBytes = blob;
-      return {
-        url: "r2://bucket/opaque",
-        filename: "encrypted.bin",
-        mime_type: blob.type,
-        size: blob.size,
-      };
-    },
-  });
-  await h.manager.start();
-  await h.manager.enqueue([item("encrypted")]);
-  h.online();
-  await until(() => h.received.length === 1);
-  assert.equal(uploadedBytes, uploadBlob);
-  assert.equal(uploadOptions.filename, "encrypted.bin");
-  assert.deepEqual(uploadOptions.metadata, {});
-  const pending = draftMessage({
-    ...item("encrypted"),
-    media: { ...item("encrypted").media, encrypted: true },
-    payload: {
-      attachments: [
-        {
-          url: "r2://bucket/opaque",
-          filename: "encrypted.bin",
-          mime_type: uploadBlob.type,
-        },
-      ],
-    },
-  });
-  assert.equal(pending.attachments[0].filename, "encrypted.png");
-  assert.equal(pending.attachments[0].mime_type, "image/png");
-  assert.ok(pending.attachments[0].local_blob);
-  h.manager.stop();
-});
-
-test("a sealed wire payload is durable before transmission and reused after a lost acknowledgement", async () => {
+test("a prepared wire payload is durable before transmission and reused after a lost acknowledgement", async () => {
   let preparations = 0,
     sends = 0;
   const h = harness({
@@ -575,15 +518,14 @@ test("a sealed wire payload is durable before transmission and reused after a lo
       preparations++;
       return {
         ...payload,
-        content: undefined,
-        encryptedPayload: { ciphertext: "immutable sealed payload" },
+        content: "immutable prepared payload",
       };
     },
     send: async (payload) => {
       sends++;
       assert.equal(
-        h.rows.get("user:room:wire").wirePayload.encryptedPayload.ciphertext,
-        payload.encryptedPayload.ciphertext,
+        h.rows.get("user:room:wire").wirePayload.content,
+        payload.content,
       );
       if (sends === 1) throw new Error("Lost acknowledgement");
       return { id: "saved", room_id: "room", client_id: "wire" };

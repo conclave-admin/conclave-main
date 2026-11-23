@@ -128,7 +128,7 @@ export default function Decisions() {
   const status = ["active", "retracted", "all"].includes(params.get("status"))
     ? params.get("status") : "active";
   const eligibleRooms = useMemo(
-    () => rooms.filter((room) => room.encryption_mode !== "e2ee-v1" && !room.superseded_by),
+    () => rooms.filter((room) => !room.superseded_by),
     [rooms],
   );
 
@@ -289,7 +289,7 @@ export default function Decisions() {
       </div>
       {!eligibleRooms.length && !isLoading && (
         <p className="mt-3 text-body text-muted">
-          Decisions can be created in server-readable collaboration rooms. Encrypted conversations do not support shared decisions yet.
+          Create decisions in your conversations.
         </p>
       )}
 

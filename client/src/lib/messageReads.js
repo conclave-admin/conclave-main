@@ -1,9 +1,19 @@
-export function activeReadView(doc = document, win = window) {
+export function activeReadView(
+  doc = document,
+  win = window,
+  mediaViewer = false,
+) {
   return (
     doc.visibilityState === "visible" &&
     doc.hasFocus() &&
     win.navigator.onLine !== false &&
-    !doc.querySelector?.('[role="dialog"][aria-modal="true"]')
+    (!doc.querySelector?.('[role="dialog"][aria-modal="true"]') ||
+      (mediaViewer &&
+        doc.querySelectorAll?.('[role="dialog"][aria-modal="true"]').length ===
+          1 &&
+        doc
+          .querySelector('[role="dialog"][aria-modal="true"]')
+          .matches?.(".media-viewer-dialog")))
   );
 }
 export function messageIsVisible(node, container, win = window) {

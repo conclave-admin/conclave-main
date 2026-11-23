@@ -1,4 +1,3 @@
-import { getMessageSnapshots } from "./messages.service";
 import { applyAccountClear } from "../lib/clearedConversations";
 import { getSessionUserId } from "../lib/session";
 import { api } from "../lib/api";
@@ -10,38 +9,7 @@ import {
 } from "../config/devPreview";
 
 export async function resolveChatPreview(roomId, message) {
-  if (
-    !message ||
-    message.is_deleted ||
-    (message.content !== "[Encrypted message]" && !message.encrypted_payload)
-  )
-    return message;
-  const account = getSessionUserId();
-  try {
-    const result = await getMessageSnapshots(roomId, [message.id]);
-    if (getSessionUserId() !== account) throw new Error("Account changed");
-    const decoded = result.messages.find((m) => m.id === message.id);
-    if (!decoded) return null;
-    if (!decoded._decrypted)
-      return {
-        ...message,
-        content: "Connect this device to view the message",
-        _previewState: "keys",
-      };
-    return {
-      ...message,
-      ...decoded,
-      has_attachment: Boolean(decoded.attachments?.length),
-      attachment_type: decoded.attachments?.[0]?.mime_type,
-    };
-  } catch (error) {
-    if (getSessionUserId() !== account) throw error;
-    return {
-      ...message,
-      content: "Connect to load this message",
-      _previewState: "network",
-    };
-  }
+  return message;
 }
 
 export async function listRooms({ onPreview } = {}) {
@@ -56,39 +24,7 @@ export async function listRooms({ onPreview } = {}) {
         room.cleared_sequence,
         room.cleared_at,
       );
-  const rows = data.data;
-  let index = 0;
-  const resolveAll = () =>
-    Promise.all(
-      Array.from({ length: Math.min(4, rows.length) }, async () => {
-        while (index < rows.length) {
-          const room = rows[index++];
-          room.last_message = await resolveChatPreview(
-            room.id,
-            room.last_message,
-          );
-          if (getSessionUserId() !== userId) throw new Error("Account changed");
-          onPreview?.(room.id, room.last_message);
-        }
-      }),
-    );
-  if (onPreview) {
-    void resolveAll().catch(() => {});
-    return rows.map((room) => ({
-      ...room,
-      last_message:
-        room.last_message?.content === "[Encrypted message]"
-          ? {
-              ...room.last_message,
-              content: "Loading message…",
-              _previewLoading: true,
-            }
-          : room.last_message,
-    }));
-  }
-  await resolveAll();
-  if (getSessionUserId() !== userId) throw new Error("Account changed");
-  return rows;
+  return data.data;
 }
 
 export async function discoverRooms({ q = "", page = 1 } = {}) {

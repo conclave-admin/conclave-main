@@ -69,6 +69,8 @@ async function findExistingDm(userA, userB) {
 // Creates a room and inserts the creator as an admin member in one transaction.
 const createRoom = asyncHandler(async (req, res) => {
   const { name, type, memberIds } = req.body;
+  if (req.body.encryptionMode && req.body.encryptionMode !== 'none')
+    throw new ApiError(400, 'Encrypted conversations are unavailable');
 
   const roomType = type || (memberIds?.length === 1 ? "dm" : "group"); // Default to "dm" if exactly 1 other member, else "group"
   if (!VALID_TYPES.includes(roomType)) {
@@ -118,7 +120,6 @@ const createRoom = asyncHandler(async (req, res) => {
   let requiresRequest = false;
   try {
     await client.query("BEGIN");
-
     // 1. Resolve the invitees before touching rooms. Previously an unknown id
     //    reached the INSERT and came back as a foreign-key error surfaced as a
     //    500; soft-deleted users are rejected here too. display_name is read
@@ -189,15 +190,14 @@ const createRoom = asyncHandler(async (req, res) => {
     //    the request, so it cannot be used to squat a handle.
     const slug = await allocateSlug(client, effectiveName);
     const roomResult = await client.query(
-      `INSERT INTO rooms (name, type, created_by, slug,encryption_mode)
-       VALUES ($1, $2, $3, $4,$5)
-       RETURNING id, name, type, created_by, slug, created_at,encryption_mode`,
+      `INSERT INTO rooms (name, type, created_by, slug)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, type, created_by, slug, created_at`,
       [
         effectiveName,
         roomType,
         req.user.id,
         slug,
-        ["dm", "private"].includes(roomType) ? "e2ee-v1" : "none",
       ],
     );
     const room = roomResult.rows[0];
@@ -263,7 +263,7 @@ const listRooms = asyncHandler(async (req, res) => {
     `SELECT
        r.id,
        r.name,
-       r.type, r.encryption_mode, r.superseded_by,
+       r.type, r.superseded_by, r.team_id,
        r.slug,
        r.avatar_url,
        r.created_by,
@@ -359,7 +359,21 @@ const listRooms = asyncHandler(async (req, res) => {
     [req.user.id],
   );
 
-  return ok(res, result.rows);
+  const ownPreviews = result.rows
+    .map((room) => room.last_message)
+    .filter((message) => message?.sender_id === req.user.id);
+  const summaries =
+    await require("../services/messageReceipt.service").attachReceiptSummaries(
+      ownPreviews,
+    );
+  const byId = new Map(summaries.map((message) => [message.id, message]));
+  return ok(
+    res,
+    result.rows.map((room) => ({
+      ...room,
+      last_message: byId.get(room.last_message?.id) || room.last_message,
+    })),
+  );
 });
 
 // Public rooms are discoverable to signed-in users who are not members.
@@ -382,10 +396,10 @@ const discoverRooms = asyncHandler(async (req, res) => {
   }
   values.push(26, offset);
   const result = await query(
-    `SELECT r.id, r.name, r.description, r.slug, r.created_at,
+    `SELECT r.id, r.name, r.description, r.slug, r.created_at, r.team_id,
             (SELECT COUNT(*)::int FROM room_members rm WHERE rm.room_id = r.id) AS member_count
        FROM rooms r
-      WHERE r.type = 'public'
+      WHERE r.type = 'public' AND (r.team_id IS NULL OR r.team_discoverable)
         AND NOT EXISTS (SELECT 1 FROM room_members mine WHERE mine.room_id = r.id AND mine.user_id = $1)
         ${search}
       ORDER BY member_count DESC, r.created_at DESC, r.id DESC
@@ -403,10 +417,11 @@ const discoverRooms = asyncHandler(async (req, res) => {
 // transaction. Locking the room row serializes joins with visibility edits.
 const joinPublicRoom = asyncHandler(async (req, res) => {
   const approval = (
-    await query("SELECT join_approval FROM rooms WHERE id=$1", [
+    await query("SELECT join_approval,team_id FROM rooms WHERE id=$1", [
       req.params.roomId,
     ])
   ).rows[0];
+  if(approval?.team_id) throw new ApiError(409,'Request team membership to join this room');
   if (approval?.join_approval)
     return ok(
       res,
@@ -547,7 +562,7 @@ const getRoom = asyncHandler(async (req, res) => {
        r.id,
        r.name,
        r.description,
-       r.type, r.encryption_mode, r.superseded_by,
+       r.type, r.superseded_by,
        r.slug,
        r.avatar_url,
        r.created_by,
@@ -665,7 +680,7 @@ const addMember = asyncHandler(async (req, res) => {
     await client.query("BEGIN");
 
     const room = await client.query(
-      "SELECT id, type,encryption_mode FROM rooms WHERE id = $1 FOR UPDATE",
+      "SELECT id, type FROM rooms WHERE id = $1 FOR UPDATE",
       [roomId],
     );
     if (!room.rows.length) throw new ApiError(404, "Room not found");
@@ -689,19 +704,6 @@ const addMember = asyncHandler(async (req, res) => {
     if (caller_role !== "admin")
       throw new ApiError(403, "Only room admins can add members");
 
-    if (
-      room.rows[0].encryption_mode === "e2ee-v1" &&
-      !(
-        await client.query(
-          `SELECT 1 FROM encryption_devices d JOIN auth_sessions s ON s.id=d.session_id WHERE d.user_id=$1 AND d.approved_at IS NOT NULL AND d.revoked_at IS NULL AND s.revoked_at IS NULL AND s.expires_at>NOW() LIMIT 1`,
-          [userId],
-        )
-      ).rowCount
-    )
-      throw new ApiError(
-        409,
-        "Participant needs an approved encryption device first",
-      );
     const insertResult = await client.query(
       `INSERT INTO room_members (room_id, user_id, role)
        VALUES ($1, $2, 'member')

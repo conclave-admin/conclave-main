@@ -37,28 +37,35 @@ async function member(db, roomId, userId, admin = false) {
 async function project(db, projectId, userId, manage = false) {
   const result = await db.query(
     `SELECT p.* FROM projects p WHERE p.id=$1 AND
-     (p.created_by=$2 OR EXISTS (SELECT 1 FROM project_rooms pr JOIN room_members rm
+     (p.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=p.team_id AND tm.user_id=$2)) AND
+     (p.created_by=$2 OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=p.team_id AND tm.user_id=$2 AND tm.role='owner') OR EXISTS(SELECT 1 FROM project_rooms pr JOIN room_members rm
        ON rm.room_id=pr.room_id AND rm.user_id=$2 WHERE pr.project_id=p.id))`,
     [projectId, userId]);
   if (!result.rowCount) throw new ApiError(404, "Project unavailable");
-  if (manage && result.rows[0].created_by !== userId)
-    throw new ApiError(403, "Only the project creator can manage it");
+  if (manage && result.rows[0].created_by !== userId) {
+    const owner=result.rows[0].team_id && (await db.query(`SELECT 1 FROM team_members
+      WHERE team_id=$1 AND user_id=$2 AND role='owner'`,[result.rows[0].team_id,userId])).rowCount;
+    if(!owner) throw new ApiError(403, "Only the project creator or team owner can manage it");
+  }
+  if(manage && result.rows[0].team_id){
+    const state=(await db.query('SELECT archived_at FROM teams WHERE id=$1',[result.rows[0].team_id])).rows[0];
+    if(state?.archived_at) throw new ApiError(409,'Team is archived');
+  }
   return result.rows[0];
 }
 async function plainRoom(db, roomId) {
-  const room = await db.query("SELECT encryption_mode FROM rooms WHERE id=$1", [roomId]);
+  const room = await db.query("SELECT id FROM rooms WHERE id=$1", [roomId]);
   if (!room.rowCount) throw new ApiError(404, "Conversation unavailable");
-  if (room.rows[0].encryption_mode === "e2ee-v1")
-    throw new ApiError(409, "Server-readable work is unavailable in encrypted conversations");
 }
 
 const listProjects = asyncHandler(async (req, res) => {
   const rows = await query(
-    `SELECT p.id,p.name,p.description,p.status,p.created_by,p.updated_at,
+    `SELECT p.id,p.name,p.description,p.status,p.created_by,p.team_id,p.updated_at,
        COUNT(DISTINCT pr.room_id) FILTER (WHERE rm.user_id IS NOT NULL)::int AS room_count
      FROM projects p LEFT JOIN project_rooms pr ON pr.project_id=p.id
      LEFT JOIN room_members rm ON rm.room_id=pr.room_id AND rm.user_id=$1
-     WHERE p.created_by=$1 OR rm.user_id IS NOT NULL
+     WHERE (p.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=p.team_id AND tm.user_id=$1))
+       AND (p.created_by=$1 OR rm.user_id IS NOT NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=p.team_id AND tm.user_id=$1 AND tm.role='owner'))
      GROUP BY p.id ORDER BY p.updated_at DESC,p.id DESC LIMIT 100`, [req.user.id]);
   return ok(res, { projects: rows.rows });
 });
@@ -72,9 +79,17 @@ const createProject = asyncHandler(async (req, res) => {
   roomIds.forEach((id) => uuid(id, "conversation"));
   const result = await transaction(async (db) => {
     for (const roomId of roomIds) { await member(db, roomId, req.user.id, true); await plainRoom(db, roomId); }
+    const roomTeams=(await db.query('SELECT id,team_id FROM rooms WHERE id=ANY($1::uuid[]) FOR UPDATE',[roomIds])).rows;
+    const teamIds=new Set(roomTeams.map((room)=>room.team_id || 'personal'));
+    if(teamIds.size!==1) throw new ApiError(409,'Project rooms must belong to one team');
+    const teamId=roomTeams[0].team_id;
+    if(teamId) {
+      const team=(await db.query('SELECT archived_at FROM teams WHERE id=$1 FOR UPDATE',[teamId])).rows[0];
+      if(team?.archived_at) throw new ApiError(409,'Team is archived');
+    }
     const p = (await db.query(
-      "INSERT INTO projects(name,description,created_by) VALUES($1,$2,$3) RETURNING *",
-      [name, description, req.user.id])).rows[0];
+      "INSERT INTO projects(name,description,created_by,team_id) VALUES($1,$2,$3,$4) RETURNING *",
+      [name, description, req.user.id, teamId])).rows[0];
     for (const roomId of roomIds) {
       await db.query("INSERT INTO project_rooms(project_id,room_id) VALUES($1,$2)", [p.id, roomId]);
       await db.query("UPDATE tasks SET project_id=$1 WHERE room_id=$2", [p.id, roomId]);

@@ -31,7 +31,7 @@ const CONTENT = {
       ],
       [
         "Files and service providers",
-        "Uploaded files are sent to the Cloudinary account configured by the operator. PostgreSQL stores application records and Redis supports realtime delivery and temporary presence state. The operator must identify the actual hosting providers, processing regions, and applicable retention terms for this deployment.",
+        "Uploaded files are stored with the service’s configured storage provider (Cloudflare R2 by default, with Cloudinary supported as an alternative). PostgreSQL stores application records and Redis supports realtime delivery and temporary presence state. The operator must identify the actual hosting providers, processing regions, and applicable retention terms for this deployment.",
       ],
       [
         "Your browser",

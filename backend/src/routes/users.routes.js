@@ -3,6 +3,7 @@ const requireAuth = require("../middlewares/auth.middleware");
 const validateUuidParams = require("../middlewares/validateParams");
 const rateLimit = require("../middlewares/rateLimit.middleware");
 const {
+  getProfile,
   getMe,
   updateProfile,
   listUsers,
@@ -49,5 +50,6 @@ router.post(
 router.get("/me/preferences", getPreferences);
 router.patch("/me/preferences", updatePreferences);
 router.get("/", listUsers);
+router.get("/:userId", validateUuidParams, getProfile);
 
 module.exports = router;

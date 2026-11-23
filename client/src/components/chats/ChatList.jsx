@@ -60,7 +60,7 @@ export default function ChatList() {
 
       <CatchUpCard />
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-4">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4">
         {isLoading && !rooms.length && <Spinner label="Loading chats" />}
 
         {error && (
@@ -83,8 +83,8 @@ export default function ChatList() {
           />
         )}
 
-        {!isLoading && visibleRooms.length > 0 && (
-          <ul className="flex flex-col gap-0.5">
+        {visibleRooms.length > 0 && (
+          <ul aria-label="Conversations" className="flex flex-col">
             {visibleRooms.map((room) => (
               <ChatRow key={room.id} room={room} />
             ))}

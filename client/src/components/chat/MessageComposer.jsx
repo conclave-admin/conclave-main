@@ -1,11 +1,22 @@
+import IconPlay from "@/assets/icons/play-recording.svg?react";
+import { LiveRecordingWaveform } from "./AudioWaveform";
+import { recordingGesture } from "../../lib/waveform";
+import IconDelete from "@/assets/icons/delete.svg?react";
 import { ScheduleMessage } from "./MessageLater";
 import { useAuth } from "../../contexts/AuthContext";
 import { readDraft, writeDraft } from "../../lib/drafts";
 import { voiceRecordingFile, voiceRecorderOptions } from "@/lib/voiceRecording";
 import { createActivitySender } from "@/lib/conversationActivity";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import IconClose from "@/assets/icons/close.svg?react";
-import IconMention from "@/assets/icons/mention.svg?react";
 import IconSend from "@/assets/icons/send.svg?react";
 import IconMic from "@/assets/icons/mic.svg?react";
 import IconReaction from "@/assets/icons/reaction.svg?react";
@@ -58,27 +69,30 @@ const MAX_LINES = 5;
  * @param {() => void} [onCreateDecision] - opens the decision dialog when supplied
  * @param {() => void} [onCreateTask] - opens the task dialog when supplied
  */
-export default function MessageComposer({
-  disabled,
-  isOnline = true,
-  onSend,
-  onSendMedia,
-  members = [],
-  onTyping,
-  onStopTyping,
-  onRecording,
-  onStopRecording,
-  activityScope,
-  replyTo,
-  onCancelReply,
-  onCreatePoll,
-  onCreateDecision,
-  onCreateTask,
-  onEditLast,
-  // The room pane is a grid and addresses its rows explicitly, so the composer
-  // needs to accept the placement the parent decides rather than hardcoding one.
-  className = "",
-}) {
+const MessageComposer = forwardRef(function MessageComposer(
+  {
+    disabled,
+    isOnline = true,
+    onSend,
+    onSendMedia,
+    members = [],
+    onTyping,
+    onStopTyping,
+    onRecording,
+    onStopRecording,
+    activityScope,
+    replyTo,
+    onCancelReply,
+    onCreatePoll,
+    onCreateDecision,
+    onCreateTask,
+    onEditLast,
+    // The room pane is a grid and addresses its rows explicitly, so the composer
+    // needs to accept the placement the parent decides rather than hardcoding one.
+    className = "",
+  },
+  ref,
+) {
   const { user: draftUser } = useAuth();
   const draftOwner = `${draftUser?.id}:${activityScope}`;
   const [content, setContent] = useState(
@@ -102,14 +116,21 @@ export default function MessageComposer({
   }
   const persistDraft = () => {
     const { userId, roomId, text, reply } = draftSnapshot.current;
-    writeDraft(userId, roomId, text, reply ? {
-      id: reply.id,
-      sender_name: reply.sender_name,
-      content: reply.content,
-      room_sequence: reply.room_sequence,
-      created_at: reply.created_at,
-      expires_at: reply.expires_at,
-    } : null);
+    writeDraft(
+      userId,
+      roomId,
+      text,
+      reply
+        ? {
+            id: reply.id,
+            sender_name: reply.sender_name,
+            content: reply.content,
+            room_sequence: reply.room_sequence,
+            created_at: reply.created_at,
+            expires_at: reply.expires_at,
+          }
+        : null,
+    );
   };
   useLayoutEffect(() => {
     const draft = readDraft(draftUser?.id, activityScope);
@@ -137,13 +158,22 @@ export default function MessageComposer({
   const [mentionQuery, setMentionQuery] = useState(null);
   const [mentionedIds, setMentionedIds] = useState([]);
   const [recording, setRecording] = useState(false);
+  const [voicePaused, setVoicePaused] = useState(false);
+  const [voiceLocked, setVoiceLocked] = useState(false);
+  const voiceDisposition = useRef({});
+  const voicePointer = useRef(null);
+  const holdTimer = useRef(null);
+  const ignoreVoiceClick = useRef(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
 
   const textareaRef = useRef(null);
   useEffect(() => {
     // Desktop chat apps put typing one keystroke away. On touch screens,
     // opening the keyboard immediately would hide the conversation instead.
-    if (!disabled && window.matchMedia("(min-width: 768px) and (pointer: fine)").matches)
+    if (
+      !disabled &&
+      window.matchMedia("(min-width: 768px) and (pointer: fine)").matches
+    )
       textareaRef.current?.focus({ preventScroll: true });
   }, [activityScope, disabled]);
   const emojiTriggerRef = useRef(null);
@@ -193,7 +223,8 @@ export default function MessageComposer({
     activityRef.current = sender;
     const suspend = (event) => {
       sender.stop();
-      if (recorderRef.current?.state === "recording") stopVoiceRef.current?.();
+      if (recorderRef.current && recorderRef.current.state !== "inactive")
+        stopVoiceRef.current?.();
       else if (
         document.visibilityState !== "visible" ||
         event?.type === "pagehide"
@@ -210,12 +241,14 @@ export default function MessageComposer({
     document.addEventListener("visibilitychange", visibility);
     return () => {
       sender.dispose();
+      clearTimeout(holdTimer.current);
+      voicePointer.current = null;
       captureVersion.current++;
       acquiringMic.current = false;
       if (recorderRef.current) {
         recorderRef.current.onstop = null;
         recorderRef.current.ondataavailable = null;
-        if (recorderRef.current.state === "recording")
+        if (recorderRef.current.state !== "inactive")
           recorderRef.current.stop();
       }
       recorderRef.current = null;
@@ -228,9 +261,11 @@ export default function MessageComposer({
     // Capture callbacks for this conversation so cleanup targets the old room.
   }, [activityScope, callbacks]);
   useEffect(() => {
+    if (disabled && recording) stopVoiceRef.current?.();
     if (disabled || !isOnline) activityRef.current?.stop();
-    else if (recording) activityRef.current?.startRecording();
-  }, [disabled, isOnline, recording]);
+    else if (recording && !voicePaused) activityRef.current?.startRecording();
+    else if (voicePaused) activityRef.current?.endRecording();
+  }, [disabled, isOnline, recording, voicePaused]);
 
   const handleTextChange = (event) => {
     const { value, selectionStart, selectionEnd } = event.target;
@@ -325,7 +360,7 @@ export default function MessageComposer({
    *
    * @param {File[]} files
    */
-  const handleFiles = (files, { compress = false } = {}) => {
+  const handleFiles = (files, { compress = false, append = false } = {}) => {
     const rejected = [];
     const accepted = [];
 
@@ -346,22 +381,32 @@ export default function MessageComposer({
       }
     }
 
-    if (accepted.length > MAX_ATTACHMENTS) {
+    const available = append
+      ? Math.max(0, MAX_ATTACHMENTS - pendingFiles.length)
+      : MAX_ATTACHMENTS;
+    if (accepted.length > available) {
       rejected.push(
         `You can select at most ${MAX_ATTACHMENTS} files at once; the extra ${
-          accepted.length - MAX_ATTACHMENTS
+          accepted.length - available
         } were not added.`,
       );
-      accepted.length = MAX_ATTACHMENTS;
+      accepted.length = available;
     }
 
     const note = rejected.join(" ");
     setError(note);
 
     if (accepted.length > 0) {
-      setPendingFiles(accepted);
+      setPendingFiles(append ? [...pendingFiles, ...accepted] : accepted);
     }
   };
+
+  // Lets a drop zone outside this component (the conversation pane, in
+  // Room.jsx) reuse the exact same validation/compression/preview path a
+  // picked or pasted file goes through, instead of a second, divergent one.
+  useImperativeHandle(ref, () => ({
+    addFiles: (files, options) => handleFiles(files, options),
+  }));
 
   const removeFile = (index) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
@@ -457,13 +502,8 @@ export default function MessageComposer({
   };
 
   const toggleVoiceRecording = async () => {
-    if (recorderRef.current?.state === "recording") {
-      activityRef.current?.endRecording();
-      const recorder = recorderRef.current;
-      recorder.stop();
-      setRecording(false);
-      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
-      recordingStreamRef.current = null;
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      finishVoice();
       return;
     }
     if (acquiringMic.current || disabled) return;
@@ -480,6 +520,8 @@ export default function MessageComposer({
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
+      voiceDisposition.current = {};
+      setVoicePaused(false);
       recordingStreamRef.current = stream;
       const chunks = [];
       recordingChunksRef.current = chunks;
@@ -490,6 +532,17 @@ export default function MessageComposer({
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
         if (event.data.size) chunks.push(event.data);
+        if (
+          chunks.reduce((size, chunk) => size + chunk.size, 0) >
+            25 * 1024 * 1024 &&
+          recorder.state !== "inactive"
+        ) {
+          failed = true;
+          recorder.stop();
+          setError(
+            "Voice note reached the 25 MB limit. Please record a shorter message.",
+          );
+        }
       };
       let failed = false;
       recorder.onstop = () => {
@@ -502,10 +555,49 @@ export default function MessageComposer({
           recordingStreamRef.current = null;
         }
         recordingChunksRef.current = [];
-        if (!failed) {
+        setVoicePaused(false);
+        setVoiceLocked(false);
+        if (!failed && !voiceDisposition.current.cancel) {
           try {
             const file = voiceRecordingFile(chunks, recorder.mimeType);
-            if (file.size) setPendingFiles([file]);
+            if (file.size > limitFor(file)) {
+              setError("Voice note is too large. Record a shorter message.");
+              return;
+            }
+            if (file.size && voiceDisposition.current.send) {
+              setSending(true);
+              Promise.resolve()
+                .then(() =>
+                  onSendMedia([
+                    {
+                      content: "",
+                      replyToId: replyTo?.id,
+                      attachments: [],
+                      mentionedUserIds: [],
+                      media: {
+                        blob: file,
+                        filename: file.name,
+                        compress: false,
+                      },
+                    },
+                  ]),
+                )
+                .then(() => {
+                  if (version === captureVersion.current) onCancelReply?.();
+                })
+                .catch((error) => {
+                  if (version === captureVersion.current) {
+                    setPendingFiles([file]);
+                    setError(
+                      error.message ||
+                        "Could not send. Your voice note is ready to retry.",
+                    );
+                  }
+                })
+                .finally(() => {
+                  if (version === captureVersion.current) setSending(false);
+                });
+            } else if (file.size) setPendingFiles([file]);
           } catch (error) {
             setError(error.message);
           }
@@ -514,7 +606,7 @@ export default function MessageComposer({
       recorder.onerror = () => {
         if (version !== captureVersion.current) return;
         failed = true;
-        if (recorder.state === "recording") recorder.stop();
+        if (recorder.state !== "inactive") recorder.stop();
         else recorder.onstop();
         activityRef.current?.endRecording();
         setError(
@@ -525,11 +617,11 @@ export default function MessageComposer({
         track.addEventListener?.("ended", () => {
           if (
             version === captureVersion.current &&
-            recorder.state === "recording"
+            recorder.state !== "inactive"
           )
             stopVoiceRef.current?.();
         });
-      recorder.start();
+      recorder.start(500);
       activityRef.current?.startRecording();
       setRecording(true);
     } catch {
@@ -544,7 +636,82 @@ export default function MessageComposer({
     }
   };
 
-  stopVoiceRef.current = toggleVoiceRecording;
+  const finishVoice = ({ cancel = false, send = false } = {}) => {
+    voiceDisposition.current = { cancel, send };
+    clearTimeout(holdTimer.current);
+    if (acquiringMic.current && !recorderRef.current) {
+      captureVersion.current++;
+      acquiringMic.current = false;
+      setVoiceLocked(false);
+      return;
+    }
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    activityRef.current?.endRecording();
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+  };
+  const pauseVoice = () => {
+    const recorder = recorderRef.current;
+    if (recorder?.state === "recording") {
+      recorder.pause();
+      setVoicePaused(true);
+      activityRef.current?.endRecording();
+    } else if (recorder?.state === "paused") {
+      recorder.resume();
+      setVoicePaused(false);
+      activityRef.current?.startRecording();
+    }
+  };
+  const voicePointerDown = (event) => {
+    if (recording) {
+      ignoreVoiceClick.current = false;
+      return;
+    }
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    voicePointer.current = {
+      x: event.clientX,
+      y: event.clientY,
+      held: false,
+      locked: false,
+    };
+    ignoreVoiceClick.current = true;
+    holdTimer.current = setTimeout(() => {
+      if (!voicePointer.current) return;
+      voicePointer.current.held = true;
+      setVoiceLocked(false);
+      toggleVoiceRecording();
+    }, 220);
+  };
+  const voicePointerMove = (event) => {
+    const gesture = voicePointer.current;
+    if (!gesture?.held || gesture.locked) return;
+    const action = recordingGesture(
+      event.clientX - gesture.x,
+      event.clientY - gesture.y,
+    );
+    if (action === "cancel") {
+      voicePointer.current = null;
+      finishVoice({ cancel: true });
+    } else if (action === "lock") {
+      gesture.locked = true;
+      setVoiceLocked(true);
+    }
+  };
+  const voicePointerUp = () => {
+    clearTimeout(holdTimer.current);
+    const gesture = voicePointer.current;
+    voicePointer.current = null;
+    if (!gesture) return;
+    if (!gesture.held) {
+      setVoiceLocked(true);
+      toggleVoiceRecording();
+    } else if (!gesture.locked) finishVoice({ send: true });
+  };
+  stopVoiceRef.current = () => {
+    voicePointer.current = null;
+    finishVoice();
+  };
 
   const handleKeyDown = (event) => {
     // A composition is in flight (IME). Enter is committing a character, not
@@ -574,12 +741,19 @@ export default function MessageComposer({
       .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
       .filter(Boolean);
-    const files = (pastedFiles.length
-      ? pastedFiles
-      : Array.from(event.clipboardData?.files || []))
-      .map((file, index) => file.name
+    const files = (
+      pastedFiles.length
+        ? pastedFiles
+        : Array.from(event.clipboardData?.files || [])
+    ).map((file, index) =>
+      file.name
         ? file
-        : new File([file], `pasted-file-${index + 1}${file.type === "image/png" ? ".png" : ""}`, { type: file.type }));
+        : new File(
+            [file],
+            `pasted-file-${index + 1}${file.type === "image/png" ? ".png" : ""}`,
+            { type: file.type },
+          ),
+    );
     if (!files.length) return;
     event.preventDefault();
     if (disabled) return;
@@ -587,7 +761,10 @@ export default function MessageComposer({
     if (text) {
       const { start, end } = selectionRef.current;
       const next = `${content.slice(0, start)}${text}${content.slice(end)}`;
-      selectionRef.current = { start: start + text.length, end: start + text.length };
+      selectionRef.current = {
+        start: start + text.length,
+        end: start + text.length,
+      };
       setContent(next);
       activityRef.current?.textChanged(next);
     }
@@ -604,7 +781,7 @@ export default function MessageComposer({
           if (!form.contains(document.activeElement)) persistDraft();
         });
       }}
-      className={`relative mx-auto w-full max-w-3xl shrink-0 bg-surface px-4 pb-6 pt-2 ${className}`}
+      className={`message-composer relative mx-auto w-full max-w-4xl shrink-0 px-0 py-0 ${className}`}
     >
       {replyTo && (
         <div className="mb-2 flex items-center gap-3 rounded-lg border-l-2 border-brand bg-canvas px-3 py-2">
@@ -621,7 +798,7 @@ export default function MessageComposer({
             type="button"
             onClick={onCancelReply}
             aria-label="Cancel reply"
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-ink"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-surface hover:text-ink"
           >
             <IconClose className="h-4 w-4" aria-hidden="true" />
           </button>
@@ -637,50 +814,17 @@ export default function MessageComposer({
         </p>
       )}
 
-      <div className="relative flex items-end gap-2 rounded-lg border border-line bg-surface px-3 py-2 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10">
-        <div className="flex shrink-0 gap-1 pb-1">
-          <button
-            type="button"
-            onClick={toggleVoiceRecording}
-            disabled={disabled || sending || pendingFiles.length > 0}
-            aria-label={
-              recording ? "Stop voice note recording" : "Record voice note"
-            }
-            className={`grid h-8 w-8 place-items-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40 ${recording ? "bg-error/10 text-error" : "text-muted hover:bg-canvas hover:text-ink"}`}
-          >
-            <IconMic className="h-5 w-5" aria-hidden="true" />
-          </button>
+      <div className="composer-pill relative flex items-end gap-1 rounded-[26px] border border-line bg-surface p-1.5 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10">
+        <div
+          className={`${recording ? "hidden" : "flex"} shrink-0 items-center gap-0.5`}
+        >
           <AttachmentPicker
             onFiles={handleFiles}
             disabled={disabled}
             onPoll={onCreatePoll}
             onDecision={onCreateDecision}
             onTask={onCreateTask}
-          />
-          <button
-            ref={emojiTriggerRef}
-            type="button"
-            disabled={disabled}
-            onClick={() => {
-              const input = textareaRef.current;
-              if (input)
-                selectionRef.current = {
-                  start: input.selectionStart,
-                  end: input.selectionEnd,
-                };
-              setEmojiOpen((open) => !open);
-            }}
-            aria-label="Insert emoji"
-            aria-haspopup="dialog"
-            aria-expanded={emojiOpen}
-            className="grid h-8 w-8 place-items-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40"
-          >
-            <IconReaction className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => {
+            onMention={() => {
               const el = textareaRef.current;
               const caret = el?.selectionStart ?? content.length;
               const before = content.slice(0, caret);
@@ -709,10 +853,26 @@ export default function MessageComposer({
               textareaRef.current?.focus();
               setMentionQuery("");
             }}
-            aria-label="Mention someone"
-            className="grid h-8 w-8 place-items-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40"
+          />
+          <button
+            ref={emojiTriggerRef}
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              const input = textareaRef.current;
+              if (input)
+                selectionRef.current = {
+                  start: input.selectionStart,
+                  end: input.selectionEnd,
+                };
+              setEmojiOpen((open) => !open);
+            }}
+            aria-label="Insert emoji"
+            aria-haspopup="dialog"
+            aria-expanded={emojiOpen}
+            className="grid h-11 w-11 place-items-center rounded-full text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40"
           >
-            <IconMention className="h-5 w-5" aria-hidden="true" />
+            <IconReaction className="h-5 w-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -733,17 +893,111 @@ export default function MessageComposer({
           rows={1}
           placeholder="Message…"
           aria-label="Message"
-          className="block min-h-6 min-w-0 flex-1 resize-none border-0 bg-transparent py-1 text-body text-ink outline-none placeholder:text-muted"
+          className={`${recording ? "hidden" : "block"} min-h-10 min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-2 text-body text-ink outline-none placeholder:text-muted`}
         />
 
-        <button
-          type="submit"
-          disabled={disabled || !content.trim()}
-          aria-label="Send message"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand pb-0.5 text-surface transition-opacity disabled:opacity-40"
-        >
-          <IconSend className="h-5 w-5" aria-hidden="true" />
-        </button>
+        {recording && (
+          <div className="flex min-h-11 min-w-0 flex-1 items-center gap-1 px-1">
+            <button
+              type="button"
+              aria-label="Discard recording"
+              onClick={() => finishVoice({ cancel: true })}
+              className="voice-control text-error"
+            >
+              <IconDelete className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <LiveRecordingWaveform
+              stream={recordingStreamRef.current}
+              paused={voicePaused}
+            />
+            {voiceLocked && (
+              <>
+                <button
+                  type="button"
+                  aria-label={
+                    voicePaused ? "Resume recording" : "Pause recording"
+                  }
+                  onClick={pauseVoice}
+                  className="voice-control text-brand"
+                >
+                  {voicePaused ? (
+                    <IconPlay className="h-5 w-5" aria-hidden="true" />
+                  ) : (
+                    <span className="flex gap-1" aria-hidden="true">
+                      <span className="h-4 w-1 rounded-sm bg-current" />
+                      <span className="h-4 w-1 rounded-sm bg-current" />
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Send voice note"
+                  onClick={() => finishVoice({ send: true })}
+                  className="voice-control bg-brand text-white"
+                >
+                  <IconSend className="h-5 w-5" aria-hidden="true" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {recording && !voiceLocked && (
+          <span className="pointer-events-none absolute -top-8 right-2 rounded-full bg-surface px-3 py-1 text-xs text-muted shadow">
+            ← Cancel · ↑ Lock
+          </span>
+        )}
+        {content.trim() && !recording ? (
+          <button
+            type="submit"
+            disabled={disabled || sending || !content.trim()}
+            aria-label="Send message"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-brand pb-0.5 text-white transition-opacity disabled:opacity-40"
+          >
+            <IconSend className="h-5 w-5" aria-hidden="true" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onPointerDown={voicePointerDown}
+            onPointerMove={voicePointerMove}
+            onPointerUp={voicePointerUp}
+            onPointerCancel={() => {
+              clearTimeout(holdTimer.current);
+              const locked = voicePointer.current?.locked;
+              voicePointer.current = null;
+              if (!locked) finishVoice({ cancel: true });
+            }}
+            onClick={(event) => {
+              if (ignoreVoiceClick.current && event.detail !== 0) {
+                ignoreVoiceClick.current = false;
+                return;
+              }
+              ignoreVoiceClick.current = false;
+              if (!recording) setVoiceLocked(true);
+              toggleVoiceRecording();
+            }}
+            title={
+              recording
+                ? "Stop and preview"
+                : "Tap to record · Hold for a quick voice note"
+            }
+            style={{ touchAction: "none" }}
+            disabled={disabled || sending || pendingFiles.length > 0}
+            aria-label={
+              recording ? "Stop voice note recording" : "Record voice note"
+            }
+            className={`grid h-11 w-11 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40 ${recording ? "bg-error/10 text-error" : "text-muted hover:bg-canvas hover:text-ink"}`}
+          >
+            {recording ? (
+              <span
+                className="h-3.5 w-3.5 rounded-sm bg-current"
+                aria-hidden="true"
+              />
+            ) : (
+              <IconMic className="h-5 w-5" aria-hidden="true" />
+            )}
+          </button>
+        )}
 
         {mentionQuery !== null && (
           <MentionPicker
@@ -794,6 +1048,9 @@ export default function MessageComposer({
         onSend={submitPreview}
         onCancel={cancelPreview}
         onRemoveFile={removeFile}
+        onAddFiles={(files) =>
+          handleFiles(files, { compress: true, append: true })
+        }
         onReplaceFile={(index, file) =>
           setPendingFiles((current) =>
             current.map((item, position) => (position === index ? file : item)),
@@ -802,4 +1059,6 @@ export default function MessageComposer({
       />
     </form>
   );
-}
+});
+
+export default MessageComposer;

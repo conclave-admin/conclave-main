@@ -64,8 +64,9 @@ test("forwarding media queues offline and sends references without an upload", a
     size: png.length,
   });
   await page.evaluate(async () => {
-    const { previewSocket, previewMessages } =
-      await import("/src/config/devPreview.js");
+    const { previewSocket, previewMessages } = await import(
+      "/src/config/devPreview.js"
+    );
     const emit = previewSocket.emit.bind(previewSocket);
     window.forwardPayloads = [];
     previewSocket.emit = (event, payload, ack) => {
@@ -187,7 +188,9 @@ test("automatic downloads follow network changes while manual downloads remain a
     .locator("article")
     .filter({ hasText: "FOLLOWUP-SOURCE" });
   await expect(
-    message.getByText("Original not downloaded", { exact: true }),
+    message.locator(
+      '[data-download-state="available"][data-media-offline="false"]',
+    ),
   ).toBeVisible();
   expect(requests).toBe(0);
   await page.evaluate(() => {
@@ -216,9 +219,7 @@ test("automatic downloads follow network changes while manual downloads remain a
   });
   release();
   await saved;
-  await expect(
-    message.getByText("Downloaded · available offline", { exact: true }),
-  ).toBeVisible();
+  await expect(message.locator('[data-media-offline="true"]')).toBeVisible();
   expect(requests).toBe(2);
 });
 

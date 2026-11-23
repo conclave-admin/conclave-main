@@ -1539,9 +1539,9 @@ async function pushMessage(f, text = "Private text never put in push") {
   return response.body.data;
 }
 
-test("push delivery retries transient failure, uses generic content and expires dead subscriptions", async () =>
+test("push delivery retries transient failure, previews by default, groups by room and expires dead subscriptions", async () =>
   pushFixture(async (f) => {
-    const message = await pushMessage(f);
+    const message = await pushMessage(f, "Can you review the draft?");
     let calls = 0;
     await f.push.dispatch(100, async () => {
       calls++;
@@ -1563,10 +1563,15 @@ test("push delivery retries transient failure, uses generic content and expires 
       "UPDATE push_jobs SET next_attempt_at=NOW() WHERE subscription_id=$1",
       [f.registration.subscriptionId],
     );
+    // push_preview_enabled defaults to TRUE: the recipient's name/room and a
+    // truncated preview are included, grouped under one tag per conversation
+    // so a later message in the same room updates this notification instead
+    // of stacking a new one.
     await f.push.dispatch(100, async (sub, payload) => {
       const data = JSON.parse(payload);
       assert.equal(data.bindingId, f.registration.bindingId);
-      assert.ok(!payload.includes(message.content));
+      assert.ok(payload.includes(message.content));
+      assert.equal(data.tag, `conclave:room:${f.id}`);
       assert.equal(data.url, "/notifications");
       calls++;
     });
@@ -1580,6 +1585,29 @@ test("push delivery retries transient failure, uses generic content and expires 
       ).rows[0].outcome,
       "accepted",
     );
+    // Opting out of previews restores the fully generic payload.
+    await query(
+      `INSERT INTO notification_preferences(user_id,push_preview_enabled) VALUES($1,FALSE)
+       ON CONFLICT(user_id) DO UPDATE SET push_preview_enabled=FALSE`,
+      [f.member.userId],
+    );
+    const generic = await pushMessage(f, "Private text never put in push");
+    await f.push.dispatch(100, async (sub, payload) => {
+      const data = JSON.parse(payload);
+      assert.equal(data.title, "Conclave");
+      assert.equal(data.body, "You have new activity in Conclave");
+      assert.ok(!payload.includes(generic.content));
+      // Grouping still holds with previews off: the conversation-kind tag is
+      // what collapses the stack, independent of what the body says.
+      assert.equal(data.tag, `conclave:room:${f.id}:new_message`);
+      calls++;
+    });
+    assert.equal(calls, 3);
+    await query(
+      "UPDATE notification_preferences SET push_preview_enabled=TRUE WHERE user_id=$1",
+      [f.member.userId],
+    );
+    // The row now exists (inserted above), so this UPDATE affects it.
     await pushMessage(f, "Second");
     await f.push.dispatch(100, async () => {
       const error = new Error("Gone");
@@ -1985,298 +2013,45 @@ test("device management requires password confirmation and evicts the selected s
   assert.equal((await request("/users/me", a.token)).status, 200);
 });
 
-async function cryptoFixture() {
-  const protocol = await import("../../client/src/lib/cryptoProtocol.js");
-  await protocol.ready;
-  const a = await account(),
-    b = await account();
-  const av = protocol.createVault(a.userId),
-    bv = protocol.createVault(b.userId);
-  assert.equal(
-    (
-      await request(
-        "/encryption/devices",
-        a.token,
-        "POST",
-        protocol.publicDevice(av),
-      )
-    ).status,
-    201,
-  );
-  assert.equal(
-    (
-      await request(
-        "/encryption/devices",
-        b.token,
-        "POST",
-        protocol.publicDevice(bv),
-      )
-    ).status,
-    201,
-  );
-  const created = await request("/rooms", a.token, "POST", {
-    type: "dm",
-    memberIds: [b.userId],
-  });
-  assert.equal(created.status, 201);
-  assert.equal(created.body.data.encryption_mode, "e2ee-v1");
-  const id = created.body.data.id;
-  roomIds.push(id);
-  assert.equal(
-    (
-      await request(`/security/requests/${id}`, b.token, "POST", {
-        status: "accepted",
-      })
-    ).status,
-    200,
-  );
-  return {
-    protocol,
-    a,
-    b,
-    av,
-    bv,
-    id,
-    roster: (await request(`/encryption/rooms/${id}`, a.token)).body.data,
-  };
-}
-test("encrypted messages round-trip through SQL with only ciphertext, reject plaintext/tampering, and keep retry identity", async () => {
-  const { protocol, a, b, av, bv, id, roster } = await cryptoFixture();
-  const clientId = randomUUID(),
-    content = "Never server-readable caption";
-  const encryptedPayload = protocol.sealMessage(av, roster, {
-    roomId: id,
-    clientId,
-    content,
-  });
-  assert.equal(
-    (await request("/messages", a.token, "POST", { roomId: id, content }))
-      .status,
-    400,
-  );
-  const sent = await request("/messages", a.token, "POST", {
-    roomId: id,
-    clientId,
-    encryptedPayload,
+test("plain messages send, edit, and search without E2EE columns", async () => {
+  const owner = await account();
+  const member = await account();
+  const roomId = await room(owner, member);
+  const sent = await request("/messages", owner.token, "POST", {
+    roomId, clientId: randomUUID(), content: "Cutover searchable message",
   });
   assert.equal(sent.status, 201);
-  const persisted = (
-    await query("SELECT content,encrypted_payload FROM messages WHERE id=$1", [
-      sent.body.data.id,
-    ])
-  ).rows[0];
-  assert.equal(persisted.content, "[Encrypted message]");
-  assert.ok(!JSON.stringify(persisted).includes(content));
-  const fetched = (
-    await request(`/messages/room/${id}?ids=${sent.body.data.id}`, b.token)
-  ).body.data.messages[0];
-  assert.equal(protocol.openMessage(bv, fetched).content, content);
-  const retry = await request("/messages", a.token, "POST", {
-    roomId: id,
-    clientId,
-    encryptedPayload,
-  });
-  assert.equal(retry.body.data.id, sent.body.data.id);
-  const bad = {
-    ...encryptedPayload,
-    clientId: randomUUID(),
-    signature: encryptedPayload.signature.slice(0, -4) + "AAAA",
-  };
-  assert.equal(
-    (
-      await request("/messages", a.token, "POST", {
-        roomId: id,
-        clientId: bad.clientId,
-        encryptedPayload: bad,
-      })
-    ).status,
-    400,
-  );
-  const edit = protocol.sealMessage(
-    av,
-    roster,
-    { roomId: id, clientId, content: "Private edit" },
-    { revision: 1 },
-  );
-  const edited = await request(
-    `/messages/${sent.body.data.id}`,
-    a.token,
-    "PATCH",
-    { encryptedPayload: edit },
-  );
+  assert.equal(sent.body.data.content, "Cutover searchable message");
+  const messageId = sent.body.data.id;
+  const edited = await request(`/messages/${messageId}`, owner.token, "PATCH", { content: "Cutover edited message" });
   assert.equal(edited.status, 200);
-  assert.equal(
-    protocol.openMessage(bv, edited.body.data).content,
-    "Private edit",
-  );
-  assert.equal(
-    (
-      await request(`/messages/${sent.body.data.id}`, a.token, "PATCH", {
-        content: "Plaintext edit",
-      })
-    ).status,
-    400,
-  );
-  assert.equal(
-    (
-      await request("/tasks", a.token, "POST", {
-        roomId: id,
-        title: "Leaking task",
-      })
-    ).status,
-    409,
-  );
-  assert.equal(
-    (await request(`/messages/room/${id}/search?q=secret`, b.token)).status,
-    409,
-  );
+  const search = await request(`/messages/room/${roomId}/search?q=Cutover`, member.token);
+  assert.equal(search.status, 200);
+  assert.ok(search.body.data.messages.some((message) => message.id === messageId));
+  const ciphertext = await request("/messages", owner.token, "POST", {
+    roomId, clientId: randomUUID(), encryptedPayload: { ciphertext: "opaque" },
+  });
+  assert.equal(ciphertext.status, 400);
 });
 
-test("unapproved devices cannot receive new message keys, device links require signed approval, and backups stay encrypted", async () => {
-  const { protocol, a, b, av, id } = await cryptoFixture();
-  const pending = protocol.createVault(a.userId, false),
-    newSession = await session(a.userId);
-  const registered = await request(
-    "/encryption/devices",
-    newSession.token,
-    "POST",
-    protocol.publicDevice(pending),
-  );
-  assert.equal(registered.status, 201);
-  assert.equal(registered.body.data.approved_at, null);
-  let roster = (await request(`/encryption/rooms/${id}`, b.token)).body.data;
-  assert.ok(!roster.devices.some((d) => d.id === pending.device.id));
-  const pub = protocol.publicDevice(pending),
-    approval = protocol.sealLink(av, {
-      id: pub.id,
-      box_key: pub.boxKey,
-      signing_key: pub.signingKey,
-    });
-  assert.equal(
-    (
-      await request(
-        `/encryption/devices/${pending.device.id}/approve`,
-        a.token,
-        "POST",
-        { ...approval, signature: pub.boxKey },
-      )
-    ).status,
-    400,
-  );
-  assert.equal(
-    (
-      await request(
-        `/encryption/devices/${pending.device.id}/approve`,
-        a.token,
-        "POST",
-        approval,
-      )
-    ).status,
-    200,
-  );
-  assert.equal(
-    (await request(`/encryption/devices/${pending.device.id}/link`, a.token))
-      .status,
-    404,
-  );
-  const linked = (
-    await request(
-      `/encryption/devices/${pending.device.id}/link`,
-      newSession.token,
-    )
-  ).body.data;
-  assert.equal(
-    protocol.openLink(pending, linked.link_payload).identityKey,
-    av.identityKey,
-  );
-  roster = (await request(`/encryption/rooms/${id}`, b.token)).body.data;
-  assert.ok(roster.devices.some((d) => d.id === pending.device.id));
-  const backup = protocol.sealBackup(av);
-  assert.equal(
-    (await request("/encryption/backup", a.token, "PUT", backup.payload))
-      .status,
-    200,
-  );
-  const stored = (await request("/encryption/backup", a.token)).body.data;
-  assert.ok(!JSON.stringify(stored).includes(av.identitySecret));
-  assert.equal(
-    protocol.openBackup(a.userId, stored.payload, backup.recoveryKey)
-      .identityKey,
-    av.identityKey,
-  );
-  await request("/auth/logout", null, "POST", {
-    refreshToken: newSession.refreshToken,
-  });
-  roster = (await request(`/encryption/rooms/${id}`, b.token)).body.data;
-  assert.ok(!roster.devices.some((d) => d.id === pending.device.id));
-});
-
-test("legacy migration starts a separate encrypted timeline and an identity reset revokes other devices", async () => {
-  const { protocol, a, b, av, bv } = await cryptoFixture();
-  const legacy = await room(a, b, "dm");
-  const old = (
-    await request("/messages", a.token, "POST", {
-      roomId: legacy,
-      content: "Legacy history stays explicitly server-readable",
-    })
-  ).body.data;
-  const upgrade = await request(
-    `/encryption/rooms/${legacy}/upgrade`,
-    a.token,
-    "POST",
-  );
-  assert.equal(upgrade.status, 200);
-  const target = upgrade.body.data.roomId;
-  assert.notEqual(target, legacy);
-  assert.equal(
-    (await request(`/rooms/${target}`, b.token)).body.data.encryption_mode,
-    "e2ee-v1",
-  );
-  assert.equal(
-    (
-      await request("/messages", a.token, "POST", {
-        roomId: legacy,
-        content: "Must use new conversation",
-      })
-    ).status,
-    409,
-  );
-  assert.equal(
-    (
-      await query("SELECT encrypted_payload FROM messages WHERE id=$1", [
-        old.id,
-      ])
-    ).rows[0].encrypted_payload,
-    null,
-  );
-  await query("UPDATE users SET password_hash=$2 WHERE id=$1", [
-    a.userId,
-    await require("bcrypt").hash("Known secure reset password!", 4),
-  ]);
-  const other = await session(a.userId);
-  const socket = await open(other.token, 1);
-  const revoked = event(socket, "session:revoked");
-  const replacement = protocol.createVault(a.userId);
-  const reset = await request("/encryption/reset", a.token, "POST", {
-    password: "Known secure reset password!",
-    confirmation: "RESET ENCRYPTION",
-    device: protocol.publicDevice(replacement),
-  });
-  assert.equal(reset.status, 200);
-  await revoked;
-  assert.equal((await request("/users/me", other.token)).status, 401);
-  const roster = (await request(`/encryption/rooms/${target}`, b.token)).body
-    .data;
-  bv.identities[a.userId] = av.identityKey;
-  assert.throws(
-    () =>
-      protocol.sealMessage(bv, roster, {
-        roomId: target,
-        clientId: randomUUID(),
-        content: "Must reverify changed identity",
-      }),
-    /identity changed/,
-  );
+test("teams and rooms work after message encryption removal", async () => {
+  const owner = await account();
+  const input = { name: "Cutover team", description: "Normal team", creationKey: randomUUID() };
+  const created = await request("/teams", owner.token, "POST", input);
+  assert.equal(created.status, 201);
+  const teamId = created.body.data.id;
+  const retry = await request("/teams", owner.token, "POST", input);
+  assert.equal(retry.status, 201);
+  assert.equal(retry.body.data.id, teamId);
+  const detail = await request(`/teams/${teamId}`, owner.token);
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.data.team.name, input.name);
+  const room = await request(`/teams/${teamId}/rooms`, owner.token, "POST", { name: "Planning", type: "group" });
+  assert.equal(room.status, 201);
+  const project = await request(`/teams/${teamId}/projects`, owner.token, "POST", { name: "Project" });
+  assert.equal(project.status, 201);
+  const rejected = await request("/teams", owner.token, "POST", { ...input, creationKey: randomUUID(), encryptionMode: "e2ee-v2" });
+  assert.equal(rejected.status, 400);
 });
 
 test("account mail is queued encrypted, retries provider failure, and clears token-bearing payload after delivery", async () => {
@@ -2809,107 +2584,6 @@ test("phase6: room preference patches compose across devices and private replay 
   );
 });
 
-test("phase6: encrypted joins require approved devices and never gain historical message keys", async () => {
-  const { protocol, a, b, av, bv } = await cryptoFixture();
-  const created = await request("/rooms", a.token, "POST", {
-    type: "private",
-    name: "Encrypted history policy",
-    memberIds: [b.userId],
-  });
-  assert.equal(created.status, 201);
-  const id = created.body.data.id;
-  const roster = (await request(`/encryption/rooms/${id}`, a.token)).body.data,
-    clientId = randomUUID();
-  const saved = await request("/messages", a.token, "POST", {
-    roomId: id,
-    clientId,
-    encryptedPayload: protocol.sealMessage(av, roster, {
-      roomId: id,
-      clientId,
-      content: "Historical private body",
-    }),
-  });
-  assert.equal(saved.status, 201);
-  const c = await account(),
-    link = (await request(`/rooms/${id}/invitations`, a.token, "POST", {})).body
-      .data;
-  assert.equal(
-    (
-      await request("/rooms/invitations/accept", c.token, "POST", {
-        token: link.token,
-      })
-    ).status,
-    409,
-  );
-  const cv = protocol.createVault(c.userId);
-  assert.equal(
-    (
-      await request(
-        "/encryption/devices",
-        c.token,
-        "POST",
-        protocol.publicDevice(cv),
-      )
-    ).status,
-    201,
-  );
-  await request(`/rooms/${id}/settings`, a.token, "PATCH", {
-    join_approval: true,
-  });
-  assert.equal(
-    (
-      await request("/rooms/invitations/accept", c.token, "POST", {
-        token: link.token,
-      })
-    ).body.data.status,
-    "pending",
-  );
-  assert.equal((await request(`/encryption/rooms/${id}`, c.token)).status, 403);
-  assert.equal(
-    (
-      await request(`/rooms/${id}/requests/${c.userId}`, a.token, "POST", {
-        decision: "approved",
-      })
-    ).status,
-    200,
-  );
-  const old = (await request(`/messages/room/${id}`, c.token)).body.data
-    .messages[0];
-  assert.throws(() => protocol.openMessage(cv, old), /no key/);
-  assert.equal(
-    protocol.openMessage(bv, old).content,
-    "Historical private body",
-  );
-  assert.equal(
-    (await request(`/rooms/${id}/clear`, c.token, "POST")).status,
-    200,
-  );
-  assert.equal(
-    (await request(`/messages/room/${id}`, c.token)).body.data.messages.length,
-    0,
-  );
-  assert.equal(
-    (await request(`/messages/room/${id}`, a.token)).body.data.messages.length,
-    1,
-  );
-  const nextRoster = (await request(`/encryption/rooms/${id}`, a.token)).body
-      .data,
-    nextId = randomUUID();
-  const next = await request("/messages", a.token, "POST", {
-    roomId: id,
-    clientId: nextId,
-    encryptedPayload: protocol.sealMessage(av, nextRoster, {
-      roomId: id,
-      clientId: nextId,
-      content: "Future private body",
-    }),
-  });
-  assert.equal(next.status, 201);
-  assert.equal(
-    protocol.openMessage(cv, next.body.data).content,
-    "Future private body",
-  );
-});
 test("phase6: expired invitations disclose no room metadata and handover races keep an admin", async () => {
   const a = await account(),
     b = await account(),
@@ -3211,112 +2885,6 @@ test("ux: scheduled text publishes once across competing workers and respects ca
     0,
   );
 });
-test("ux: encrypted schedules contain no plaintext and stop when trusted recipients change", async () => {
-  const { protocol, a, b, av, bv } = await cryptoFixture();
-  const created = await request("/rooms", a.token, "POST", {
-    type: "private",
-    name: "Private scheduled",
-    memberIds: [b.userId],
-  });
-  const id = created.body.data.id;
-  const roster = (await request(`/encryption/rooms/${id}`, a.token)).body.data,
-    clientId = randomUUID();
-  const encryptedPayload = protocol.sealMessage(av, roster, {
-    roomId: id,
-    clientId,
-    content: "SECRET SCHEDULE",
-  });
-  const job = (
-    await request("/experience/schedules", a.token, "POST", {
-      roomId: id,
-      payload: { roomId: id, clientId, encryptedPayload },
-      dueAt: new Date(Date.now() + 60000).toISOString(),
-    })
-  ).body.data;
-  assert.ok(job.id);
-  assert.ok(
-    !JSON.stringify(
-      (
-        await query("SELECT payload FROM scheduled_messages WHERE id=$1", [
-          job.id,
-        ])
-      ).rows,
-    ).includes("SECRET SCHEDULE"),
-  );
-  await query(
-    "UPDATE encryption_devices SET revoked_at=NOW() WHERE user_id=$1",
-    [b.userId],
-  );
-  await query(
-    "UPDATE scheduled_messages SET due_at=NOW()-INTERVAL '1 second' WHERE id=$1",
-    [job.id],
-  );
-  await require("../src/services/experienceWorker.service").run();
-  assert.equal(
-    (await query("SELECT status FROM scheduled_messages WHERE id=$1", [job.id]))
-      .rows[0].status,
-    "needs_review",
-  );
-  assert.equal(
-    (
-      await query("SELECT 1 FROM messages WHERE room_id=$1 AND client_id=$2", [
-        id,
-        clientId,
-      ])
-    ).rowCount,
-    0,
-  );
-  assert.equal(
-    (await request(`/experience/schedules/${job.id}`, b.token)).status,
-    404,
-  );
-  const rotated = protocol.rotateDevice(bv);
-  assert.equal(
-    (
-      await request(
-        "/encryption/devices",
-        b.token,
-        "POST",
-        protocol.publicDevice(rotated),
-      )
-    ).status,
-    201,
-  );
-  const updatedRoster = (await request(`/encryption/rooms/${id}`, a.token)).body
-    .data;
-  const replacement = protocol.sealMessage(av, updatedRoster, {
-    roomId: id,
-    clientId,
-    content: "REVIEWED SECRET",
-  });
-  const reviewed = await request(
-    `/experience/schedules/${job.id}/review`,
-    a.token,
-    "POST",
-    {
-      roomId: id,
-      payload: { roomId: id, clientId, encryptedPayload: replacement },
-      dueAt: new Date(Date.now() + 60000).toISOString(),
-    },
-  );
-  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
-  await query(
-    "UPDATE scheduled_messages SET due_at=NOW()-INTERVAL '1 second' WHERE id=$1",
-    [job.id],
-  );
-  await require("../src/services/experienceWorker.service").run();
-  assert.equal(
-    (await query("SELECT status FROM scheduled_messages WHERE id=$1", [job.id]))
-      .rows[0].status,
-    "sent",
-  );
-  const delivered = (await request(`/messages/room/${id}`, b.token)).body.data
-    .messages[0];
-  assert.equal(
-    protocol.openMessage(rotated, delivered).content,
-    "REVIEWED SECRET",
-  );
-});
 test("ux: private saved notes cannot admit anyone else and bookmarks are personal", async () => {
   const a = await account(),
     b = await account(),
@@ -3440,10 +3008,10 @@ test("ux: disappearing messages obey admin policy and expire before cleanup runs
     "UPDATE messages SET expires_at=NOW()-INTERVAL '1 second' WHERE id=$1",
     [msg.id],
   );
-  assert.equal(
-    (await request(`/messages/room/${id}`, b.token)).body.data.messages.length,
-    0,
-  );
+  const visible = await request(`/messages/room/${id}`, b.token);
+  assert.equal(visible.status, 200);
+  assert.equal(visible.body.data.messages.some(message => message.id === msg.id), false,
+    "expired content is hidden while unrelated retention notices may remain");
   assert.equal(
     (await request(`/messages/room/${id}?ids=${msg.id}`, b.token)).body.data
       .missingIds[0],
@@ -3526,7 +3094,7 @@ test("ux: disappearing messages obey admin policy and expire before cleanup runs
   );
   const row = (
     await query(
-      "SELECT content,encrypted_payload,deleted_at FROM messages WHERE id=$1",
+      "SELECT content,deleted_at FROM messages WHERE id=$1",
       [msg.id],
     )
   ).rows[0];
@@ -3611,4 +3179,40 @@ test("ux: duration, mention levels, DND and admin broadcast mentions are enforce
     ).rowCount,
     1,
   );
+});
+
+test('message budget is shared across two API instances and active sessions', async () => {
+  const sender = await account();
+  const peerSession = await session(sender.userId);
+  const receiver = await account();
+  const id = await room(sender, receiver);
+  const a = await open(sender.token, 0);
+  const b = await open(peerSession.token, 1);
+  for (let index = 0; index < 30; index++) {
+    const result = await ack(index % 2 ? a : b, 'send-message', {
+      roomId: id, content: `Shared limit ${index}`, clientId: randomUUID(),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+  }
+  const result = await ack(b, 'send-message', { roomId: id, content: 'Over shared budget', clientId: randomUUID() });
+  assert.equal(result.status, 429);
+  const count = await query('SELECT COUNT(*)::int AS count FROM messages WHERE room_id=$1', [id]);
+  assert.equal(count.rows[0].count, 30);
+});
+
+test('indicator budget is shared by sockets reusing one session across servers', async () => {
+  const sender = await account();
+  const receiver = await account();
+  const id = await room(sender, receiver);
+  const a = await open(sender.token, 0);
+  const b = await open(sender.token, 1);
+  for (const socket of [a, b]) {
+    await ack(socket, 'join-room', { roomId: id });
+    await ack(socket, 'heartbeat', { foreground: true, roomId: id, revision: 1 });
+  }
+  for (let index = 0; index < 24; index++) {
+    const result = await ack(index % 2 ? a : b, 'typing', { roomId: id });
+    assert.equal(result.ok, true, JSON.stringify(result));
+  }
+  assert.equal((await ack(b, 'typing', { roomId: id })).status, 429);
 });

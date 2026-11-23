@@ -107,19 +107,6 @@ const promoteToDecision = asyncHandler(async (req, res) => {
     throw new ApiError(403, "You are not a member of this room");
   }
 
-  if (
-    (
-      await query(
-        "SELECT 1 FROM rooms WHERE id=$1 AND encryption_mode='e2ee-v1'",
-        [roomId],
-      )
-    ).rowCount
-  )
-    throw new ApiError(
-      409,
-      "Server-readable collaboration is unavailable in encrypted conversations",
-    );
-
   if (sourceMessageId) {
     const source = await query(
       `SELECT 1 FROM messages m
@@ -144,7 +131,7 @@ const promoteToDecision = asyncHandler(async (req, res) => {
       `INSERT INTO decisions (room_id, source_message_id, title, body, tags, created_by, client_id)
        SELECT r.id, $2::uuid, $3, $4, $5, $6, $7::uuid
          FROM rooms r JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$6
-        WHERE r.id=$1 AND r.encryption_mode <> 'e2ee-v1'
+        WHERE r.id=$1
           AND ($2::uuid IS NULL OR EXISTS (
             SELECT 1 FROM messages m WHERE m.id=$2 AND m.room_id=r.id
               AND m.deleted_at IS NULL AND message_visible(m.id,$6)

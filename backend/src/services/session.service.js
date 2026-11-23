@@ -9,7 +9,10 @@ async function requireSession(claims) {
     throw new ApiError(401, "Please sign in again to renew this session");
   }
   const result = await query(
-    `SELECT s.id, s.user_id, s.expires_at
+    `SELECT s.id, s.user_id, s.expires_at,
+       (SELECT COUNT(*)::integer FROM auth_sessions active
+         WHERE active.user_id=s.user_id AND active.revoked_at IS NULL
+           AND active.expires_at>NOW()) AS active_session_count
        FROM auth_sessions s JOIN users u ON u.id = s.user_id
       WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
         AND s.expires_at > NOW() AND u.deleted_at IS NULL`,

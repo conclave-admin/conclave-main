@@ -29,7 +29,7 @@ export default function Register() {
     setError("");
     try {
       await register(form);
-      navigate(sessionStorage.getItem("conclave:pending-invitation") ? "/join" : "/chats", { replace: true });
+      navigate(sessionStorage.getItem("conclave:pending-team-invitation") ? "/join-team" : sessionStorage.getItem("conclave:pending-invitation") ? "/join" : "/chats", { replace: true });
     } catch (err) {
       setError(err.response?.data?.message || "Could not create your account.");
     } finally {

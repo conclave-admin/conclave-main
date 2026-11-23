@@ -1,3 +1,5 @@
+import { Link } from "react-router-dom";
+import { mentionSegments } from "../../lib/mentions";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { sharedUrls } from "../../lib/sharedLinks";
 import { api } from "../../lib/api";
@@ -23,11 +25,11 @@ function highlight(text, query) {
   parts.push(text.slice(start));
   return parts;
 }
-function inline(text, query) {
-  // React escapes every text node. No raw HTML or executable URL protocols.
+function inline(text, query, members, mentionedIds) {
+  // Parse code and URLs before mentions so their contents stay literal.
   return text
     .split(
-      /(`[^`\n]+`|\*\*[^*\n]+\*\*|~~[^~\n]+~~|\*[^*\n]+\*|https?:\/\/[^\s<>"']+|@[\w.]+)/g,
+      /(`[^`\n]+`|\*\*[^*\n]+\*\*|~~[^~\n]+~~|\*[^*\n]+\*|https?:\/\/[^\s<>"']+)/g,
     )
     .map((part, i) => {
       if (part.startsWith("`") && part.endsWith("`"))
@@ -40,11 +42,23 @@ function inline(text, query) {
           </code>
         );
       if (part.startsWith("**") && part.endsWith("**"))
-        return <strong key={i}>{highlight(part.slice(2, -2), query)}</strong>;
+        return (
+          <strong key={i}>
+            {inline(part.slice(2, -2), query, members, mentionedIds)}
+          </strong>
+        );
       if (part.startsWith("~~") && part.endsWith("~~"))
-        return <s key={i}>{highlight(part.slice(2, -2), query)}</s>;
+        return (
+          <s key={i}>
+            {inline(part.slice(2, -2), query, members, mentionedIds)}
+          </s>
+        );
       if (part.startsWith("*") && part.endsWith("*"))
-        return <em key={i}>{highlight(part.slice(1, -1), query)}</em>;
+        return (
+          <em key={i}>
+            {inline(part.slice(1, -1), query, members, mentionedIds)}
+          </em>
+        );
       if (/^https?:\/\//i.test(part)) {
         const url = sharedUrls(part)[0];
         if (url)
@@ -60,16 +74,27 @@ function inline(text, query) {
             </a>
           );
       }
-      if (part.startsWith("@"))
-        return (
-          <span key={i} className="rounded bg-black/5 px-0.5 font-semibold">
-            {highlight(part, query)}
-          </span>
-        );
-      return highlight(part, query);
+      return (
+        <span key={i}>
+          {mentionSegments(part, members, mentionedIds).map((segment, index) =>
+            segment.userId ? (
+              <Link
+                key={index}
+                to={`/profile/${encodeURIComponent(segment.userId)}`}
+                className="rounded bg-brand/10 px-0.5 font-semibold text-brand hover:underline"
+                onClick={(event) => event.stopPropagation()}
+              >
+                {highlight(segment.text, query)}
+              </Link>
+            ) : (
+              <span key={index}>{highlight(segment.text, query)}</span>
+            ),
+          )}
+        </span>
+      );
     });
 }
-function rich(text, query) {
+function rich(text, query, members, mentionedIds) {
   return text.split(/(```[\s\S]*?```)/g).map((part, i) => {
     if (part.startsWith("```") && part.endsWith("```")) {
       const raw = part.slice(3, -3),
@@ -108,7 +133,7 @@ function rich(text, query) {
     }
     return (
       <span key={i} className="whitespace-pre-wrap">
-        {inline(part, query)}
+        {inline(part, query, members, mentionedIds)}
       </span>
     );
   });
@@ -117,6 +142,8 @@ export default function MessageBody({
   text = "",
   forceExpanded = false,
   query = "",
+  members = [],
+  mentionedIds = [],
 }) {
   const [expanded, setExpanded] = useState(false),
     [showAllLinks, setShowAllLinks] = useState(false),
@@ -142,7 +169,8 @@ export default function MessageBody({
     if (firstUrl && !linkMetadata.has(firstUrl)) {
       let pending = pendingMetadata.get(firstUrl);
       if (!pending) {
-        pending = api.get("/links/preview", { params: { url: firstUrl } })
+        pending = api
+          .get("/links/preview", { params: { url: firstUrl } })
           .then(({ data }) => {
             linkMetadata.set(firstUrl, data.data || null);
             return data.data || null;
@@ -155,7 +183,9 @@ export default function MessageBody({
         if (active) setFirstPreview(metadata);
       });
     }
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [firstUrl]);
   const visibleUrls = showAllLinks ? urls : urls.slice(0, 1);
   return (
@@ -168,7 +198,12 @@ export default function MessageBody({
             : ""
         }
       >
-        {rich(open || !long ? text : text.slice(0, LIMIT), query)}
+        {rich(
+          open || !long ? text : text.slice(0, LIMIT),
+          query,
+          members,
+          mentionedIds,
+        )}
       </div>
       {long && !forceExpanded && (
         <button
@@ -205,10 +240,12 @@ export default function MessageBody({
               className="mt-1 block rounded-lg border border-current/15 bg-black/5 p-2 text-xs"
             >
               <span className="block truncate opacity-70">
-                {(url === firstUrl && firstPreview?.host) || new URL(url).hostname}
+                {(url === firstUrl && firstPreview?.host) ||
+                  new URL(url).hostname}
               </span>
               <strong className="mt-1 block line-clamp-2 text-sm">
-                {(url === firstUrl && firstPreview?.title) || new URL(url).hostname}
+                {(url === firstUrl && firstPreview?.title) ||
+                  new URL(url).hostname}
               </strong>
               {url === firstUrl && firstPreview?.description && (
                 <span className="mt-1 block line-clamp-2 opacity-80">

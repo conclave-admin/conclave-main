@@ -1,7 +1,6 @@
 import AttentionSettings from "../components/settings/AttentionSettings";
 import { usePush } from "../contexts/PushContext";
 import PrivacySecuritySettings from "../components/settings/PrivacySecuritySettings";
-import EncryptionSettings from "../components/settings/EncryptionSettings";
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import useNetworkStatus from "@/hooks/useNetworkStatus";
@@ -10,7 +9,13 @@ import ThemeSwitch from "@/components/ui/ThemeSwitch";
 import { useToast } from "@/contexts/ToastContext";
 import { getPreferences, updatePreferences } from "@/services/users.service";
 import Page from "@/components/layout/Page";
-import { clearLocalFiles, localFileUsage } from "@/lib/fileCache";
+import {
+  clearAccountMediaCache,
+  accountMediaUsage,
+  listAccountDownloads,
+  removeLocalFile,
+} from "@/lib/fileCache";
+import { attachmentAccount } from "@/services/attachments.service";
 import {
   getMediaPreferences,
   saveMediaPreferences,
@@ -76,6 +81,7 @@ export default function Settings() {
   const network = useNetworkStatus();
   const [mediaPreferences, setMediaPreferences] = useState(getMediaPreferences);
   const [storageBytes, setStorageBytes] = useState(0);
+  const [downloadedFiles, setDownloadedFiles] = useState([]);
 
   useEffect(() => {
     setRoomHeader("Settings");
@@ -98,11 +104,32 @@ export default function Settings() {
   }, []);
 
   useEffect(() => {
-    localFileUsage().then(setStorageBytes);
+    let active = true;
+    const refresh = () =>
+      Promise.all([
+        accountMediaUsage(attachmentAccount()),
+        listAccountDownloads(attachmentAccount()),
+      ])
+        .then(([bytes, files]) => {
+          if (active) {
+            setStorageBytes(bytes);
+            setDownloadedFiles(files);
+          }
+        })
+        .catch(() => {});
+    refresh();
+    window.addEventListener("conclave:media-cache-saved", refresh);
+    window.addEventListener("conclave:media-cache-removed", refresh);
+    return () => {
+      active = false;
+      window.removeEventListener("conclave:media-cache-saved", refresh);
+      window.removeEventListener("conclave:media-cache-removed", refresh);
+    };
   }, []);
 
   async function clearDownloads() {
-    await clearLocalFiles();
+    await clearAccountMediaCache(attachmentAccount());
+    setDownloadedFiles([]);
     setStorageBytes(0);
     toast({ title: "Downloaded media cleared", tone: "success" });
   }
@@ -117,6 +144,12 @@ export default function Settings() {
     try {
       const saved = await updatePreferences(updates);
       setPreferences(saved);
+      // Let the live alert policy (ChatsContext) pick up the new values
+      // immediately instead of on the next full page load — otherwise a user
+      // who mutes a type here keeps getting in-app toasts until they refresh.
+      window.dispatchEvent(
+        new CustomEvent("conclave:preferences-changed", { detail: saved }),
+      );
     } catch (err) {
       setPreferences(previous);
       toast({
@@ -137,42 +170,67 @@ export default function Settings() {
   const silenced = level === "none";
 
   return (
-    <Page width="form">
+    <Page width="form" className="settings-page">
       <h1 className="text-h1 text-ink">Settings</h1>
       <p className="mt-2 text-body leading-relaxed text-muted">
         How Conclave looks, and when it interrupts you.
       </p>
 
-      <PrivacySecuritySettings />
-      <AttentionSettings />
-      <details
-        id="security-recovery"
-        className="mt-6 rounded-xl border border-line p-4"
-        open={window.location.hash === "#security-recovery"}
+      <nav
+        aria-label="Settings sections"
+        className="settings-navigation mt-5 flex gap-2 overflow-x-auto pb-2"
       >
-        <summary className="cursor-pointer text-label text-ink">
-          Security and recovery
-        </summary>
-        <EncryptionSettings />
-      </details>
+        {[
+          ["appearance", "Appearance"],
+          ["notifications", "Notifications"],
+          ["privacy", "Privacy & security"],
+          ["attention", "Focus"],
+          ["media", "Media"],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className="min-h-10 shrink-0 rounded-full border border-line bg-surface px-3 text-label text-ink hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+            onClick={() => {
+              const target = document.getElementById(`settings-${id}`);
+              target?.scrollIntoView({
+                behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+                  .matches
+                  ? "instant"
+                  : "smooth",
+                block: "start",
+              });
+              target?.focus({ preventScroll: true });
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
 
-      <section className="mt-8 rounded-xl border border-line bg-surface p-6">
+      <section
+        id="settings-appearance"
+        tabIndex={-1}
+        className="mt-5 rounded-xl border border-line bg-surface p-5 md:p-6"
+      >
         <h2 className="text-h2 text-ink">Appearance</h2>
         <p className="mt-2 max-w-xl text-body leading-relaxed text-muted">
-          Conclave follows your system appearance by default. Choosing Light or
-          Dark overrides it for this device only; choosing System hands control
-          back and keeps tracking as your system changes.
+          Choose a theme for this device. System follows your device’s
+          appearance.
         </p>
         <div className="mt-5">
           <ThemeSwitch />
         </div>
       </section>
 
-      <section className="mt-6 rounded-xl border border-line bg-surface p-6">
+      <section
+        id="settings-notifications"
+        tabIndex={-1}
+        className="mt-6 rounded-xl border border-line bg-surface p-5 md:p-6"
+      >
         <h2 className="text-h2 text-ink">Notifications</h2>
         <p className="mt-2 max-w-xl text-body leading-relaxed text-muted">
-          Conclave records everything you are shown either way. These settings
-          decide what interrupts you, not what the workspace keeps.
+          Choose your alerts. Your activity history stays available.
         </p>
 
         <div className="mt-5 space-y-3 rounded-lg border border-line p-4">
@@ -241,10 +299,50 @@ export default function Settings() {
               </button>
             )}
           </div>
+          <label className="flex items-center justify-between gap-3 text-body text-ink">
+            Show sender and message preview in notifications
+            <input
+              type="checkbox"
+              checked={preferences?.push_preview_enabled !== false}
+              disabled={savingKey === "preview"}
+              onChange={(event) =>
+                save({ push_preview_enabled: event.target.checked }, "preview")
+              }
+              className="h-4 w-4 rounded border-line text-brand"
+            />
+          </label>
           <p className="text-metadata text-muted">
-            Background alerts use a generic preview. Your saved preferences,
-            conversation mutes, blocks and active conversations control
-            delivery. Browser and operating system settings also apply.
+            {preferences?.push_preview_enabled !== false
+              ? "Background alerts show who sent it and a short preview, like a text message. Turn this off to show only “You have new activity in Conclave” — useful on a shared screen or lock screen."
+              : "Background alerts show only “You have new activity in Conclave”, with no sender or message text."}{" "}
+            Your saved preferences, conversation mutes, blocks and active
+            conversations still control delivery either way. Browser and
+            operating system settings also apply.
+          </p>
+        </div>
+
+        <div className="mt-4 space-y-3 rounded-lg border border-line p-4">
+          <h3 className="text-label font-semibold text-ink">
+            While the app is open
+          </h3>
+          <label className="flex items-center justify-between gap-3 text-body text-ink">
+            In-app alerts for new messages
+            <input
+              type="checkbox"
+              checked={preferences?.in_app_alerts_enabled !== false}
+              disabled={savingKey === "inApp"}
+              onChange={(event) =>
+                save({ in_app_alerts_enabled: event.target.checked }, "inApp")
+              }
+              className="h-4 w-4 rounded border-line text-brand"
+            />
+          </label>
+          <p className="text-metadata text-muted">
+            {preferences?.in_app_alerts_enabled !== false
+              ? "A short sound and a banner appear for messages in conversations you are not currently reading. Clicking the banner opens that conversation."
+              : "No sound or banner while the app is open — unread counts on the chat list still update."}{" "}
+            Never applies to the conversation on screen, and always respects
+            do-not-disturb, muted conversations and your notify settings below.
           </p>
         </div>
 
@@ -337,17 +435,22 @@ export default function Settings() {
         </fieldset>
       </section>
 
-      <section className="mt-6 rounded-xl border border-line bg-surface p-6">
+      <section
+        id="settings-media"
+        tabIndex={-1}
+        className="mt-6 rounded-xl border border-line bg-surface p-6"
+      >
         <h2 className="text-h2 text-ink">Storage and downloads</h2>
         <p className="mt-2 text-body text-muted">
-          Choose which originals download automatically. Photos load a small
-          preview; open a photo to download its original. Opened or manually
-          downloaded files are cached when device storage allows.
+          Files download quietly for offline use. Manage downloads on this
+          device.
         </p>
         <div className="mt-4 divide-y divide-line rounded-lg border border-line">
           {[
+            ["images", "Automatically download photos"],
+            ["audio", "Automatically download audio"],
             ["video", "Automatically download videos"],
-            ["documents", "Automatically download documents and audio"],
+            ["documents", "Automatically download documents"],
           ].map(([key, label]) => (
             <label
               key={key}
@@ -426,7 +529,50 @@ export default function Settings() {
             Clear downloaded media
           </button>
         </div>
+        {downloadedFiles.length > 0 && (
+          <details className="mt-4 rounded-xl border border-line p-3">
+            <summary className="cursor-pointer text-label text-ink">
+              Downloaded files ({downloadedFiles.length})
+            </summary>
+            <ul className="mt-2 max-h-64 divide-y divide-line overflow-auto">
+              {downloadedFiles.map((file) => (
+                <li
+                  key={file.key}
+                  className="flex min-w-0 items-center gap-3 py-2"
+                >
+                  <span
+                    className="min-w-0 flex-1 truncate text-body"
+                    title={file.filename}
+                  >
+                    {file.filename || "Attachment"}
+                    <span className="ml-2 text-xs text-muted">
+                      {(file.size / (1024 * 1024)).toFixed(1)} MB
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeLocalFile(file.key)}
+                    aria-label={`Remove offline copy ${file.filename || "attachment"}`}
+                    className="min-h-11 shrink-0 px-2 text-label text-error"
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        <p className="mt-3 text-xs text-muted">
+          Offline copies stay until you remove them or clear browser storage.
+          Browser storage limits still apply.
+        </p>
       </section>
+      <div id="settings-privacy" tabIndex={-1} className="scroll-mt-4">
+        <PrivacySecuritySettings />
+      </div>
+      <div id="settings-attention" tabIndex={-1} className="scroll-mt-4">
+        <AttentionSettings />
+      </div>
     </Page>
   );
 }

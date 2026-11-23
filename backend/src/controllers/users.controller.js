@@ -72,6 +72,24 @@ const getMe = asyncHandler(async (req, res) => {
   return ok(res, result.rows[0]);
 });
 
+// Profile reads require a shared room (or the caller's own account). Never
+// expose email or bypass the existing photo/about privacy and block rules.
+const getProfile = asyncHandler(async (req, res) => {
+  const result = await query(
+    `SELECT u.id, u.display_name,
+       CASE WHEN privacy_allowed(u.id,$2,'photo') THEN u.avatar_url ELSE NULL END AS avatar_url,
+       CASE WHEN privacy_allowed(u.id,$2,'about') THEN u.bio ELSE NULL END AS bio
+     FROM users u WHERE u.id=$1 AND u.deleted_at IS NULL
+       AND (u.id=$2 OR EXISTS (
+         SELECT 1 FROM room_members a JOIN room_members b ON b.room_id=a.room_id
+         WHERE a.user_id=$2 AND b.user_id=u.id
+       ))`,
+    [req.params.userId, req.user.id],
+  );
+  if (!result.rows.length) throw new ApiError(404, "Profile not available");
+  return ok(res, result.rows[0]);
+});
+
 // ---------- updateProfile ----------
 // Whitelist-only update: only display_name, avatar_url, bio can change here.
 // Email/password changes need their own, more carefully guarded endpoints
@@ -357,9 +375,6 @@ const deleteMe = asyncHandler(async (req, res) => {
     await client.query("DELETE FROM account_tokens WHERE user_id=$1", [
       req.user.id,
     ]);
-    await client.query("DELETE FROM encryption_backups WHERE user_id=$1", [
-      req.user.id,
-    ]);
     await client.query("DELETE FROM privacy_preferences WHERE user_id=$1", [
       req.user.id,
     ]);
@@ -390,6 +405,7 @@ const deleteMe = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  getProfile,
   getMe,
   updateProfile,
   listUsers,

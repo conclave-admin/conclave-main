@@ -1393,6 +1393,9 @@ dbTest("createTask returns the same shape listTasks returns", async () => {
       "decision_title",
       "due_date",
       "id",
+      "milestone_id",
+      "open_blockers",
+      "project_id",
       "room_id",
       "room_name",
       "room_slug",
@@ -4102,10 +4105,6 @@ async function createRoomVia(token, payload) {
   const body = await res.text();
   assert.equal(res.status, 201, body);
   const room = JSON.parse(body).data;
-  // These existing collaboration/history regressions exercise pre-encryption
-  // rooms. New-conversation encryption and request policy have their own real
-  // API checks in realtime-access.test.js; keep this legacy fixture explicit.
-  await query("UPDATE rooms SET encryption_mode='none' WHERE id=$1", [room.id]);
   await query("DELETE FROM dm_requests WHERE room_id=$1", [room.id]);
   return room;
 }
@@ -5655,6 +5654,16 @@ dbTest(
     assert.equal(defaults.activity_level, "all");
     assert.deepEqual(defaults.muted, {});
     assert.equal(defaults.push_enabled, true);
+    assert.equal(
+      defaults.push_preview_enabled,
+      true,
+      "rich push previews are on unless turned off",
+    );
+    assert.equal(
+      defaults.in_app_alerts_enabled,
+      true,
+      "in-app toast/sound alerts are on unless turned off",
+    );
     assert.equal(defaults.updatedAt, null, "defaults are not a saved state");
 
     const saved = await prefsVia(me.token, "PATCH", {
@@ -5722,6 +5731,15 @@ dbTest(
 
     const notObject = await prefsVia(me.token, "PATCH", { muted: ["mention"] });
     assert.equal(notObject.status, 400, "muted must be a map, not an array");
+
+    const notBoolean = await prefsVia(me.token, "PATCH", {
+      in_app_alerts_enabled: "on",
+    });
+    assert.equal(
+      notBoolean.status,
+      400,
+      "the in-app alert switch must be a boolean",
+    );
 
     // Nothing above should have written a row.
     const after = JSON.parse(await (await prefsVia(me.token)).text()).data;

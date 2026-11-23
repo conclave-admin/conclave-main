@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import ConversationPolicyNotice from "../components/chat/ConversationPolicyNotice";
 import ThreadPanel from "../components/chat/ThreadPanel";
 import { readDraft } from "../lib/drafts";
+import { readPosition } from "../lib/readingPosition";
 import { conversationMessageVisible } from "../lib/clearedConversations";
 import { respondToRequest } from "../services/security.service";
 import { activeReadView } from "../lib/messageReads";
@@ -34,6 +35,7 @@ import { useToast } from "../contexts/ToastContext";
 import useMessages from "../hooks/useMessages";
 import { messageSummary } from "../lib/messageMeta";
 import useRoom from "../hooks/useRoom";
+import { setActiveRoomId } from "../lib/activeRoom";
 
 /**
  * One conversation.
@@ -59,6 +61,10 @@ export default function Room() {
   const { setRoomHeader } = useOutletContext();
   const { user } = useAuth();
   const viewerId = user?.id;
+  const initialPosition = useMemo(
+    () => anchorId ? null : readPosition(viewerId, roomId),
+    [anchorId, viewerId, roomId],
+  );
   // Ordinary conversation opens show current history. Only an explicit deep
   // link requests an older slice around a particular message.
   const historyAnchor = anchorId;
@@ -102,11 +108,70 @@ export default function Room() {
   useEffect(() => {
     setThreadRoot(null);
   }, [roomId]);
+  // So a message arriving for this room never pops an in-app toast/sound for
+  // the conversation already on screen — ChatsContext reads this synchronously
+  // off `chat:updated`, which is cheaper and more immediate than round-tripping
+  // through the server-side viewing presence lease used for read receipts.
+  useEffect(() => {
+    setActiveRoomId(roomId);
+    return () => setActiveRoomId(null);
+  }, [roomId]);
   const [jumpTarget, setJumpTarget] = useState(null);
   const [highlightedId, setHighlightedId] = useState(null);
   const jumpTimerRef = useRef(null);
 
   const scrollContainerRef = useRef(null);
+  const composerRef = useRef(null);
+  // While a file drag hovers the pane. A counter rather than a boolean because
+  // dragover fires on every child element the pointer crosses — entering a
+  // message bubble fires dragleave from that bubble, and a plain true/false
+  // flickers the overlay for as long as the cursor moves over the transcript.
+  const dragDepth = useRef(0);
+  const [droppingFiles, setDroppingFiles] = useState(false);
+
+  const composerCanAccept = (dataTransfer) =>
+    Boolean(
+      dataTransfer &&
+        Array.from(dataTransfer.types || []).includes("Files"),
+    );
+
+  const handleDragEnter = (event) => {
+    if (!composerCanAccept(event.dataTransfer)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setDroppingFiles(true);
+  };
+
+  const handleDragOver = (event) => {
+    // Required for `drop` to fire at all; without it the browser navigates
+    // away to the dropped file instead of handing it to the app.
+    if (!composerCanAccept(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDragLeave = (event) => {
+    if (!composerCanAccept(event.dataTransfer)) return;
+    event.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDroppingFiles(false);
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    dragDepth.current = 0;
+    setDroppingFiles(false);
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (!files.length) return;
+    // Mirrors the composer's own `disabled` guard for the paste path: a
+    // read-only member must not be able to stage files the send button will
+    // refuse anyway.
+    if (room?.member_can_send === false && room?.my_role !== "admin") return;
+    // Same validation, size/type checks, image compression and preview dialog
+    // as a picked or pasted file: the composer owns that path and exposes it,
+    // so dropping cannot smuggle in a file the picker would have refused.
+    composerRef.current?.addFiles(files, { compress: true });
+  };
 
   useEffect(() => {
     const cleared = (event) => {
@@ -318,10 +383,10 @@ export default function Room() {
   );
 
   const handleMessageVisible = useCallback(
-    async (message) => {
+    async (message, { mediaViewer = false } = {}) => {
       if (
         !socket?.connected ||
-        !activeReadView() ||
+        !activeReadView(document, window, mediaViewer) ||
         !message?.id ||
         message._optimistic
       )
@@ -452,7 +517,26 @@ export default function Room() {
   }
 
   return (
-    <section className="grid h-full min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)_auto] conversation-canvas">
+    <section
+      className="relative grid h-full min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)_auto] conversation-canvas"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Out of flow (absolute), so it is not a grid item and cannot disturb
+          the explicit row-start placement described below. pointer-events-none
+          keeps the drop landing on the section itself. */}
+      {droppingFiles && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-brand bg-brand-soft/80"
+        >
+          <p className="rounded-lg bg-surface px-4 py-2 text-label text-ink shadow-modal">
+            Drop to attach
+          </p>
+        </div>
+      )}
       {/*
         Rows are addressed explicitly rather than by source order.
         PinnedDecisionStrip returns null for any room with no pins, and a null
@@ -514,7 +598,7 @@ export default function Room() {
         ) : (
           <MessageTimeline
             messages={timelineMessages}
-            initialPosition={null}
+            initialPosition={initialPosition}
             scrollContainerRef={scrollContainerRef}
             viewerId={viewerId}
             members={membersWithPointers}
@@ -533,12 +617,8 @@ export default function Room() {
               setEditDraft(message.content || "");
             }}
             onDelete={setDeleting}
-            onPromote={
-              room?.encryption_mode === "e2ee-v1" ? undefined : setPromoting
-            }
-            onFlagTask={
-              room?.encryption_mode === "e2ee-v1" ? undefined : setFlagging
-            }
+            onPromote={setPromoting}
+            onFlagTask={setFlagging}
             onToggleReaction={handleToggleReaction}
             onPin={handlePin}
             onUnpin={handleUnpin}
@@ -557,9 +637,7 @@ export default function Room() {
             }
             onMessageInfo={setMessageInfo}
             onOpenThread={setThreadRoot}
-            onForward={
-              room?.encryption_mode === "e2ee-v1" ? undefined : setForwarding
-            }
+            onForward={setForwarding}
             onJumpToMessage={jumpToMessage}
             jumpTargetId={jumpTarget?.id}
             onJumpLocated={handleJumpLocated}
@@ -580,10 +658,10 @@ export default function Room() {
       ) : room?.superseded_by ? (
         <div className="row-start-3 border-t border-line p-4">
           <Button onClick={() => navigate(`/chats/${room.superseded_by}`)}>
-            Continue in the encrypted conversation
+            Continue in the current conversation
           </Button>
           <p className="mt-2 text-metadata text-muted">
-            This legacy history remains server-readable.
+            This conversation has moved.
           </p>
         </div>
       ) : room?.message_request?.status === "declined" ? (
@@ -632,6 +710,7 @@ export default function Room() {
             </p>
           )}
           <MessageComposer
+            ref={composerRef}
             disabled={
               room.member_can_send === false && room.my_role !== "admin"
             }
@@ -659,21 +738,9 @@ export default function Room() {
               if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
             }}
             isOnline={browserOnline && isConnected}
-            onCreatePoll={
-              room?.encryption_mode === "e2ee-v1"
-                ? undefined
-                : () => setCreatingPoll(true)
-            }
-            onCreateDecision={
-              room?.encryption_mode === "e2ee-v1"
-                ? undefined
-                : () => setPromoting({ manual: true })
-            }
-            onCreateTask={
-              room?.encryption_mode === "e2ee-v1"
-                ? undefined
-                : () => setFlagging({ manual: true })
-            }
+            onCreatePoll={() => setCreatingPoll(true)}
+            onCreateDecision={() => setPromoting({ manual: true })}
+            onCreateTask={() => setFlagging({ manual: true })}
             members={members}
             activityScope={roomId}
             onTyping={handleTyping}

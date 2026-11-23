@@ -1,9 +1,12 @@
+import { AudioAttachment } from "./AttachmentCard";
 import { useEffect, useRef, useState } from "react";
 import IconAudio from "@/assets/icons/audio-file.svg?react";
 import IconClose from "@/assets/icons/close.svg?react";
 import IconDocument from "@/assets/icons/document.svg?react";
 import IconFile from "@/assets/icons/file.svg?react";
-import { limitFor } from "@/lib/media";
+import IconPlus from "@/assets/icons/plus.svg?react";
+import IconSend from "@/assets/icons/send.svg?react";
+import { PHOTO_ACCEPT, DOCUMENT_ACCEPT, limitFor } from "@/lib/media";
 import {
   compressVideo,
   videoCompressionSupported,
@@ -48,8 +51,10 @@ export default function AttachmentPreviewDialog({
   onSend,
   onCancel,
   onRemoveFile,
+  onAddFiles,
   onReplaceFile,
 }) {
+  const addFilesRef = useRef(null);
   const [captions, setCaptions] = useState(() => new Map());
   const [activeIndex, setActiveIndex] = useState(0);
   const [urls, setUrls] = useState([]);
@@ -150,9 +155,13 @@ export default function AttachmentPreviewDialog({
       }}
       closeDisabled={sending}
       fullscreen
+      className="media-staging-dialog"
       title="Send attachment"
       footer={
-        <form onSubmit={submit} className="flex w-full items-end gap-3">
+        <form
+          onSubmit={submit}
+          className="flex w-full items-end gap-2 rounded-[26px] bg-canvas p-1.5"
+        >
           <label className="min-w-0 flex-1">
             <span className="sr-only">Add a caption</span>
             <textarea
@@ -167,7 +176,7 @@ export default function AttachmentPreviewDialog({
               rows={1}
               placeholder="Add a caption…"
               disabled={sending}
-              className="block max-h-32 min-h-10 w-full resize-none rounded-lg border border-line bg-surface px-3.5 py-2.5 text-body text-ink outline-none transition-shadow placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:opacity-60"
+              className="block max-h-32 min-h-10 w-full resize-none rounded-[20px] border border-transparent bg-surface px-3.5 py-2.5 text-body text-ink outline-none transition-shadow placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:opacity-60"
             />
           </label>
           <Button
@@ -176,16 +185,64 @@ export default function AttachmentPreviewDialog({
             disabled={
               sendDisabled || sending || Boolean(compression) || oversized
             }
-            className="shrink-0"
+            className="h-12 w-12 shrink-0 rounded-full !px-0"
             aria-label={sending ? "Saving messages" : "Send"}
           >
-            {sending ? "Saving…" : "Send"}
+            {sending ? (
+              <span className="text-metadata">…</span>
+            ) : (
+              <IconSend className="h-5 w-5" aria-hidden="true" />
+            )}
           </Button>
         </form>
       }
     >
       <div className="flex h-full flex-col">
-        <div className="flex min-h-0 flex-1 items-center justify-center bg-canvas p-4">
+        <input
+          ref={addFilesRef}
+          type="file"
+          multiple
+          accept={`${PHOTO_ACCEPT},${DOCUMENT_ACCEPT}`}
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            const next = [...event.target.files];
+            event.target.value = "";
+            if (next.length) onAddFiles?.(next);
+          }}
+        />
+        <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-2">
+          <button
+            type="button"
+            aria-label="Previous attachment"
+            disabled={index === 0 || Boolean(compression)}
+            onClick={() => setActiveIndex((value) => Math.max(0, value - 1))}
+            className="grid h-10 w-10 place-items-center rounded-full text-xl text-ink hover:bg-canvas disabled:opacity-25"
+          >
+            ‹
+          </button>
+          <span className="text-label tabular-nums text-muted">
+            {index + 1} of {files.length}
+          </span>
+          <button
+            type="button"
+            aria-label="Next attachment"
+            disabled={index === files.length - 1 || Boolean(compression)}
+            onClick={() =>
+              setActiveIndex((value) => Math.min(files.length - 1, value + 1))
+            }
+            className="grid h-10 w-10 place-items-center rounded-full text-xl text-ink hover:bg-canvas disabled:opacity-25"
+          >
+            ›
+          </button>
+        </div>
+        {files.length > 1 && (
+          <p className="shrink-0 border-b border-line px-4 py-2 text-metadata text-muted">
+            {files.length} files selected · captions are saved per file
+          </p>
+        )}
+        <div className="media-staging-preview flex min-h-0 flex-1 items-center justify-center bg-canvas p-3 md:p-6">
           {isImage(active) && urls[index] ? (
             <img
               src={urls[index]}
@@ -201,11 +258,14 @@ export default function AttachmentPreviewDialog({
               className="max-h-full max-w-full rounded-lg"
             />
           ) : active?.type?.startsWith("audio/") && urls[index] ? (
-            <audio
-              src={urls[index]}
-              controls
-              className="w-full max-w-md"
-              aria-label={active.name}
+            <AudioAttachment
+              preview
+              attachment={{
+                local_blob: active,
+                filename: active.name,
+                mime_type: active.type,
+                size: active.size,
+              }}
             />
           ) : (
             <div className="flex max-w-xs flex-col items-center gap-3 text-center">
@@ -288,8 +348,19 @@ export default function AttachmentPreviewDialog({
             Discard voice message
           </button>
         )}
-        {files.length > 1 && (
-          <div className="scrollbar-none flex shrink-0 gap-2 overflow-x-auto border-t border-line px-4 py-3">
+        {(files.length > 1 || onAddFiles) && (
+          <div className="scrollbar-none flex shrink-0 items-center justify-start gap-3 overflow-x-auto border-t border-line px-4 py-3 md:justify-center">
+            {onAddFiles && (
+              <button
+                type="button"
+                aria-label="Add more files"
+                disabled={sending || Boolean(compression)}
+                onClick={() => addFilesRef.current?.click()}
+                className="grid h-16 w-16 shrink-0 place-items-center rounded-lg border-2 border-dashed border-line bg-canvas text-brand hover:border-brand disabled:opacity-40"
+              >
+                <IconPlus className="h-6 w-6" aria-hidden="true" />
+              </button>
+            )}
             {files.map((file, i) => (
               <div key={`${file.name}-${i}`} className="relative shrink-0">
                 <button
@@ -309,7 +380,7 @@ export default function AttachmentPreviewDialog({
                     <img
                       src={urls[i]}
                       alt=""
-                      className="h-14 w-14 object-cover"
+                      className="h-16 w-16 object-cover"
                     />
                   ) : isVideo(file) && urls[i] ? (
                     <video
@@ -317,10 +388,10 @@ export default function AttachmentPreviewDialog({
                       muted
                       playsInline
                       preload="metadata"
-                      className="h-14 w-14 object-cover"
+                      className="h-16 w-16 object-cover"
                     />
                   ) : (
-                    <span className="grid h-14 w-14 place-items-center rounded-lg bg-canvas text-muted">
+                    <span className="grid h-16 w-16 place-items-center rounded-lg bg-canvas text-muted">
                       <IconFile className="h-6 w-6" aria-hidden="true" />
                     </span>
                   )}
@@ -330,7 +401,7 @@ export default function AttachmentPreviewDialog({
                     type="button"
                     onClick={() => onRemoveFile(i)}
                     aria-label={`Remove ${file.name}`}
-                    className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-ink text-surface transition-colors hover:bg-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+                    className="absolute -right-1.5 -top-1.5 grid h-8 w-8 place-items-center rounded-full bg-ink text-surface transition-colors hover:bg-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
                   >
                     <IconClose className="h-3 w-3" aria-hidden="true" />
                   </button>

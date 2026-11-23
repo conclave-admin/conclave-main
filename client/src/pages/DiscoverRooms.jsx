@@ -6,6 +6,7 @@ import Spinner from "@/components/ui/Spinner";
 import Page from "@/components/layout/Page";
 import { useToast } from "@/contexts/ToastContext";
 import { discoverRooms, joinPublicRoom } from "@/services/rooms.service";
+import { requestDiscovery } from "@/services/teams.service";
 
 export default function DiscoverRooms() {
   const { setRoomHeader } = useOutletContext();
@@ -51,8 +52,8 @@ export default function DiscoverRooms() {
   async function join(room) {
     setJoining(room.id);
     try {
-      const result=await joinPublicRoom(room.id);
-      if(result.status==='pending'){toast({title:"Join request sent",description:"An admin must approve your request."});return;}
+      const result=room.team_id ? await requestDiscovery(room.id) : await joinPublicRoom(room.id);
+      if(result.status==='pending'){toast({title:room.team_id?"Team request sent":"Join request sent",description:"An admin must approve your request."});return;}
       toast({ title: `Joined ${room.name}`, tone: "success" });
       navigate(`/chats/${room.id}`);
     } catch (err) {
@@ -70,8 +71,8 @@ export default function DiscoverRooms() {
     <Page width="content">
       <h1 className="text-h1 text-ink">Discover public rooms</h1>
       <p className="mt-2 max-w-2xl text-body leading-relaxed text-muted">
-        Public rooms can be found and joined by signed-in members. Their
-        messages remain available to members only.
+        Find public rooms. Team rooms require a team membership request first.
+        Messages remain available to room members only.
       </p>
       <label className="mt-6 block max-w-xl">
         <span className="mb-2 block text-label text-ink">Search rooms</span>
@@ -131,7 +132,7 @@ export default function DiscoverRooms() {
                     disabled={joining !== null}
                     onClick={() => join(room)}
                   >
-                    {joining === room.id ? "Joining…" : "Join room"}
+                    {joining === room.id ? "Sending…" : room.team_id ? "Request to join team" : "Join room"}
                   </Button>
                 </div>
               </article>

@@ -6,3 +6,6 @@ build/
 *.log
 .DS_Store
 uploads/tmp/
+
+# Local design context and temporary design artifacts
+.superdesign/

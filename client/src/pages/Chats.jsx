@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+import Spinner from "@/components/ui/Spinner";
 import ConversationWelcome from "@/components/chats/ConversationWelcome";
 import { Outlet, useOutletContext, useParams } from "react-router-dom";
 import ChatList from "@/components/chats/ChatList";
@@ -37,7 +39,9 @@ export default function Chats() {
 
       <section className="min-h-0 min-w-0 bg-surface">
         {roomId ? (
-          <Outlet context={shellContext} />
+          <Suspense fallback={<Spinner label="Loading conversation" />}>
+            <Outlet context={shellContext} />
+          </Suspense>
         ) : (
           <div className="hidden h-full md:block">
             <ConversationWelcome />

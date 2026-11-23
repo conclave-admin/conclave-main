@@ -1,11 +1,13 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { listTeams } from "@/services/teams.service";
 import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
 import Logo from "@/components/landing/Logo";
 import { useAuth } from "@/contexts/AuthContext";
 import { useChats } from "@/contexts/ChatsContext";
 import IconDecisions from "@/assets/icons/decisions.svg?react";
-import IconHome from "@/assets/icons/home.svg?react";
+import IconMessage from "@/assets/icons/message.svg?react";
 import IconRecent from "@/assets/icons/recent.svg?react";
 import IconDigest from "@/assets/icons/digest.svg?react";
 import IconInbox from "@/assets/icons/work-inbox.svg?react";
@@ -16,9 +18,11 @@ import IconSignOut from "@/assets/icons/sign-out.svg?react";
 import IconTasks from "@/assets/icons/tasks.svg?react";
 import IconPublic from "@/assets/icons/public.svg?react";
 import IconChevronRight from "@/assets/icons/chevron-right.svg?react";
+import IconTeams from "@/assets/icons/teams.svg?react";
 
 const primaryNav = [
-  { to: "/chats", label: "Chats", Icon: IconHome, end: false },
+  { to: "/chats", label: "Chats", Icon: IconMessage, end: false },
+  { to: "/teams", label: "Teams", Icon: IconTeams, end: false },
   { to: "/activity", label: "Message activity", Icon: IconRecent },
   { to: "/tasks", label: "Tasks", Icon: IconTasks },
   { to: "/decisions", label: "Decisions", Icon: IconDecisions },
@@ -73,8 +77,27 @@ function RailItem({ to, end, label, Icon, badge = 0, collapsed, onNavigate }) {
  * @param {boolean} [collapsed]
  * @param {() => void} [onNavigate] - closes the mobile drawer after a click
  */
-export default function NavRail({ collapsed = false, pinned = false, onToggleExpanded, onNavigate }) {
+export default function NavRail({
+  collapsed = false,
+  pinned = false,
+  onToggleExpanded,
+  onNavigate,
+}) {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [teams, setTeams] = useState([]);
+  useEffect(() => {
+    let live = true;
+    listTeams()
+      .then((result) => {
+        if (live) setTeams(result.teams);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [pathname, user?.id]);
   const { unreadTotal } = useChats();
   const displayName = user?.display_name || "Unknown user";
 
@@ -97,6 +120,38 @@ export default function NavRail({ collapsed = false, pinned = false, onToggleExp
       </NavLink>
 
       <nav aria-label="Workspace" className="flex flex-col gap-1.5">
+        {!collapsed && (
+          <div className="mx-3 mb-3">
+            <label
+              htmlFor="team-switcher"
+              className="mb-1 block px-2 text-metadata text-muted"
+            >
+              TEAM CONTEXT
+            </label>
+            <select
+              id="team-switcher"
+              className="min-h-11 w-full rounded-xl border border-line bg-surface px-2 text-body text-ink"
+              value={
+                pathname.startsWith("/teams/") ? pathname.split("/")[2] : ""
+              }
+              onChange={(event) => {
+                const to = event.target.value
+                  ? `/teams/${event.target.value}`
+                  : "/teams";
+                onNavigate?.(to);
+                navigate(to);
+              }}
+            >
+              <option value="">Personal / all teams</option>
+              {teams.map((team) => (
+                <option value={team.id} key={team.id}>
+                  {team.name}
+                  {team.archived_at ? " (archived)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {primaryNav.map((item) => (
           <RailItem
             key={item.to}
@@ -111,17 +166,26 @@ export default function NavRail({ collapsed = false, pinned = false, onToggleExp
       <div className="mt-auto shrink-0 pt-4">
         <div className="mx-3 mb-3 border-t border-line" />
 
-        {onToggleExpanded && <button
-          type="button"
-          onClick={onToggleExpanded}
-          aria-label={pinned ? "Collapse navigation" : "Keep navigation open"}
-          aria-pressed={pinned}
-          title={collapsed ? "Keep navigation open" : undefined}
-          className={`${itemBase} w-[calc(100%-1.5rem)] text-muted hover:bg-surface hover:text-ink ${collapsed ? "justify-center" : "gap-3 px-3"}`}
-        >
-          <IconChevronRight className={`h-5 w-5 shrink-0 transition-transform ${pinned ? "rotate-180" : ""}`} aria-hidden="true" />
-          {!collapsed && <span className="text-body">{pinned ? "Collapse menu" : "Keep menu open"}</span>}
-        </button>}
+        {onToggleExpanded && (
+          <button
+            type="button"
+            onClick={onToggleExpanded}
+            aria-label={pinned ? "Collapse navigation" : "Keep navigation open"}
+            aria-pressed={pinned}
+            title={collapsed ? "Keep navigation open" : undefined}
+            className={`${itemBase} w-[calc(100%-1.5rem)] text-muted hover:bg-surface hover:text-ink ${collapsed ? "justify-center" : "gap-3 px-3"}`}
+          >
+            <IconChevronRight
+              className={`h-5 w-5 shrink-0 transition-transform ${pinned ? "rotate-180" : ""}`}
+              aria-hidden="true"
+            />
+            {!collapsed && (
+              <span className="text-body">
+                {pinned ? "Collapse menu" : "Keep menu open"}
+              </span>
+            )}
+          </button>
+        )}
 
         <RailItem
           to="/settings"

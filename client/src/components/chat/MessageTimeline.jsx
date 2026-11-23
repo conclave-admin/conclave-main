@@ -21,13 +21,13 @@ import TypingIndicator from "./TypingIndicator";
 function DaySeparator({ label }) {
   return (
     <div
-      className="my-4 flex items-center gap-3"
+      className="my-4 flex items-center justify-center"
       role="separator"
       aria-label={label}
     >
-      <span className="h-px flex-1 bg-line" aria-hidden="true" />
-      <span className="shrink-0 text-metadata text-muted">{label}</span>
-      <span className="h-px flex-1 bg-line" aria-hidden="true" />
+      <span className="rounded-lg border border-line/60 bg-surface/95 px-3 py-1 text-[11px] font-medium text-muted shadow-sm">
+        {label}
+      </span>
     </div>
   );
 }
@@ -159,6 +159,7 @@ export default function MessageTimeline({
   const locatedJumpRef = useRef(null);
   const [showJump, setShowJump] = useState(false);
   const [newBelow, setNewBelow] = useState(0);
+  const [expandedAlbums, setExpandedAlbums] = useState(() => new Set());
   const visibleIds = useMemo(() => new Set(), [roomId]);
   const pendingReads = useMemo(() => new Set(), [roomId]);
 
@@ -191,6 +192,39 @@ export default function MessageTimeline({
     [annotated, firstUnreadId],
   );
   const mediaItems = useMemo(() => viewerItems(annotated), [annotated]);
+  useLayoutEffect(() => {
+    const group = groups.find(
+      (entry) =>
+        entry.albumId &&
+        entry.messages.some((message) => message.id === jumpTargetId),
+    );
+    if (group)
+      setExpandedAlbums((current) =>
+        current.has(group.albumId)
+          ? current
+          : new Set([...current, group.albumId]),
+      );
+  }, [groups, jumpTargetId]);
+  const handleMediaView = useCallback(
+    (message) => {
+      if (
+        !readsEnabled ||
+        message.sender_id === viewerId ||
+        message._optimistic ||
+        visibleIds.has(message.id) ||
+        pendingReads.has(message.id)
+      )
+        return;
+      pendingReads.add(message.id);
+      return Promise.resolve(onMessageVisible?.(message, { mediaViewer: true }))
+        .then((accepted) => {
+          if (accepted === true) visibleIds.add(message.id);
+        })
+        .finally(() => pendingReads.delete(message.id));
+    },
+    [readsEnabled, viewerId, visibleIds, pendingReads, onMessageVisible],
+  );
+
   const virtualized = groups.length > WINDOW_THRESHOLD && !disableWindowing;
   const offsets = useMemo(() => {
     const next = [0];
@@ -237,27 +271,31 @@ export default function MessageTimeline({
     const next = rangeAt(offsets, container.scrollTop, container.clientHeight);
     setWindowRange((current) =>
       current?.roomId === roomId &&
-      current.start === next.start && current.end === next.end
+      current.start === next.start &&
+      current.end === next.end
         ? current
         : { ...next, roomId },
     );
   }, [scrollContainerRef, virtualized, offsets, roomId]);
 
-  const onMeasure = useCallback((index, height) => {
-    const key = groupKey(groups[index]);
-    const previous =
-      heightCacheRef.current.get(key) || estimatedHeight(groups[index]);
-    if (Math.abs(previous - height) < 1) return;
-    heightCacheRef.current.set(key, height);
-    const container = scrollContainerRef?.current;
-    if (
-      container &&
-      !stickRef.current &&
-      offsets[index + 1] <= container.scrollTop
-    )
-      container.scrollTop += height - previous;
-    setHeightRevision((value) => value + 1);
-  }, [groups, offsets, scrollContainerRef]);
+  const onMeasure = useCallback(
+    (index, height) => {
+      const key = groupKey(groups[index]);
+      const previous =
+        heightCacheRef.current.get(key) || estimatedHeight(groups[index]);
+      if (Math.abs(previous - height) < 1) return;
+      heightCacheRef.current.set(key, height);
+      const container = scrollContainerRef?.current;
+      if (
+        container &&
+        !stickRef.current &&
+        offsets[index + 1] <= container.scrollTop
+      )
+        container.scrollTop += height - previous;
+      setHeightRevision((value) => value + 1);
+    },
+    [groups, offsets, scrollContainerRef],
+  );
 
   // A Map lookup instead of a scan per row.
   const replyTargetFor = (message) =>
@@ -428,9 +466,14 @@ export default function MessageTimeline({
       });
       return;
     }
+    if (!node.getClientRects().length) return;
     locatedJumpRef.current = jumpTargetId;
     node.scrollIntoView({
-      behavior: virtualized ? "auto" : "smooth",
+      behavior:
+        virtualized ||
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+          ? "instant"
+          : "smooth",
       block: "center",
     });
     if (virtualized)
@@ -454,11 +497,11 @@ export default function MessageTimeline({
     viewerId,
     virtualized,
     onJumpLocated,
+    expandedAlbums,
   ]);
 
   useEffect(() => {
-    if (virtualized)
-      window.dispatchEvent(new Event("conclave:read-resume"));
+    if (virtualized) window.dispatchEvent(new Event("conclave:read-resume"));
   }, [virtualized, range.start, range.end]);
 
   useEffect(() => {
@@ -543,10 +586,15 @@ export default function MessageTimeline({
   }
 
   return (
-    <MediaViewerProvider items={mediaItems} onJump={onJumpToMessage}>
+    <MediaViewerProvider
+      items={mediaItems}
+      onJump={onJumpToMessage}
+      onView={handleMediaView}
+      deliveryActions={deliveryIds}
+    >
       <div
         ref={contentRef}
-        className="relative mx-auto flex w-full min-w-0 max-w-3xl flex-1 flex-col px-4 pb-5 pt-4 md:px-7"
+        className="relative mx-auto flex w-full min-w-0 max-w-5xl flex-1 flex-col px-3 pb-5 pt-4 md:px-8"
       >
         {hasMore && (
           <div ref={topSentinelRef} className="py-2">
@@ -575,9 +623,15 @@ export default function MessageTimeline({
                   role="separator"
                   aria-label="Unread messages"
                 >
-                  <span className="h-px flex-1 bg-brand/40" aria-hidden="true" />
+                  <span
+                    className="h-px flex-1 bg-brand/40"
+                    aria-hidden="true"
+                  />
                   <span>{unreadCount} unread messages</span>
-                  <span className="h-px flex-1 bg-brand/40" aria-hidden="true" />
+                  <span
+                    className="h-px flex-1 bg-brand/40"
+                    aria-hidden="true"
+                  />
                 </div>
               )}
               {group.messages[0]._startsDay && (
@@ -585,16 +639,11 @@ export default function MessageTimeline({
                   label={daySeparatorLabel(group.messages[0].created_at)}
                 />
               )}
-              {group.albumId && group.messages.length > 1 && (
-                <p className="mt-3 text-metadata text-muted">
-                  {group.messages.length} media items
-                </p>
-              )}
               <div
                 data-album-id={group.albumId || undefined}
                 className={
                   group.albumId && group.messages.length > 1
-                    ? "grid w-full min-w-0 grid-cols-[repeat(2,minmax(0,1fr))] items-start gap-2 rounded-2xl border border-line p-2"
+                    ? `media-album-grid ${group.senderId === viewerId ? "media-album-out" : "media-album-in"} ${group.messages.length === 3 ? "media-album-three" : ""}`
                     : ""
                 }
               >
@@ -605,13 +654,21 @@ export default function MessageTimeline({
                 the top with a void beneath it. */}
                     <div
                       data-message-id={message.id}
-                      className={`min-w-0 max-w-full ${group.albumId && group.messages.length > 1 ? "" : message._consecutive ? "mt-0.5" : "mt-3"} ${highlightedId === message.id ? "message-jump-highlight rounded-2xl" : ""}`}
+                      className={`min-w-0 max-w-full ${group.albumId && group.messages.length > 1 ? `album-tile ${group.messages.indexOf(message) > 3 && !expandedAlbums.has(group.albumId) ? "hidden" : ""}` : message._consecutive ? "mt-1" : "mt-4"} ${highlightedId === message.id ? "message-jump-highlight rounded-2xl" : ""}`}
                     >
                       <Message
                         message={message}
                         albumTile={Boolean(
                           group.albumId && group.messages.length > 1,
                         )}
+                        overflowCount={
+                          group.albumId &&
+                          group.messages.length > 4 &&
+                          group.messages.indexOf(message) === 3 &&
+                          !expandedAlbums.has(group.albumId)
+                            ? group.messages.length - 4
+                            : 0
+                        }
                         viewerId={viewerId}
                         members={members}
                         isAdmin={isAdmin}
@@ -656,7 +713,7 @@ export default function MessageTimeline({
         />
         <span className="sr-only" aria-live="polite" aria-atomic="true">
           {annotated.length
-            ? `${annotated.length} messages loaded. Latest message from ${annotated.at(-1)?.sender_name || "a member"}.`
+            ? `Latest message from ${annotated.at(-1)?.sender_name || "a member"}.`
             : ""}
         </span>
 

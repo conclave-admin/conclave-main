@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { api } from "../../lib/api";
-import { encryptOutgoing } from "../../lib/encryption";
 import Modal from "../ui/Modal";
 import Input from "../ui/Input";
 import Button from "../ui/Button";
@@ -29,7 +28,7 @@ export function ScheduleMessage({ room, text, onScheduled }) {
       >
         <p className="mb-4 text-body text-muted">
           Time is shown in your device’s timezone. Your message can send while
-          the app is closed. If conversation access or trusted devices change,
+          the app is closed. If conversation access changes,
           it will wait for your review in Message activity.
         </p>
         <form
@@ -40,12 +39,12 @@ export function ScheduleMessage({ room, text, onScheduled }) {
             setBusy(true);
             setError("");
             try {
-              const payload = await encryptOutgoing({
+              const payload = {
                 roomId: room.id,
                 clientId: crypto.randomUUID(),
                 content: text.trim(),
                 attachments: [],
-              });
+              };
               await api.post("/experience/schedules", {
                 roomId: room.id,
                 payload,
@@ -178,23 +177,7 @@ export function ReviewSchedule({ id, onReviewed }) {
     try {
       const item = (await api.get(`/experience/schedules/${id}`)).data.data;
       setJob(item);
-      if (item.payload?.encryptedPayload) {
-        const { decryptMessage } = await import("../../lib/encryption");
-        const { getSessionUserId } = await import("../../lib/session");
-        const decoded = await decryptMessage({
-          room_id: item.room_id,
-          client_id: item.client_id,
-          sender_id: getSessionUserId(),
-          thread_root_id: item.payload.threadRootId || null,
-          encrypted_payload: item.payload.encryptedPayload,
-          attachments: [],
-        });
-        setText(decoded._decrypted ? decoded.content : "");
-        if (!decoded._decrypted)
-          setError(
-            "This device cannot open the original. Restore your keys or enter replacement text.",
-          );
-      } else setText(item.payload?.content || "");
+      setText(item.payload?.content || "");
     } catch (e) {
       setError(e.response?.data?.message || "Could not open this schedule");
     } finally {
@@ -213,8 +196,7 @@ export function ReviewSchedule({ id, onReviewed }) {
         title="Review scheduled message"
       >
         <p className="mb-4 text-body text-muted">
-          Confirm the current recipients and choose a new time. This device will
-          encrypt the replacement for the current trusted devices.
+          Confirm the message and choose a new time.
         </p>
         <form
           className="space-y-4"
@@ -224,7 +206,7 @@ export function ReviewSchedule({ id, onReviewed }) {
             setBusy(true);
             setError("");
             try {
-              const payload = await encryptOutgoing({
+              const payload = {
                 roomId: job.room_id,
                 clientId: job.client_id,
                 content: text,
@@ -232,7 +214,7 @@ export function ReviewSchedule({ id, onReviewed }) {
                   ? { threadRootId: job.payload.threadRootId }
                   : {}),
                 attachments: [],
-              });
+              };
               await api.post(`/experience/schedules/${id}/review`, {
                 roomId: job.room_id,
                 payload,

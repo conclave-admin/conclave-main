@@ -8,7 +8,7 @@ import useExpiryClock from "../../hooks/useExpiryClock";
 import { useEffect, useRef, useState } from "react";
 import { localConversationMessages } from "../../services/messages.service";
 import { api } from "../../lib/api";
-import { decryptMessages } from "../../lib/encryption";
+import { isDevAuthBypass } from "../../config/devPreview";
 import { useSyncReconciler } from "../../contexts/SyncContext";
 import MessageBody from "./MessageBody";
 import MessageComposer from "./MessageComposer";
@@ -35,7 +35,9 @@ export default function ThreadPanel({
     setBusy(true);
     try {
       const cached = navigator.onLine === false;
-      const page = cached
+      const page = isDevAuthBypass
+        ? { messages: [root], nextCursor: null }
+        : cached
         ? {
             messages: (await localConversationMessages(room.id)).filter(
               (m) => m.id === rootId || m.thread_root_id === rootId,
@@ -47,7 +49,7 @@ export default function ThreadPanel({
               params: { before },
             })
           ).data.data;
-      const decoded = await decryptMessages(page.messages);
+      const decoded = page.messages;
       if (current !== version.current) return;
       setRows((old) =>
         before
@@ -141,13 +143,7 @@ export default function ThreadPanel({
               <p className="mb-2 text-label text-muted">
                 {original.sender_name}
               </p>
-              <MessageBody
-                text={
-                  original._cryptoError
-                    ? "Restore message access in Settings to view this message."
-                    : original.content || ""
-                }
-              />
+              <MessageBody text={original.content || ""} />
               <AttachmentGroup attachments={original.attachments || []} />
             </article>
           )}
@@ -172,13 +168,7 @@ export default function ThreadPanel({
                   {m.sender_name || "You"} ·{" "}
                   {new Date(m.created_at).toLocaleString()}
                 </p>
-                <MessageBody
-                  text={
-                    m._cryptoError
-                      ? "Restore message access in Settings to view this message."
-                      : m.content || ""
-                  }
-                />
+                <MessageBody text={m.content || ""} />
                 <AttachmentGroup attachments={m.attachments || []} />
                 {m._outbox ? (
                   <MessageSendState

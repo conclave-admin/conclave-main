@@ -1,11 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Suspense, useEffect, useState } from "react";
+import { Outlet, useNavigate } from "react-router-dom";
 import { ChatsProvider } from "@/contexts/ChatsContext";
 import { NotificationsProvider } from "@/contexts/NotificationsContext";
 import { PresenceProvider } from "@/contexts/PresenceContext";
 import useMediaQuery from "@/hooks/useMediaQuery";
 import usePersistentState from "@/hooks/usePersistentState";
 import Navbar from "../Navbar";
+import Spinner from "../ui/Spinner";
 import BottomNav from "./BottomNav";
 import NavRail from "./NavRail";
 import { useChats } from "@/contexts/ChatsContext";
@@ -77,8 +78,8 @@ function QuickSwitcher({ open, onClose }) {
 /**
  * The app shell: rail, header, content.
  *
- * At md and up the rail is a slim icon column that the header's sidebar button
- * expands to show labels, and the choice is remembered. Below md the rail is a
+ * At md and up the rail expands on hover or keyboard focus. Its pin control
+ * remembers an expanded layout. Below md the rail is a
  * drawer opened by the same button. Each route owns its own overflow, so the
  * chat list and the timeline scroll independently.
  *
@@ -88,24 +89,14 @@ function QuickSwitcher({ open, onClose }) {
 export default function AppShell() {
   const [roomHeader, setRoomHeader] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [railHovered, setRailHovered] = useState(false);
+  const [railFocused, setRailFocused] = useState(false);
   const [expanded, setExpanded] = usePersistentState(
     "conclave.sidebar.expanded",
     false,
   );
-  const [railHovered, setRailHovered] = useState(false);
-  const [railFocused, setRailFocused] = useState(false);
-  const [suppressRailPeek, setSuppressRailPeek] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
-  const { pathname } = useLocation();
-  const pendingSidebarRoute = useRef(null);
-  const [pageTransition, setPageTransition] = useState(0);
   const isDesktop = useMediaQuery("(min-width: 768px)");
-
-  useLayoutEffect(() => {
-    if (pendingSidebarRoute.current !== pathname) return;
-    pendingSidebarRoute.current = null;
-    setPageTransition((value) => value + 1);
-  }, [pathname]);
 
   // Growing the window past md with the drawer open would leave an overlay on a
   // layout that no longer has one.
@@ -147,14 +138,11 @@ export default function AppShell() {
       ? "Collapse sidebar"
       : "Expand sidebar"
     : "Open menu";
-  const showRailLabels = expanded || (!suppressRailPeek && (railHovered || railFocused));
-  const closeRailAfterNavigate = (to) => {
-    pendingSidebarRoute.current = to && to !== pathname ? to : null;
+  const showRailLabels = expanded || railHovered || railFocused;
+  const closeRailAfterNavigate = () => {
     setExpanded(false);
-    setRailHovered(false);
-    setRailFocused(false);
-    setSuppressRailPeek(true);
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    if (document.activeElement instanceof HTMLElement)
+      document.activeElement.blur();
   };
 
   return (
@@ -167,24 +155,42 @@ export default function AppShell() {
       <NotificationsProvider>
         <ChatsProvider>
           <div
-            style={{ "--rail-w": expanded ? "240px" : "72px" }}
+            style={{ "--rail-w": showRailLabels ? "240px" : "72px" }}
             className="app-shell grid h-dvh min-h-0 grid-cols-1 bg-canvas text-ink md:grid-cols-[var(--rail-w)_1fr] motion-safe:md:transition-[grid-template-columns] motion-safe:md:duration-200"
           >
+            <a
+              href="#app-main-content"
+              className="sr-only fixed left-4 top-4 z-[80] rounded bg-surface px-4 py-3 text-ink shadow-modal focus:not-sr-only focus:fixed"
+              onClick={(event) => {
+                event.preventDefault();
+                document.getElementById("app-main-content")?.focus();
+              }}
+            >
+              Skip to main content
+            </a>
             <QuickSwitcher
               open={switcherOpen}
               onClose={() => setSwitcherOpen(false)}
             />
             <aside
-              className={`app-rail relative z-30 hidden min-h-0 md:block ${showRailLabels && !expanded ? "app-rail-peek" : ""}`}
+              className="app-rail relative z-30 hidden min-h-0 md:block"
               onMouseEnter={() => setRailHovered(true)}
-              onMouseLeave={() => { setRailHovered(false); setSuppressRailPeek(false); }}
-              onFocusCapture={() => { setRailFocused(true); setSuppressRailPeek(false); }}
+              onMouseLeave={() => setRailHovered(false)}
+              onFocusCapture={() => setRailFocused(true)}
               onBlurCapture={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget)) setRailFocused(false);
+                if (!event.currentTarget.contains(event.relatedTarget))
+                  setRailFocused(false);
               }}
             >
-              <div className={`app-rail-panel h-full ${showRailLabels ? "w-[240px]" : "w-[72px]"}`}>
-                <NavRail collapsed={!showRailLabels} pinned={expanded} onToggleExpanded={() => { setSuppressRailPeek(false); setExpanded((value) => !value); }} onNavigate={closeRailAfterNavigate} />
+              <div
+                className={`app-rail-panel h-full ${showRailLabels ? "w-[240px]" : "w-[72px]"}`}
+              >
+                <NavRail
+                  collapsed={!showRailLabels}
+                  pinned={expanded}
+                  onToggleExpanded={() => setExpanded((value) => !value)}
+                  onNavigate={closeRailAfterNavigate}
+                />
               </div>
             </aside>
 
@@ -196,8 +202,14 @@ export default function AppShell() {
                 onMenuClick={toggleSidebar}
                 menuLabel={sidebarLabel}
               />
-              <main key={pageTransition} className={`min-h-0 min-w-0 overflow-hidden bg-canvas ${pageTransition ? "sidebar-page-enter" : ""}`}>
-                <Outlet context={{ setRoomHeader }} />
+              <main
+                id="app-main-content"
+                tabIndex={-1}
+                className="min-h-0 min-w-0 overflow-hidden bg-canvas"
+              >
+                <Suspense fallback={<Spinner label="Loading page" />}>
+                  <Outlet context={{ setRoomHeader }} />
+                </Suspense>
               </main>
               <BottomNav />
             </div>
@@ -210,7 +222,7 @@ export default function AppShell() {
                   aria-hidden="true"
                 />
                 <div className="absolute left-0 top-0 h-full w-[min(280px,85vw)] overscroll-contain border-r border-line bg-surface shadow-modal">
-                  <NavRail onNavigate={(to) => { pendingSidebarRoute.current = to && to !== pathname ? to : null; setDrawerOpen(false); }} />
+                  <NavRail onNavigate={() => setDrawerOpen(false)} />
                 </div>
               </div>
             )}

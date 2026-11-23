@@ -216,3 +216,34 @@ test("in-flight reads survive timeline rerenders without duplicate sends or lost
   assert.equal(inFlight.size, 0);
   second();
 });
+
+test("an explicitly opened media viewer permits reads only while it is the sole focused foreground dialog", () => {
+  const f = fixture();
+  const viewer = { matches: (selector) => selector === ".media-viewer-dialog" };
+  f.doc.querySelector = () => viewer;
+  f.doc.querySelectorAll = () => [viewer];
+  assert.equal(activeReadView(f.doc, f.win), false, "timeline remains covered");
+  assert.equal(activeReadView(f.doc, f.win, true), true);
+  f.doc.querySelectorAll = () => [viewer, {}];
+  assert.equal(
+    activeReadView(f.doc, f.win, true),
+    false,
+    "another modal blocks viewer reads",
+  );
+  f.doc.querySelectorAll = () => [viewer];
+  f.doc.focused = false;
+  assert.equal(activeReadView(f.doc, f.win, true), false);
+  f.doc.focused = true;
+  f.doc.visibilityState = "hidden";
+  assert.equal(activeReadView(f.doc, f.win, true), false);
+  f.doc.visibilityState = "visible";
+  f.win.navigator.onLine = false;
+  assert.equal(activeReadView(f.doc, f.win, true), false);
+  f.win.navigator.onLine = true;
+  f.doc.querySelector = () => ({ matches: () => false });
+  assert.equal(
+    activeReadView(f.doc, f.win, true),
+    false,
+    "other dialogs never qualify",
+  );
+});

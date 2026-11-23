@@ -114,8 +114,13 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
-// Push contains no message text or actor names. A binding scoped to the active
-// account/session prevents delayed notifications appearing after logout/login.
+// Push may contain a sender/room preview when the recipient has that opt-out
+// preference enabled (notification_preferences.push_preview_enabled); the
+// server already filtered it through mutes, blocks and DND before sending.
+// Either way this payload is end-to-end encrypted to this browser by the Web
+// Push standard, so the push provider (FCM/Mozilla/etc.) never sees it. A
+// binding scoped to the active account/session prevents delayed
+// notifications appearing after logout/login.
 function pushState(value, write = false) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("conclave-push", 1);
@@ -175,10 +180,18 @@ self.addEventListener("push", (event) =>
         );
         return;
       }
-      await self.registration.showNotification("Conclave", {
-        body: "You have new activity in Conclave",
-        tag: `conclave:${data.id}`,
-        renotify: false,
+      // A tag shared by every notification for one conversation lets a new
+      // message replace and re-alert on the previous one instead of stacking
+      // a separate OS notification per message (renotify: true). Falling
+      // back to a per-notification tag keeps older/malformed payloads and
+      // non-message types from colliding with each other.
+      const tag = typeof data.tag === "string" ? data.tag : `conclave:${data.id}`;
+      await self.registration.showNotification(data.title || "Conclave", {
+        body: data.body || "You have new activity in Conclave",
+        tag,
+        renotify: true,
+        icon: "/apple-touch-icon.png",
+        badge: "/favicon-32.png",
         data: { id: data.id, bindingId: data.bindingId, url: "/notifications" },
       });
       for (const client of await self.clients.matchAll({ type: "window" }))

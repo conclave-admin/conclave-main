@@ -12,23 +12,6 @@ const object = (key) => {
 };
 r2.isConfigured = () => true;
 r2.putObject = async ({ key, body, contentType }) => {
-  const wave =
-    contentType === "audio/wav" &&
-    Buffer.from(body).subarray(0, 4).toString() === "RIFF" &&
-    Buffer.from(body).subarray(8, 12).toString() === "WAVE";
-  const webm =
-    contentType === "audio/webm" &&
-    Buffer.from(body)
-      .subarray(0, 4)
-      .equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
-  if (
-    !wave &&
-    !webm &&
-    (contentType !== "application/vnd.conclave.encrypted" ||
-      Buffer.from(body).subarray(0, 5).toString() !== "CCEF1" ||
-      Buffer.from(body).includes(Buffer.from("SECRET DOCUMENT CONTENT")))
-  )
-    throw new Error("The browser sent plaintext to encrypted test storage");
   objects.set(key, {
     bytes: Buffer.from(body),
     type: contentType,
@@ -58,5 +41,5 @@ r2.getObject = async (key, { range } = {}) => {
 };
 r2.deleteObject = async (key) => objects.delete(key);
 r2.signedGetUrl = async () => {
-  throw new Error("Encrypted media must use authenticated ciphertext delivery");
+  throw new Error("Signed preview URLs are unavailable in the in-memory test store");
 };

@@ -1,3 +1,4 @@
+import AudioWaveform from "./AudioWaveform";
 import IconAudio from "@/assets/icons/audio-file.svg?react";
 import IconDocument from "@/assets/icons/document.svg?react";
 import IconDownload from "@/assets/icons/download.svg?react";
@@ -57,7 +58,9 @@ function useObjectUrl(blob) {
 }
 
 function DownloadState({ download, attachment }) {
-  const { status, progress, persisted, error, start, cancel } = download;
+  const { status, error, start, cancel } = download;
+  // Background transfers and completed downloads do not interrupt the conversation.
+  if (status === "downloaded" || download.automatic) return null;
   if (
     status === "available" ||
     status === "not-downloaded" ||
@@ -69,25 +72,8 @@ function DownloadState({ download, attachment }) {
       data-download-state={status}
       className="min-w-0 text-metadata text-muted"
     >
-      <p role="status">
-        {status === "downloading"
-          ? `Downloading ${Math.round(progress * 100)}%`
-          : status === "downloaded"
-            ? persisted
-              ? "Downloaded · available offline"
-              : "Available this visit · could not save offline"
-            : status === "failed"
-              ? "Download failed"
-              : "Tap the attachment to download"}
-      </p>
       {status === "downloading" && (
         <>
-          <progress
-            aria-label={`Downloading ${attachment.filename}`}
-            max="1"
-            value={progress}
-            className="mt-1 w-full accent-brand"
-          />
           <button
             type="button"
             onClick={cancel}
@@ -117,7 +103,7 @@ function DownloadState({ download, attachment }) {
   );
 }
 
-function AudioAttachment({ attachment }) {
+export function AudioAttachment({ attachment, preview = false }) {
   const download = useAttachmentDownload(attachment);
   const src = useObjectUrl(download.blob);
   const player = useRef(null);
@@ -127,6 +113,7 @@ function AudioAttachment({ attachment }) {
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const playWhenReady = useRef(false);
+  const playbackRequested = useRef(false);
   const probing = useRef(false);
   const probeTimer = useRef(null);
   useEffect(() => () => clearTimeout(probeTimer.current), [src]);
@@ -141,19 +128,26 @@ function AudioAttachment({ attachment }) {
     if (!src || !playWhenReady.current || !player.current) return;
     playWhenReady.current = false;
     player.current.play().catch(() => {
-      setError("Playback could not start in this browser. Save the audio to try another player.");
+      setError(
+        "Playback could not start in this browser. Save the audio to try another player.",
+      );
     });
   }, [src]);
   const togglePlayback = async () => {
+    playbackRequested.current = true;
     setError("");
     if (src && player.current) {
       if (!player.current.paused) {
         player.current.pause();
         return;
       }
-      await player.current.play().catch(() =>
-        setError("Playback could not start in this browser. Save the audio to try another player."),
-      );
+      await player.current
+        .play()
+        .catch(() =>
+          setError(
+            "Playback could not start in this browser. Save the audio to try another player.",
+          ),
+        );
       return;
     }
     playWhenReady.current = true;
@@ -203,7 +197,9 @@ function AudioAttachment({ attachment }) {
       }, 2000);
     }
   };
-  const isVoice = attachment.filename?.startsWith("voice-") || attachment.filename?.startsWith("recording-");
+  const isVoice =
+    attachment.filename?.startsWith("voice-") ||
+    attachment.filename?.startsWith("recording-");
   const label = isVoice ? "Voice message" : attachment.filename || "Audio file";
   const busy = download.checking || download.status === "downloading";
   const seek = (event) => {
@@ -216,6 +212,7 @@ function AudioAttachment({ attachment }) {
   return (
     <section
       aria-label={label}
+      data-media-offline={download.persisted ? "true" : "false"}
       className="w-full min-w-0 max-w-sm space-y-2 rounded-2xl border border-line bg-canvas p-3"
     >
       <audio
@@ -224,10 +221,17 @@ function AudioAttachment({ attachment }) {
         preload="metadata"
         onLoadedMetadata={loaded}
         onDurationChange={metadata}
-        onTimeUpdate={(event) => { metadata(); setCurrentTime(event.currentTarget.currentTime); }}
+        onTimeUpdate={(event) => {
+          metadata();
+          setCurrentTime(event.currentTarget.currentTime);
+        }}
         onPlay={() => {
           setPlaying(true);
-          window.dispatchEvent(new CustomEvent("conclave:voice-playing", { detail: player.current }));
+          window.dispatchEvent(
+            new CustomEvent("conclave:voice-playing", {
+              detail: player.current,
+            }),
+          );
         }}
         onPause={() => setPlaying(false)}
         onEnded={() => {
@@ -235,7 +239,13 @@ function AudioAttachment({ attachment }) {
           if (player.current) player.current.currentTime = 0;
           setCurrentTime(0);
         }}
-        onError={() => src && setError("This browser could not play the audio. Save it to try another player.")}
+        onError={() =>
+          src &&
+          playbackRequested.current &&
+          setError(
+            "This browser could not play the audio. Save it to try another player.",
+          )
+        }
       />
       <div className="flex min-w-0 items-center gap-3">
         <button
@@ -245,37 +255,65 @@ function AudioAttachment({ attachment }) {
           aria-label={`${playing ? "Pause" : "Play"} ${label}`}
           className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-brand text-white disabled:opacity-60"
         >
-          {playing ? <span className="flex gap-1" aria-hidden="true"><span className="h-4 w-1 rounded-sm bg-current" /><span className="h-4 w-1 rounded-sm bg-current" /></span> : <IconPlay className="h-5 w-5" aria-hidden="true" />}
+          {playing ? (
+            <span className="flex gap-1" aria-hidden="true">
+              <span className="h-4 w-1 rounded-sm bg-current" />
+              <span className="h-4 w-1 rounded-sm bg-current" />
+            </span>
+          ) : (
+            <IconPlay className="h-5 w-5" aria-hidden="true" />
+          )}
         </button>
         <div className="min-w-0 flex-1">
           <p className="truncate text-label text-ink">{label}</p>
-          <input
-            type="range"
-            min="0"
-            max={duration || 1}
-            step="0.1"
-            value={Math.min(currentTime, duration || 1)}
-            onChange={seek}
+          <AudioWaveform
+            blob={download.blob}
+            duration={duration}
+            currentTime={currentTime}
+            onSeek={seek}
             disabled={!src || !duration}
-            aria-label={`Seek ${label}`}
-            className="h-5 w-full min-w-0 accent-brand disabled:opacity-50"
+            label={label}
           />
           <div className="flex justify-between text-metadata text-muted">
             <span>{formatDuration(currentTime) || "0:00"}</span>
-            <span>{download.status === "downloading" ? `${Math.round(download.progress * 100)}%` : formatDuration(duration || attachment.duration) || formatSize(attachment.size)}</span>
+            <span>
+              {download.status === "downloading" && !download.automatic
+                ? "Loading…"
+                : formatDuration(duration || attachment.duration) ||
+                  formatSize(attachment.size)}
+            </span>
           </div>
         </div>
       </div>
       <div className="flex items-center justify-between gap-3">
-        <button type="button" onClick={() => setSpeed((value) => value === 1 ? 1.5 : value === 1.5 ? 2 : 1)} className="rounded-full px-2 py-1 text-metadata font-semibold text-brand" aria-label={`Playback speed ${speed} times. Change speed`}>{speed}×</button>
-        {download.blob && <button type="button" className="text-metadata text-brand" onClick={() => saveAttachmentToDevice(attachment, download.blob)}>Save audio</button>}
+        <button
+          type="button"
+          onClick={() =>
+            setSpeed((value) => (value === 1 ? 1.5 : value === 1.5 ? 2 : 1))
+          }
+          className="rounded-full px-2 py-1 text-metadata font-semibold text-brand"
+          aria-label={`Playback speed ${speed} times. Change speed`}
+        >
+          {speed}×
+        </button>
+        {download.blob && (
+          <button
+            type="button"
+            className="text-metadata text-brand"
+            onClick={() => saveAttachmentToDevice(attachment, download.blob)}
+          >
+            Save audio
+          </button>
+        )}
       </div>
       {error && (
         <p role="alert" className="text-metadata text-error">
           {error}
         </p>
       )}
-      <DownloadState download={download} attachment={attachment} />
+      {!preview && (
+        <DownloadState download={download} attachment={attachment} />
+      )}
     </section>
   );
 }
@@ -291,39 +329,119 @@ function FileAttachment({ attachment }) {
 function DocumentAttachment({ attachment }) {
   const Icon = iconFor(attachment.mime_type);
   const download = useAttachmentDownload(attachment);
+  const src = useObjectUrl(download.blob);
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const textFile = attachment.mime_type?.startsWith("text/");
+  const canPreview = textFile || attachment.mime_type === "application/pdf";
+  useEffect(() => {
+    let active = true;
+    if (open && textFile && download.blob)
+      download.blob
+        .slice(0, 256 * 1024)
+        .text()
+        .then((value) => {
+          if (active) setText(value);
+        })
+        .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [open, textFile, download.blob]);
   const save = async () => {
     const blob = await download.start();
     if (blob) saveAttachmentToDevice(attachment, blob);
   };
+  const preview = async () => {
+    const blob = await download.start();
+    if (blob) setOpen(true);
+  };
   return (
-    <div className="w-full max-w-sm rounded-lg border border-line bg-canvas px-3 py-2.5">
-      <button
-        type="button"
-        onClick={save}
-        disabled={
-          download.status === "downloading" ||
-          !(attachment.id || attachment.local_blob)
-        }
-        aria-label={`Download ${attachment.filename}`}
-        className="group flex w-full items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-70"
-      >
-        <Icon className="h-5 w-5 shrink-0 text-muted" aria-hidden="true" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-body text-ink">
-            {attachment.filename || "Attachment"}
-          </span>
-          <span className="block text-metadata text-muted">
-            {formatSize(attachment.size)}
-          </span>
+    <div
+      data-media-offline={download.persisted ? "true" : "false"}
+      data-download-state={download.status}
+      className="w-full max-w-sm rounded-2xl border border-line bg-canvas p-3"
+    >
+      <div className="flex items-center gap-3">
+        <span className="grid h-12 w-11 shrink-0 place-items-center rounded-xl bg-brand/10 text-brand">
+          <Icon className="h-7 w-7" aria-hidden="true" />
         </span>
-        <IconDownload
-          className="h-4 w-4 shrink-0 text-brand"
-          aria-hidden="true"
-        />
-      </button>
-      <div className="mt-2">
-        <DownloadState download={download} attachment={attachment} />
+        <div className="min-w-0 flex-1">
+          <p
+            className="truncate text-label font-medium text-ink"
+            title={attachment.filename}
+          >
+            {attachment.filename || "Attachment"}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {(attachment.filename?.split(".").pop() || "FILE").toUpperCase()} ·{" "}
+            {formatSize(attachment.size)}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={save}
+          disabled={!attachment.id && !attachment.local_blob}
+          aria-label={`Download ${attachment.filename}`}
+          title={
+            download.persisted
+              ? "Saved offline · Save to device"
+              : "Save to device"
+          }
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-brand hover:bg-brand/10"
+        >
+          <IconDownload className="h-5 w-5" aria-hidden="true" />
+        </button>
       </div>
+      {canPreview && (
+        <button
+          type="button"
+          onClick={preview}
+          disabled={!attachment.id && !attachment.local_blob}
+          className="mt-2 inline-flex min-h-11 items-center text-label text-brand"
+          aria-label={`Open ${attachment.filename}`}
+        >
+          Open
+        </button>
+      )}
+      <DownloadState download={download} attachment={attachment} />
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title={attachment.filename || "Document"}
+        fullscreen
+      >
+        {textFile ? (
+          <div className="h-full overflow-auto p-5">
+            <pre className="whitespace-pre-wrap break-words font-mono text-sm">
+              {text}
+            </pre>
+            {download.blob?.size > 256 * 1024 && (
+              <p className="mt-4 text-muted">
+                Preview shows the first 256 KB. Save the file to read it all.
+              </p>
+            )}
+          </div>
+        ) : (
+          src && (
+            <div className="flex h-full min-h-0 flex-col">
+              <a
+                href={src}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 px-4 py-3 text-brand underline"
+              >
+                Open PDF in a new tab
+              </a>
+              <iframe
+                title={attachment.filename || "PDF document"}
+                src={src}
+                className="min-h-0 w-full flex-1 border-0"
+              />
+            </div>
+          )
+        )}
+      </Modal>
     </div>
   );
 }
@@ -370,7 +488,11 @@ function ImageAttachment({ attachment, tile = false }) {
     if (blob) saveAttachmentToDevice(attachment, blob);
   };
   return (
-    <div className="w-full min-w-0 max-w-xs">
+    <div
+      data-media-download-state={download.status}
+      data-media-offline={download.persisted ? "true" : "false"}
+      className={`media-visual w-full min-w-0 ${tile ? "" : "max-w-xs"}`}
+    >
       <button
         type="button"
         onClick={openOriginal}
@@ -405,7 +527,7 @@ function ImageAttachment({ attachment, tile = false }) {
           Retry preview
         </button>
       )}
-      <DownloadState download={download} attachment={attachment} />
+      <DownloadState download={download} attachment={attachment} compact />
       <Modal
         open={open}
         onClose={() => setOpen(false)}
@@ -434,7 +556,7 @@ function ImageAttachment({ attachment, tile = false }) {
             This image cannot be displayed. Download it to open in another app.
           </p>
         )}
-        <DownloadState download={download} attachment={attachment} />
+        <DownloadState download={download} attachment={attachment} compact />
         {download.status === "available" && (
           <button
             type="button"
@@ -461,6 +583,7 @@ function VideoAttachment({ attachment, tile = false }) {
   const src = useObjectUrl(download.blob);
   const player = useRef(null);
   const playWhenReady = useRef(false);
+  const playbackRequested = useRef(false);
   const [playFailed, setPlayFailed] = useState(false);
   const size = formatSize(attachment.size);
   useEffect(() => {
@@ -476,7 +599,8 @@ function VideoAttachment({ attachment, tile = false }) {
       if (event.detail !== player.current) player.current?.pause();
     };
     window.addEventListener("conclave:voice-playing", pauseForOtherMedia);
-    return () => window.removeEventListener("conclave:voice-playing", pauseForOtherMedia);
+    return () =>
+      window.removeEventListener("conclave:voice-playing", pauseForOtherMedia);
   }, []);
   const play = async () => {
     if (tile && viewer) {
@@ -492,7 +616,11 @@ function VideoAttachment({ attachment, tile = false }) {
     if (!blob) playWhenReady.current = false;
   };
   return (
-    <div className="w-full min-w-0 max-w-xs">
+    <div
+      data-media-download-state={download.status}
+      data-media-offline={download.persisted ? "true" : "false"}
+      className={`media-visual w-full min-w-0 ${tile ? "" : "max-w-xs"}`}
+    >
       {src && !playFailed && !tile ? (
         <video
           ref={player}
@@ -501,20 +629,29 @@ function VideoAttachment({ attachment, tile = false }) {
           playsInline
           preload="metadata"
           onError={() => setPlayFailed(true)}
-          onPlay={() => window.dispatchEvent(new CustomEvent("conclave:voice-playing", { detail: player.current }))}
+          onPlay={() =>
+            window.dispatchEvent(
+              new CustomEvent("conclave:voice-playing", {
+                detail: player.current,
+              }),
+            )
+          }
           poster={attachment.preview_url || undefined}
           style={mediaStyle(attachment, tile, "16 / 9")}
           aria-label={attachment.filename}
           className="block min-w-0 max-w-full bg-canvas object-contain rounded-xl"
         />
       ) : playFailed && !tile ? (
-        <div className="rounded-xl border border-line bg-canvas p-4 text-metadata text-muted">Video preview unavailable</div>
+        <div className="rounded-xl border border-line bg-canvas p-4 text-metadata text-muted">
+          Video preview unavailable
+        </div>
       ) : (
         <button
           type="button"
           onClick={play}
           disabled={
-            download.checking || download.status === "downloading" ||
+            download.checking ||
+            download.status === "downloading" ||
             !(attachment.id || attachment.local_blob)
           }
           aria-label={`Play video ${attachment.filename || ""}, ${size}`}
@@ -530,9 +667,15 @@ function VideoAttachment({ attachment, tile = false }) {
           )}
           <span className="relative flex max-w-full flex-col items-center gap-1 rounded-lg bg-surface/90 px-3 py-2 text-center">
             <IconPlay className="h-6 w-6 text-brand" aria-hidden="true" />
-            <span className="max-w-full truncate text-label">{download.status === "downloading" ? `Loading ${Math.round(download.progress * 100)}%` : "Play video"}</span>
+            <span className="max-w-full truncate text-label">
+              {download.status === "downloading" && !download.automatic
+                ? "Loading…"
+                : "Play video"}
+            </span>
           </span>
-          <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-metadata text-white">{formatDuration(attachment.duration) || size}</span>
+          <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-metadata text-white">
+            {formatDuration(attachment.duration) || size}
+          </span>
         </button>
       )}
       {playFailed && (
@@ -540,7 +683,7 @@ function VideoAttachment({ attachment, tile = false }) {
           This browser cannot play this video. Save it to open in another app.
         </p>
       )}
-      <DownloadState download={download} attachment={attachment} />
+      <DownloadState download={download} attachment={attachment} compact />
       {download.blob && (
         <button
           type="button"
@@ -574,7 +717,7 @@ export function AttachmentGroup({ attachments = [], albumTile = false }) {
         <div
           className={
             tiled
-              ? "grid w-full min-w-0 max-w-xs grid-cols-[repeat(2,minmax(0,1fr))] gap-1 overflow-hidden rounded-xl"
+              ? `grid w-full min-w-0 ${albumTile ? "" : "max-w-xs"} ${albumTile && media.length === 1 ? "grid-cols-1" : "grid-cols-2"} gap-1 overflow-hidden rounded-lg`
               : "w-full min-w-0 max-w-xs"
           }
         >
@@ -596,9 +739,9 @@ export function AttachmentGroup({ attachments = [], albumTile = false }) {
     </div>
   );
 }
-export default function AttachmentCard({ attachment }) {
+export default function AttachmentCard({ attachment, tile = false }) {
   return isMedia(attachment) ? (
-    <MediaItem attachment={attachment} tile={false} />
+    <MediaItem attachment={attachment} tile={tile} />
   ) : (
     <FileAttachment attachment={attachment} />
   );

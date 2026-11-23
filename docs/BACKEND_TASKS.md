@@ -14,7 +14,7 @@ checks in [DEPLOYMENT.md](../DEPLOYMENT.md).
 | Chat list                          | `GET /rooms` enriched (`display_name`, `display_avatar`, `last_message`, `unread_count`, activity order) and `chat:updated` emitted per member on create/edit/delete | Michael            |
 | Notifications                      | List/seen APIs, room invitations and mentions implemented                                                                                                            | Michael            |
 | Uploads                            | R2 uploads and server-owned attachment records; Cloudinary retained for legacy files                                                                                 | Michael            |
-| Frontend                           | Room chat wired; several screens use fixtures/placeholders                                                                                                           | Isaac              |
+| Frontend                           | Live room chat and collaboration services; explicit development-preview fixtures are separate from production                                                                                                           | Isaac              |
 | Deployment                         | Configuration committed; public deployment not verified here                                                                                                         | Victor coordinates |
 
 ## Victor's backlog
@@ -40,8 +40,9 @@ checks in [DEPLOYMENT.md](../DEPLOYMENT.md).
   `task:updated` to room subscribers. Pagination, assignment notifications and
   live updates on the top-level board remain possible follow-up work.
 - **B — Notifications:** recipient-scoped pagination, unread count and mark-seen,
-  with live room-invite/mention delivery. `new_message` fan-out is intentionally
-  deferred pending a product decision about notification volume.
+  with live room-invite, mention, and `new_message` fan-out, preference-gated push,
+  room/kind grouping, and foreground toast/sound alerts. Live-provider acceptance
+  remains outstanding.
 - **C — Uploads:** allowlisted files stream to R2 and create ownership records.
   Message creation claims the upload once and reads metadata from the server
   record. The attachment proxy retains Cloudinary delivery for legacy files.

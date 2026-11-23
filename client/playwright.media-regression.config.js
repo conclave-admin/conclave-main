@@ -5,6 +5,9 @@ export default {
   ...base,
   testMatch: [
     "media-albums.spec.js",
+    "social-ui.spec.js",
+    "voice-offline.spec.js",
+    "messaging-quality.spec.js",
     "media-downloads.spec.js",
     "media-outbox.spec.js",
     "media-followups.spec.js",

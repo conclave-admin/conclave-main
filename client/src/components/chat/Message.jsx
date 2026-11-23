@@ -1,13 +1,10 @@
-import { Link } from "react-router-dom";
+import { useMediaViewer } from "./MediaViewer";
 import { ReminderAction } from "./MessageLater";
 import MessageBody from "./MessageBody";
 import Avatar from "@/components/ui/Avatar";
 import { usePresence } from "@/contexts/PresenceContext";
 import { formatClockTime, messageSummary, readStatus } from "@/lib/messageMeta";
-import IconFailed from "@/assets/icons/failed.svg?react";
-import IconPending from "@/assets/icons/pending.svg?react";
-import IconRead from "@/assets/icons/read.svg?react";
-import IconSent from "@/assets/icons/sent.svg?react";
+import MessageStatus from "./MessageStatus";
 import { AttachmentGroup } from "./AttachmentCard";
 import MessageActions from "./MessageActions";
 import MessageReactions from "./MessageReactions";
@@ -16,42 +13,12 @@ import MessageSendState from "./MessageSendState";
 import { useRef, useState } from "react";
 import useLongPress from "@/hooks/useLongPress";
 
-const TICKS = {
-  pending: { Icon: IconPending, label: "Sending" },
-  queued: { Icon: IconPending, label: "Waiting for connection" },
-  sent: { Icon: IconSent, label: "Sent" },
-  delivered: { Icon: IconRead, label: "Delivered" },
-  read: { Icon: IconRead, label: "Read" },
-  failed: { Icon: IconFailed, label: "Failed to send" },
-};
-
-function Tick({ status }) {
-  if (!status) return null;
-  const { Icon, label } = TICKS[status];
-  const queued = status === "queued";
-  return (
-    <span
-      data-message-status={status}
-      title={queued ? "Not sent. Waiting for an internet connection." : label}
-      aria-label={label}
-      className={`inline-flex items-center gap-1 ${status === "failed" ? "text-error" : status === "read" ? "text-brand" : queued ? "text-warning" : "text-muted"}`}
-    >
-      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-      <span className="sr-only">{label}</span>
-      {queued && (
-        <span className="text-[10px] font-medium leading-none">Not sent</span>
-      )}
-    </span>
-  );
-}
-
 /**
  * One message row.
  *
- * Own messages sit right in brand, others left on a soft surface, per section 6.
- * A run of messages from one author shares an avatar and a name — only the last
- * of the run carries the timestamp and the delivery tick, which is what makes a
- * conversation scannable rather than a stack of identical cards.
+ * Own messages sit right on a soft brand surface; others sit left. Consecutive
+ * messages share an avatar and name while each bubble retains its own time and
+ * receipt state, so individual messages remain identifiable within a run.
  *
  * @param {object} message - from annotateMessages, so _consecutive/_endsGroup exist
  * @param {string} viewerId
@@ -71,6 +38,7 @@ export default function Message({
   readOnly = false,
   replyTarget,
   albumTile = false,
+  overflowCount = 0,
   deliveryIds,
   onMessageInfo,
   onReply,
@@ -86,6 +54,7 @@ export default function Message({
   onJumpToMessage,
 }) {
   const { isOnlineIn, getPresence } = usePresence();
+  const mediaViewer = useMediaViewer();
   const mine = message.sender_id === viewerId;
   const [menuOpen, setMenuOpen] = useState(false);
   const [reminderOpen, setReminderOpen] = useState(false);
@@ -109,9 +78,9 @@ export default function Message({
   const showAvatar = !albumTile && !mine && !message._consecutive;
 
   const bubbleClass = [
-    "message-bubble min-w-0 max-w-full px-3.5 py-2.5 text-body [overflow-wrap:anywhere]",
+    "message-bubble min-w-0 max-w-full px-3 py-2 text-body [overflow-wrap:anywhere]",
     albumTile ? "pr-9" : "",
-    "rounded-2xl",
+    "rounded-xl",
     mine ? "message-bubble-out" : "message-bubble-in text-ink",
     message._endsGroup ? (mine ? "rounded-br-md" : "rounded-bl-md") : "",
     message.is_deleted ? "italic" : "",
@@ -119,6 +88,33 @@ export default function Message({
   ]
     .filter(Boolean)
     .join(" ");
+
+  const metadata = (
+    <div
+      className={`message-meta mt-1 flex items-center justify-end gap-1 whitespace-nowrap text-[11px] leading-4 text-muted ${albumTile ? "order-3" : ""}`}
+    >
+      {status === "failed" && (
+        <span className="text-metadata text-error">Failed to send</span>
+      )}
+      {message.edited_at && !message.is_deleted && <span>edited</span>}
+      <time className="tabular-nums" dateTime={message.created_at}>
+        {formatClockTime(message.created_at)}
+      </time>
+      {mine && !message._optimistic && onMessageInfo ? (
+        <button
+          type="button"
+          aria-label="Message info"
+          title="View delivery and read details"
+          onClick={() => onMessageInfo(message)}
+          className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+        >
+          <MessageStatus status={status} />
+        </button>
+      ) : (
+        <MessageStatus status={status} />
+      )}
+    </div>
+  );
 
   return (
     <article
@@ -128,7 +124,7 @@ export default function Message({
         <Avatar
           name={senderName}
           src={message.sender_avatar}
-          size="md"
+          size="sm"
           presence={
             getPresence(roomId, message.sender_id) === "unknown"
               ? null
@@ -141,16 +137,18 @@ export default function Message({
         // Keeps a run of messages aligned under the first one's text rather
         // than sliding left into the avatar column.
         !albumTile &&
-        !mine && <span className="h-12 w-12 shrink-0" aria-hidden="true" />
+        !mine && <span className="h-9 w-9 shrink-0" aria-hidden="true" />
       )}
 
       <div
-        className={`flex min-w-0 ${albumTile ? "w-full max-w-full" : "max-w-[min(36rem,85%)]"} flex-col gap-1 ${
+        className={`flex min-w-0 ${albumTile ? "w-full max-w-full" : "message-column"} flex-col gap-1 ${
           mine ? "items-end" : "items-start"
         }`}
       >
-        {!message._consecutive && !mine && (
-          <span className="truncate text-label text-ink">{senderName}</span>
+        {!albumTile && !message._consecutive && !mine && (
+          <span className="truncate text-label font-semibold text-brand">
+            {senderName}
+          </span>
         )}
 
         {!readOnly && !message._optimistic && !message.is_deleted && (
@@ -204,27 +202,11 @@ export default function Message({
           <div
             ref={bodyRef}
             {...longPress}
-            className={`relative flex min-w-0 max-w-full ${albumTile ? "w-full flex-col-reverse" : "flex-col"} gap-1.5 ${
+            className={`relative flex min-w-0 max-w-full ${albumTile ? "w-full flex-col" : "flex-col"} gap-1.5 ${
               mine ? "items-end" : "items-start"
-            }`}
+            } ${message.attachments?.length ? "message-attachment-body rounded-xl border border-line/50 bg-surface p-1.5" : ""}`}
           >
-            {message._cryptoError && (
-              <p
-                role="status"
-                className="max-w-full break-words text-metadata text-muted"
-              >
-                This message isn’t available on this device. Open Security and
-                recovery in Settings to connect or restore this device.
-                <Link
-                  to="/settings#security-recovery"
-                  className="ml-1 underline"
-                >
-                  Restore message access
-                </Link>
-              </p>
-            )}
             {message.content &&
-              !message._cryptoError &&
               (message.poll ? (
                 <PollCard
                   message={message}
@@ -232,12 +214,19 @@ export default function Message({
                   canClose={mine || isAdmin}
                 />
               ) : (
-                <div className={bubbleClass}>
+                <div className={`${bubbleClass} ${albumTile ? "order-2" : ""}`}>
                   <MessageBody
                     text={message.content}
+                    members={members}
+                    mentionedIds={
+                      message.mentioned_user_ids ||
+                      message.mentionedUserIds ||
+                      []
+                    }
                     forceExpanded={Boolean(message._searchMatch)}
                     query={message._searchQuery || ""}
                   />
+                  {!message.attachments?.length && metadata}
                 </div>
               ))}
 
@@ -246,6 +235,35 @@ export default function Message({
                 attachments={message.attachments}
                 albumTile={albumTile}
               />
+            )}
+
+            {message.attachments?.length > 0 && metadata}
+            {message._outbox &&
+              message.attachments?.some((file) =>
+                /^(image|video)\//.test(file.mime_type || ""),
+              ) && (
+                <MessageSendState
+                  message={message}
+                  onRetry={deliveryIds.onRetry}
+                  onCancel={deliveryIds.onCancel}
+                  compact
+                />
+              )}
+            {overflowCount > 0 && (
+              <button
+                type="button"
+                className="album-overflow absolute inset-0 z-[2] flex items-center justify-center rounded-lg bg-black/45 text-3xl font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                aria-label={`View ${overflowCount} more photos and videos`}
+                onClick={() =>
+                  mediaViewer?.open(
+                    message.attachments.find((file) =>
+                      /^(image|video)\//.test(file.mime_type || ""),
+                    ),
+                  )
+                }
+              >
+                +{overflowCount}
+              </button>
             )}
 
             {/* Beside the body and out of the layout flow, so a row reserves no
@@ -296,17 +314,16 @@ export default function Message({
           </div>
         )}
 
-        {message.edited_at && !message.is_deleted && (
-          <span className="text-metadata text-muted">edited</span>
-        )}
-
-        {message._outbox && (
-          <MessageSendState
-            message={message}
-            onRetry={deliveryIds.onRetry}
-            onCancel={deliveryIds.onCancel}
-          />
-        )}
+        {message._outbox &&
+          !message.attachments?.some((file) =>
+            /^(image|video)\//.test(file.mime_type || ""),
+          ) && (
+            <MessageSendState
+              message={message}
+              onRetry={deliveryIds.onRetry}
+              onCancel={deliveryIds.onCancel}
+            />
+          )}
 
         {/* Renders nothing until a reaction exists. The first one comes from the
             actions menu, so this row only appears once there is something to
@@ -318,32 +335,9 @@ export default function Message({
           />
         )}
 
-        {(message._endsGroup || message._outbox) && (
-          <div className="flex items-center gap-1.5">
-            {status === "failed" && (
-              <span className="text-metadata text-error">Failed to send</span>
-            )}
-            <time
-              className="text-metadata text-muted"
-              dateTime={message.created_at}
-            >
-              {formatClockTime(message.created_at)}
-            </time>
-            {mine && !message._optimistic && onMessageInfo ? (
-              <button
-                type="button"
-                aria-label="Message info"
-                title="View delivery and read details"
-                onClick={() => onMessageInfo(message)}
-                className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-              >
-                <Tick status={status} />
-              </button>
-            ) : (
-              <Tick status={status} />
-            )}
-          </div>
-        )}
+        {(!message.attachments?.length || message.is_deleted) &&
+          (!message.content || message.poll || message.is_deleted) &&
+          metadata}
       </div>
     </article>
   );

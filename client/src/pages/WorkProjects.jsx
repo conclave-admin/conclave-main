@@ -38,7 +38,7 @@ export function ProjectsIndex() {
     catch (e) { setError(e.response?.data?.message || "Could not create project"); }
     finally { setBusy(false); }
   }
-  const available = rooms.filter((room) => room.type !== "dm" && room.encryption_mode !== "e2ee-v1" && room.my_role === "admin");
+  const available = rooms.filter((room) => room.type !== "dm" && room.my_role === "admin");
   return <Page width="board">
     <div className="mb-7"><p className="text-label text-brand">CONNECTED WORK</p><h1 className="mt-2 text-h1">Projects</h1>
       <p className="mt-2 text-body text-muted">Bring conversations, decisions, tasks and milestones into one place.</p></div>
@@ -128,7 +128,7 @@ export function ProjectDetail() {
           </div>)}</div>
           {canManage && <form className="mt-4 flex gap-2" onSubmit={(e) => { e.preventDefault(); void action(async () => { await work.addProjectRoom(projectId, newRoom); setNewRoom(""); }); }}>
             <select aria-label="Add conversation" className={field} value={newRoom} onChange={(e) => setNewRoom(e.target.value)} required><option value="">Add conversation</option>
-              {rooms.filter((room) => !linkedRooms.has(room.id) && room.type !== "dm" && room.encryption_mode !== "e2ee-v1" && room.my_role === "admin").map((room) =>
+              {rooms.filter((room) => !linkedRooms.has(room.id) && room.type !== "dm" && room.my_role === "admin").map((room) =>
                 <option key={room.id} value={room.id}>{room.display_name || room.name}</option>)}</select><button className={primary} disabled={busy || !newRoom}>Add</button></form>}
         </section>
         <section className="rounded-xl border border-line bg-surface p-5"><h2 className="text-h2">Milestones</h2><div className="mt-3 space-y-2">{detail.milestones.map((m) =>

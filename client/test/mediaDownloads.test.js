@@ -112,8 +112,9 @@ test("quota failures distinguish a temporary copy from an offline copy", async (
   assert.ok(h.state.blob);
   h.manager.recheck();
   await new Promise(queueMicrotask);
-  assert.equal(h.state.status, "available");
-  assert.equal(h.state.blob, null);
+  assert.equal(h.state.status, "downloaded");
+  assert.equal(h.state.persisted, false);
+  assert.ok(h.state.blob);
 });
 test("eviction and clearing remove stale downloaded state and stop in-flight work", async () => {
   const h = harness();
@@ -170,4 +171,117 @@ test("network policy cancels automatic transfers but manual opens promote and pr
   gate2.resolve(new Blob(["manual"]));
   await Promise.all([active, promoted]);
   assert.equal(manual.state.status, "downloaded");
+});
+
+test("background downloads are silent, bounded to two transfers and survive leaving a bubble", async () => {
+  const flights = [];
+  let active = 0,
+    max = 0;
+  const h = harness({
+    fetchFile: async () => {
+      active++;
+      max = Math.max(max, active);
+      const item = deferred();
+      flights.push(item);
+      await item.promise;
+      active--;
+      return new Blob(["file"]);
+    },
+  });
+  const items = [
+    h.attachment,
+    { ...h.attachment, url: "second" },
+    { ...h.attachment, url: "third" },
+  ];
+  const promises = items.map((item) =>
+    h.manager.start(item, { automatic: true }),
+  );
+  h.unsubscribe();
+  await new Promise(setImmediate);
+  assert.equal(h.state.automatic, true);
+  assert.equal(flights.length, 2);
+  flights[0].resolve();
+  await new Promise(setImmediate);
+  assert.equal(flights.length, 3);
+  flights[1].resolve();
+  flights[2].resolve();
+  await Promise.all(promises);
+  assert.equal(max, 2);
+  assert.equal(h.stored.size, 3);
+});
+
+test("manual playback can promote an automatic transfer without starting a duplicate", async () => {
+  const transfer = deferred();
+  const h = harness({
+    fetchFile: async () => {
+      await transfer.promise;
+      return new Blob(["sound"]);
+    },
+  });
+  const automatic = h.manager.start(h.attachment, { automatic: true });
+  await new Promise(setImmediate);
+  assert.equal(h.state.automatic, true);
+  const manual = h.manager.start(h.attachment);
+  assert.equal(h.state.automatic, false);
+  transfer.resolve();
+  assert.equal(await automatic, await manual);
+  h.unsubscribe();
+});
+
+test("account clearing cancels only that account and prevents late cache writes", async () => {
+  const transfer = deferred();
+  const h = harness({
+    fetchFile: async () => {
+      await transfer.promise;
+      return new Blob(["bytes"]);
+    },
+  });
+  const first = h.manager.start(h.attachment, { automatic: true });
+  const other = h.manager.start(
+    { ...h.attachment, url: "other-account:file" },
+    { automatic: true },
+  );
+  await new Promise(setImmediate);
+  h.manager.invalidate(null, "r2://private/");
+  transfer.resolve();
+  assert.equal(await first, null);
+  assert.ok(await other);
+  assert.equal(h.stored.has(h.attachment.url), false);
+  assert.equal(h.stored.has("other-account:file"), true);
+  h.unsubscribe();
+});
+
+test("reopening a loaded file never re-enters downloading even when storage is unavailable", async () => {
+  const h = harness({ cache: async () => false });
+  await new Promise(queueMicrotask);
+  const first = await h.manager.start(h.attachment);
+  const states = [];
+  const unsubscribe = h.manager.subscribe(h.attachment, (state) =>
+    states.push(state.status),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(await h.manager.start(h.attachment), first);
+  assert.equal(h.fetches, 1);
+  assert.ok(!states.includes("downloading"));
+  unsubscribe();
+  h.unsubscribe();
+});
+
+test("cache rechecks preserve the loaded blob identity so playback is not reset", async () => {
+  let persisted;
+  const h = harness({
+    read: async () =>
+      persisted ? new Blob([await persisted.arrayBuffer()]) : null,
+    cache: async (_, blob) => {
+      persisted = blob;
+      return true;
+    },
+  });
+  const original = await h.manager.start(h.attachment);
+  h.manager.recheck();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(h.state.blob, original);
+  assert.equal(h.state.persisted, true);
+  assert.equal(h.fetches, 1);
+  h.unsubscribe();
 });

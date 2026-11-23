@@ -20,13 +20,13 @@ in shared screenshots/logs.
 - [ ] Type a draft and select a reply; switch chats, background, reload, and restore.
 - [ ] Open/close keyboard, rotate, and change text size; composer/send controls stay visible.
 - [ ] Paste long paragraphs, URLs, unbroken strings, and fenced code; expand/collapse without overflow or lost position.
-- [ ] Search encrypted/local and readable history; follow results and return to reading position.
+- [ ] Search visible history; follow results and return to reading position.
 - [ ] Switch offline, send text/media, reconnect; pending status is honest and retries do not duplicate.
 - [ ] Record, preview, discard, interrupt recording with an incoming call/backgrounding, and play cached voice offline.
 - [ ] Download, cancel, retry, reopen and clear media cache; verify actual device/storage behavior.
 - [ ] React with the picker, open thread pages, send a thread reply and inspect unread counts on another account.
 - [ ] Save a message, open private notes, set/cancel a reminder, and verify foreground/background behavior.
-- [ ] Schedule text, close the app, verify exactly one send; change recipients/devices and confirm review is required.
+- [ ] Schedule text, close the app, verify exactly one send; change access and confirm review is required.
 - [ ] Test timed mute, mention levels, DND, custom status and admin-only broadcast mentions.
 - [ ] Set a disappearing-message timer; confirm the visible policy and test expiry using an isolated staging clock/fixture, never production clock changes.
 - [ ] Delete chat for self and confirm peer history, group membership and pending sends remain correct.
@@ -37,5 +37,5 @@ in shared screenshots/logs.
 
 Record PASS/FAIL/NOT TESTED for each row with build ID, device details and a
 sanitized screenshot/video where useful. iPhone/Safari, real provider push/media,
-independent encryption security review and production load are separate release
-requirements; do not mark them passed based on Android or emulator results.
+and production load are separate release requirements; do not mark them passed
+based on Android or emulator results.

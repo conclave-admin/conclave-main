@@ -100,13 +100,15 @@ export default function Avatar({
         </button>
         <Modal
           open={expanded}
+          fullscreen
+          className="media-viewer-dialog"
           title={`${name || "Profile"} photo`}
           onClose={() => setExpanded(false)}
         >
           <img
             src={imageSrc}
             alt={`${name || "Profile"} photo`}
-            className="max-h-[75dvh] w-full object-contain"
+            className="h-full w-full object-contain p-4 md:p-8"
           />
         </Modal>
       </>

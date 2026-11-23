@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import IconAttach from "@/assets/icons/attach.svg?react";
+import IconAttach from "@/assets/icons/plus.svg?react";
+import IconMention from "@/assets/icons/mention.svg?react";
 import IconCamera from "@/assets/icons/camera.svg?react";
 import IconDecisions from "@/assets/icons/decisions.svg?react";
 import IconDocument from "@/assets/icons/document.svg?react";
@@ -35,6 +36,7 @@ export default function AttachmentPicker({
   onPoll,
   onDecision,
   onTask,
+  onMention,
 }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef(null);
@@ -81,6 +83,12 @@ export default function AttachmentPicker({
       run: onDecision,
     },
     onTask && { key: "task", label: "Task", Icon: IconTasks, run: onTask },
+    onMention && {
+      key: "mention",
+      label: "Mention someone",
+      Icon: IconMention,
+      run: onMention,
+    },
   ].filter(Boolean);
 
   const choose = (run) => {
@@ -125,7 +133,7 @@ export default function AttachmentPicker({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Attach"
-        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40"
+        className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40"
       >
         <IconAttach className="h-5 w-5" aria-hidden="true" />
       </button>
@@ -149,7 +157,7 @@ export default function AttachmentPicker({
               className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-body text-ink transition-colors hover:bg-canvas"
             >
               <Icon className="h-5 w-5 text-brand" aria-hidden="true" />
-              {label}
+              <span>{label}</span>
             </button>
           ))}
         </PopoverMenu>
@@ -166,7 +174,7 @@ export default function AttachmentPicker({
                 <span className="grid h-14 w-14 place-items-center rounded-full bg-brand-soft text-brand">
                   <Icon className="h-6 w-6" aria-hidden="true" />
                 </span>
-                {label}
+                <span>{label}</span>
               </button>
             ))}
           </div>

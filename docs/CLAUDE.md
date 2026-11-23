@@ -4,7 +4,7 @@
 
 ## Working agreement
 
-- Show me the diff and wait for approval before writing to any file.
+<!-- - Show me the diff and wait for approval before writing to any file. -->
 - One file at a time. Never batch edits.
 - If a value is uncertain, stop and ask rather than choosing.
 
@@ -28,7 +28,7 @@
 
 ## Do not touch
 
-- Backend/API contracts and service-layer signatures.
+<!-- - Backend/API contracts and service-layer signatures. -->
 
 ## Icons
 

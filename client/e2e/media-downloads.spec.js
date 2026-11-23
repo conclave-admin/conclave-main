@@ -11,6 +11,18 @@ const gate = () => {
   return { promise, resolve };
 };
 async function fixture(page, attachments) {
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("conclave-media-preferences"))
+      localStorage.setItem(
+        "conclave-media-preferences",
+        JSON.stringify({
+          images: false,
+          audio: false,
+          video: false,
+          documents: false,
+        }),
+      );
+  });
   await page.goto("/chats");
   await expect(
     page.locator('a[href="/chats/preview-room"]').first(),
@@ -100,16 +112,14 @@ test("photos preview, download on open and reopen offline from device cache", as
     .getByRole("button", { name: "Open private-photo.png", exact: true })
     .click();
   const viewer = page.getByRole("dialog", { name: "private-photo.png" });
-  await expect(
-    viewer.getByText("Downloaded · available offline", { exact: true }),
-  ).toBeVisible();
+  await expect(viewer.locator('[data-media-offline="true"]')).toBeVisible();
   await viewer.getByRole("button", { name: "Close", exact: true }).click();
   expect(originals).toBe(1);
   await context.setOffline(true);
   await remount(page);
   await expect(
-    photo.getByText("Downloaded · available offline", { exact: true }),
-  ).toBeVisible();
+    photo.locator('[data-media-download-state="downloaded"]'),
+  ).toHaveAttribute("data-media-offline", "true");
   await photo
     .getByRole("button", { name: "Open private-photo.png", exact: true })
     .click();
@@ -217,10 +227,16 @@ test("video poster and duration, download cancellation, failure, retry and local
       },
     ]);
     const video = bubble(page);
-    await expect(video.getByText("1:05 · 100 B")).toBeVisible();
+    await expect(video.getByText("1:05", { exact: true })).toBeVisible();
+    await expect(
+      video.getByRole("button", {
+        name: "Play video clip.mp4, 100 B",
+        exact: true,
+      }),
+    ).toBeVisible();
     expect(requests).toBe(0);
     await expect(video.locator("video")).toHaveCount(0);
-    await video.getByRole("button", { name: /^Download video / }).click();
+    await video.getByRole("button", { name: /^Play video / }).click();
     await expect(
       video.locator('[data-download-state="downloading"]'),
     ).toBeVisible();
@@ -229,10 +245,10 @@ test("video poster and duration, download cancellation, failure, retry and local
       .getByRole("button", { name: "Cancel download clip.mp4", exact: true })
       .click();
     await expect(
-      video.locator('[data-download-state="available"]'),
+      video.locator('[data-media-download-state="available"]'),
     ).toBeVisible();
     release.resolve();
-    await video.getByRole("button", { name: /^Download video / }).click();
+    await video.getByRole("button", { name: /^Play video / }).click();
     await expect(
       video.getByText("Download failed", { exact: true }),
     ).toBeVisible();
@@ -240,13 +256,13 @@ test("video poster and duration, download cancellation, failure, retry and local
       .getByRole("button", { name: "Retry download clip.mp4", exact: true })
       .click();
     await expect(
-      video.getByText("Downloaded · available offline", { exact: true }),
-    ).toBeVisible();
+      video.locator('[data-media-download-state="downloaded"]'),
+    ).toHaveAttribute("data-media-offline", "true");
     expect(requests).toBe(3);
     await remount(page);
     await expect(
-      video.getByText("Downloaded · available offline", { exact: true }),
-    ).toBeVisible();
+      video.locator('[data-media-download-state="downloaded"]'),
+    ).toHaveAttribute("data-media-offline", "true");
     expect(requests).toBe(3);
   } finally {
     release.resolve();
@@ -279,45 +295,44 @@ test("manual documents cache with auto-download off; clearing cache removes down
   await document
     .getByRole("button", { name: "Download notes.pdf", exact: true })
     .click();
-  await expect(
-    document.getByText("Downloaded · available offline", { exact: true }),
-  ).toBeVisible();
+  await expect(document.locator('[data-media-offline="true"]')).toBeVisible();
   await remount(page);
-  await expect(
-    document.getByText("Downloaded · available offline", { exact: true }),
-  ).toBeVisible();
+  await expect(document.locator('[data-media-offline="true"]')).toBeVisible();
   expect(requests).toBe(1);
   // Refreshing tokens in another tab for the same account must retain media state.
   await page.evaluate(() =>
     dispatchEvent(new StorageEvent("storage", { key: "accessToken" })),
   );
-  await expect(
-    document.getByText("Downloaded · available offline", { exact: true }),
-  ).toBeVisible();
+  await expect(document.locator('[data-media-offline="true"]')).toBeVisible();
   await page.evaluate(async () => {
     const { clearLocalFiles } = await import("/src/lib/fileCache.js");
     await clearLocalFiles();
   });
   await expect(
-    document.getByText("Original not downloaded", { exact: true }),
+    document.locator(
+      '[data-download-state="available"][data-media-offline="false"]',
+    ),
   ).toBeVisible();
   await document
     .getByRole("button", { name: "Download notes.pdf", exact: true })
     .click();
-  await expect(
-    document.getByText("Downloaded · available offline", { exact: true }),
-  ).toBeVisible();
+  await expect(document.locator('[data-media-offline="true"]')).toBeVisible();
   expect(requests).toBe(2);
 });
 
-test("auto-download loads video and documents but photos remain previews", async ({
+test("per-type preferences download video and documents while photos remain on demand", async ({
   page,
 }) => {
   const requested = [];
   await page.addInitScript(() =>
     localStorage.setItem(
       "conclave-media-preferences",
-      JSON.stringify({ video: true, documents: true }),
+      JSON.stringify({
+        images: false,
+        audio: false,
+        video: true,
+        documents: true,
+      }),
     ),
   );
   await page.route("**/attachments/auto-*", (route) => {
@@ -340,12 +355,10 @@ test("auto-download loads video and documents but photos remain previews", async
   await expect.poll(() => requested.length).toBe(2);
   expect(requested.sort()).toEqual(["auto-document", "auto-video"]);
   await expect(
-    bubble(page, 1).getByText("Downloaded · available offline", {
-      exact: true,
-    }),
+    bubble(page, 1).locator('[data-media-offline="true"]'),
   ).toBeVisible();
   await expect(
-    bubble(page, 2).getByText("Original not downloaded", { exact: true }),
+    bubble(page, 2).locator('[data-media-download-state="available"]'),
   ).toBeVisible();
 });
 

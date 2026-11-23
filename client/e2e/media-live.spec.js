@@ -216,9 +216,7 @@ test("real private R2 sender/receiver media, downloads and deletion access", asy
       name: "live-photo.jpg",
       exact: true,
     });
-    await expect(
-      viewer.getByText("Downloaded · available offline", { exact: true }),
-    ).toBeVisible();
+    await expect(viewer.locator('[data-media-offline="true"]')).toBeVisible();
     await viewer.getByRole("button", { name: "Close", exact: true }).click();
     await receivedContext.setOffline(true);
     await photoBubble

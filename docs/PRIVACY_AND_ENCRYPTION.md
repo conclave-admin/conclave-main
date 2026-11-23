@@ -1,28 +1,6 @@
-# Privacy, account recovery, and device encryption
+# Privacy and account recovery
 
-Implemented in Phase 5 (23 October 2026). This document describes actual scope,
-including limits. Functional tests are not an independent cryptographic audit.
-Do not advertise audited encryption, Signal compatibility, forward secrecy, or
-WhatsApp security parity.
-
-## Conversation scope and migration
-
-| Conversation              | New conversations             | Existing history                               |
-| ------------------------- | ----------------------------- | ---------------------------------------------- |
-| DM (`dm`)                 | Device encrypted, `e2ee-v1`   | Remains server readable until an explicit move |
-| Private room (`private`)  | Device encrypted, `e2ee-v1`   | Remains server readable until an explicit move |
-| Public, group, department | Server readable collaboration | Unchanged                                      |
-
-A room with type `group` or `department` is a collaboration room; it does not
-become encrypted just because membership is restricted. The info page displays
-the actual mode. Public rooms cannot use the encrypted migration action.
-
-Moving a legacy conversation creates a separate encrypted timeline, copies its
-members, and makes the old timeline read only for new sends. It does not encrypt
-old database rows, backups, already downloaded files, or exports. Every member
-must have an approved encryption device before the move. Deploy the updated API
-and client together after migrations 036 and 037; old clients cannot send into
-new encrypted conversations.
+Conclave messages and attachments are server-readable and are not end-to-end encrypted. Migration 061 removes both former message-encryption modes and purges their conversations and associated data; it queues object storage cleanup. Protect transport with HTTPS.
 
 ## Privacy and blocking policy
 
@@ -82,132 +60,32 @@ Mail outages do not
 silently fall back to logging reset links. Unconfigured mail returns 503.
 
 A password reset verifies control of the email address, changes the password,
-and revokes all sessions and their encryption devices. Atomic login issuance
+and revokes all sessions. Atomic login issuance
 checks the password hash under an account lock to reject a concurrently outdated
-login. Resetting a password does **not** recover encrypted history. The separate
-encryption recovery key or an already approved device is required.
+login.
 
 ## Sessions and remote logout
 
 Settings lists active sessions, device names, user agents, expiry, and coarse
 last activity, and lets the owner rename the current session or revoke one/all
 other sessions after password confirmation. Revocation updates durable session
-and refresh records, revokes bound encryption devices, and evicts sockets across
+and refresh records, and evicts sockets across
 Redis-connected API instances. A durable private session invalidation also retries
 eviction if immediate cluster delivery fails. An eviction failure may return
 503 even though durable revocation has already committed; the client must not
 interpret that response as restoring the session.
 
 Expiry, REST checks, socket checks, and sync recovery all enforce the persisted
-revocation. No system can erase plaintext, keys, or files already copied onto a
-revoked device. Account deletion also removes cloud key backups and outstanding
-mail tokens; the deleting browser removes its local encryption vault.
+revocation. No system can erase messages or files already copied onto a revoked device. Account deletion removes outstanding mail tokens and clears local application data.
 
-## Encryption protocol and trust model
 
-`conclave-e2ee-v1` is a custom signed envelope built with libsodium primitives.
-It is not the Signal protocol or MLS and has not received an independent audit.
+## Files and moderation
 
-- Each account has an Ed25519 identity. Approved devices hold its private key and
-  have their own X25519 box key and Ed25519 signing key. The identity signs a
-  certificate binding account, device ID, and both public keys.
-- Every message uses a fresh 256-bit symmetric key and 24-byte nonce with
-  XChaCha20-Poly1305. Authenticated context binds scheme, room, client ID,
-  sender, and edit revision. The key is sealed separately to every current
-  approved recipient device. The device signs the canonical ciphertext envelope.
-- The server checks current membership, active sessions, device certificates,
-  signature, revision, and exact recipient coverage. The browser checks context,
-  signature, certificates, and pinned identity before accepting plaintext.
-- Identity trust starts on first use. Conversation info shows full safety codes
-  for comparison through another trusted channel. Changed identities stop sends
-  until explicit verification. There is no public key transparency service.
-- A new device remains pending until an approved device checks its full device
-  code and sends an encrypted key bundle, or the owner restores a key backup.
-  Pending enrollment expires after 15 minutes. Limits: 30 active/pending devices
-  per account and 300 recipient devices per message.
-- Message edits produce new signed encrypted revisions. The outbox stores a
-  sealed wire payload before transmission and reuses it on a lost acknowledgement.
-  Upload retries remain manual and show their failure reason.
+Attachments use authenticated access and supported short-lived signed preview URLs. Previously downloaded or exported copies cannot be recalled. Reports contain the details submitted by the reporter.
 
-Static device keys and retained history keys mean this design has **no forward
-secrecy or post-compromise ratchet**. Sharing the account signing secret among
-approved devices also makes compromise of an approved device significant. An
-independent protocol review and a design for rotation/ratcheting are required
-before making stronger product claims.
-
-The service sees account IDs, memberships, timing, message and attachment counts,
-file sizes, delivery/read metadata, and ciphertext. It cannot use the encrypted
-body for search or previews. Transport TLS is still required. A compromised web
-origin, malicious JavaScript update, browser extension, or unlocked device can
-read plaintext and device keys; this protocol does not protect against those.
-
-## Files, previews, and device storage
-
-Encrypted conversation files are encrypted on the sender before upload with
-fresh authenticated file keys. R2 receives an opaque encrypted MIME type and
-`encrypted.bin`; original filename, MIME, dimensions, caption, preview, and file
-key are carried inside the encrypted message. R2 previews are not used for these
-files. Ciphertext is subject to the existing 50 MiB upload limit, including
-encryption overhead. Download resumes ciphertext through authorized Range
-requests, verifies/decrypts it locally, and stores the plaintext device cache
-under a distinct representation key. The pending bubble uses the sender's
-original local file.
-
-Private keys, plaintext outbox drafts, and decrypted caches live in this browser's
-IndexedDB. They are **not** protected by an OS keychain or an application
-at-rest encryption password. Secure browser/OS storage and a trusted origin are
-assumptions. Logout clears in-memory encryption state and normal local message/
-file caches, but retains the encryption vault for future sign-in; deleting browser
-site data removes that vault. Remote logout cannot erase keys on another device.
-HTTPS (localhost for development), Web Locks, IndexedDB, and WebAssembly are
-required. Web Locks serialize key setup across tabs; registration persists keys
-before publishing them so a lost response cannot lose the identity.
-
-## Backup and lost keys
-
-Settings creates an encrypted cloud **key backup** and displays a random 256-bit
-recovery key once. Save that key separately from Conclave. The server receives
-only authenticated ciphertext, not the recovery key. This is not a password-
-derived backup, a complete media archive, or a backup of files deleted from R2.
-History can be recovered only while its server ciphertext and a matching archived
-device key remain available. Refresh the backup after linking additional devices
-or changing relevant key history. Backups do not retroactively acquire future
-keys or future messages sent only to other devices.
-
-Restore requires the same signed-in account, a matching current account identity,
-and the correct key; it enrolls a new device while preserving archived keys.
-If all devices and the recovery key are lost, the explicit reset action starts a
-new identity, deletes the old cloud backup, and revokes other sessions/devices.
-Old encrypted history is permanently unavailable. Contacts must compare the new
-safety code. The UI warns before this irreversible operation.
-
-## Collaboration and moderation
-
-| Feature                            | Encrypted conversations                                                                                 |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Search                             | Local decrypted cache only; no plaintext query is sent to the server. Uncached history is not searched. |
-| Shared media                       | Built from locally decrypted cached messages; not a server-wide encrypted history index.                |
-| Tasks, decisions, polls            | Creation disabled and rejected by the API. Use a server-readable collaboration room.                    |
-| Forwarding                         | Server-side forwarding disabled for encrypted content.                                                  |
-| Digests, notification previews     | Metadata/placeholders only; no server-generated plaintext summary.                                      |
-| Replies, receipts, reactions, pins | Existing metadata paths remain; encrypted bodies are opened on authorized devices.                      |
-| Reports                            | User explicitly types report details; decrypted messages/files are not automatically attached.          |
-
-## Verification and rollout
-
-Automated checks cover real PostgreSQL/Redis multi-instance privacy, requests,
-remote revocation, token expiry/single use, encrypted mail queue retry, encrypted
-message validation, device linking, encrypted backups, and legacy migration.
-Desktop/mobile Playwright uses real API/socket/crypto and mocked R2 storage to
-exercise encrypted text/files, offline queue/reload, downloaded plaintext, backup
-restore, lost enrollment responses, and multiple tabs. Mocked storage does not
-prove production R2 behavior; mocked email delivery does not prove Resend delivery.
-
-Before public security claims: configure and verify Resend delivery, deploy on
-HTTPS, exercise real R2/Worker deployment and browser/device combinations,
-commission independent protocol/security review, and assess key storage,
-rotation, forward secrecy, recovery UX, and abuse operations. Keep these rollout
-requirements open in `issue.md`.
-
-Primitive references: [libsodium authenticated encryption](https://doc.libsodium.org/secret-key_cryptography/encrypted-messages)
-and [sealed boxes](https://github.com/jedisct1/libsodium-doc/blob/master/public-key_cryptography/sealed_boxes.md).
+Report submission is implemented, but report review and enforcement tools are
+not yet available. Future review is reserved for explicitly appointed platform
+moderators, with audited access and minimum necessary investigation context;
+room administrators do not receive platform-wide report access. See
+[deferred feature designs](DEFERRED_FEATURES.md) and
+[release acceptance evidence](RELEASE_EVIDENCE.md).
