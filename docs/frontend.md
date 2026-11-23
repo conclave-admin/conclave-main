@@ -646,14 +646,17 @@ fetches of signed preview URLs; redeploy it to enable legacy preview caching.
 bytes: available, downloading, downloaded and failed. Progress, cancel and retry
 are shared across consumers. Video players are mounted only after download.
 Manual opens/downloads always attempt to cache bytes independently of automatic
-download preferences. Photos remain preview-only until opened; video/document
-and audio originals can auto-download when enabled in Settings.
+download preferences. Photos, videos, documents and audio default to quiet
+background downloads, with two active transfers and per-type/network controls.
+Existing explicit device preferences are preserved.
 
 Media cache keys include the account and immutable file reference. Previews use
-a separate suffix and share the 250 MiB LRU budget with originals. Clearing or
-evicting a file invalidates active download indicators across tabs. Focus
-rechecks browser storage. Failed cache writes show a temporary-copy notice rather
-than claiming offline availability. These caches are separate from durable
+a separate suffix and share a 250 MiB LRU budget with partial transfers.
+Completed originals remain until user removal or browser storage eviction.
+Clearing files invalidates active download indicators across tabs; account
+clearing also cancels queued/in-flight work for that account. Focus rechecks
+browser storage. Failed cache writes never claim offline availability; automatic
+transfers do not announce progress or success in message cards. These caches are separate from durable
 unsent Blobs; clearing downloaded media does not clear the outbox.
 
 Upload failures require explicit retry and display the cause in the bubble.

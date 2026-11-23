@@ -3179,3 +3179,39 @@ test("ux: duration, mention levels, DND and admin broadcast mentions are enforce
     1,
   );
 });
+
+test('message budget is shared across two API instances and active sessions', async () => {
+  const sender = await account();
+  const peerSession = await session(sender.userId);
+  const receiver = await account();
+  const id = await room(sender, receiver);
+  const a = await open(sender.token, 0);
+  const b = await open(peerSession.token, 1);
+  for (let index = 0; index < 30; index++) {
+    const result = await ack(index % 2 ? a : b, 'send-message', {
+      roomId: id, content: `Shared limit ${index}`, clientId: randomUUID(),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+  }
+  const result = await ack(b, 'send-message', { roomId: id, content: 'Over shared budget', clientId: randomUUID() });
+  assert.equal(result.status, 429);
+  const count = await query('SELECT COUNT(*)::int AS count FROM messages WHERE room_id=$1', [id]);
+  assert.equal(count.rows[0].count, 30);
+});
+
+test('indicator budget is shared by sockets reusing one session across servers', async () => {
+  const sender = await account();
+  const receiver = await account();
+  const id = await room(sender, receiver);
+  const a = await open(sender.token, 0);
+  const b = await open(sender.token, 1);
+  for (const socket of [a, b]) {
+    await ack(socket, 'join-room', { roomId: id });
+    await ack(socket, 'heartbeat', { foreground: true, roomId: id, revision: 1 });
+  }
+  for (let index = 0; index < 24; index++) {
+    const result = await ack(index % 2 ? a : b, 'typing', { roomId: id });
+    assert.equal(result.ok, true, JSON.stringify(result));
+  }
+  assert.equal((await ack(b, 'typing', { roomId: id })).status, 429);
+});

@@ -27,7 +27,7 @@ export default function MessageReactions({ message, onToggle }) {
   if (!reactions.length) return null;
 
   return (
-    <div className="relative flex flex-wrap items-center gap-1.5">
+    <div className="message-reactions relative -mt-0.5 flex flex-wrap items-center gap-1">
       {reactions.map((reaction) => (
         <button
           key={reaction.emoji}
@@ -35,10 +35,10 @@ export default function MessageReactions({ message, onToggle }) {
           aria-pressed={reaction.reacted}
           aria-label={`${reaction.emoji} reaction, ${reaction.count}`}
           onClick={() => onToggle(reaction.emoji)}
-          className={`inline-flex min-h-6 items-center gap-1 rounded-full border px-1.5 text-metadata transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
+          className={`inline-flex min-h-8 items-center gap-1 rounded-full border px-2 text-metadata transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
             reaction.reacted
               ? "border-brand bg-brand-soft text-brand"
-              : "border-line bg-canvas text-muted hover:text-ink"
+              : "border-line bg-surface text-muted hover:text-ink"
           }`}
         >
           <span aria-hidden="true">{reaction.emoji}</span>
@@ -53,7 +53,7 @@ export default function MessageReactions({ message, onToggle }) {
         aria-haspopup="dialog"
         aria-expanded={pickerOpen}
         aria-label="Add a reaction"
-        className="inline-flex min-h-6 items-center rounded-full border border-line bg-canvas px-1.5 text-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+        className="inline-flex min-h-8 items-center rounded-full border border-line bg-surface px-1.5 text-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
       >
         <IconReaction className="h-3.5 w-3.5" aria-hidden="true" />
       </button>

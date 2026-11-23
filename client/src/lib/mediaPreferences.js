@@ -1,7 +1,9 @@
 const KEY = "conclave-media-preferences";
 const DEFAULTS = {
-  video: false,
-  documents: false,
+  images: true,
+  audio: true,
+  video: true,
+  documents: true,
   network: "any",
   respectSaveData: true,
 };
@@ -34,4 +36,19 @@ export function allowsAutomaticDownload(preferences, network, online = true) {
     return ["wifi", "ethernet"].includes(network.type);
   if (preferences.network === "fast") return network.effectiveType === "4g";
   return preferences.network === undefined || preferences.network === "any";
+}
+
+export function automaticMediaType(attachment, preferences) {
+  const type = attachment.mime_type || "";
+  return Boolean(
+    preferences[
+      type.startsWith("image/")
+        ? "images"
+        : type.startsWith("video/")
+          ? "video"
+          : type.startsWith("audio/")
+            ? "audio"
+            : "documents"
+    ],
+  );
 }

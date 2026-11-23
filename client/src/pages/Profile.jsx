@@ -118,42 +118,17 @@ export default function Profile() {
   }
 
   return (
-    <Page width="content">
+    <Page width="form">
       <div>
         <h1 className="text-h1 text-ink">Your profile</h1>
       </div>
 
-      <section
-        className="mt-6 rounded-2xl border border-line bg-surface p-5 shadow-card md:p-7"
-        aria-label="Profile preview"
-      >
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-          <Avatar
-            name={displayName || user?.display_name}
-            src={avatarUrl}
-            size="lg"
-          />
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-h2 text-ink">
-              {displayName || user?.display_name || "Your name"}
-            </h2>
-            <p className="mt-1 truncate text-body text-muted">
-              {user?.email || "Email unavailable"}
-            </p>
-            <p className="mt-3 whitespace-pre-wrap text-body leading-relaxed text-ink">
-              {bio.trim() ||
-                "Add a short introduction so people know who they are talking to."}
-            </p>
-          </div>
-        </div>
-      </section>
-
       <section className="mt-8 rounded-2xl border border-line bg-surface p-5 md:p-7">
         <div>
-          <h2 className="text-h2 text-ink">Edit your profile</h2>
+          <h2 className="text-h2 text-ink">Profile details</h2>
         </div>
 
-        <section className="mt-6 flex flex-wrap items-center gap-4">
+        <section className="mt-6 flex flex-col items-center gap-4 rounded-xl bg-brand/5 px-4 py-6">
           <Avatar name={displayName} src={avatarUrl} size="lg" />
           <div className="min-w-0">
             <Button
@@ -198,7 +173,7 @@ export default function Profile() {
             value={bio}
             onChange={(event) => setBio(event.target.value)}
             maxLength={1000}
-            placeholder="A line about what you work on"
+            placeholder="Add something about yourself"
           />
 
           <div className="flex flex-wrap items-center gap-3 md:col-span-2">

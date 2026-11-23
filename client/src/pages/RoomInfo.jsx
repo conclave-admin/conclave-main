@@ -4,10 +4,12 @@ import ConversationManagement, {
 } from "../components/chat/ConversationManagement";
 import SharedLinksBrowser from "../components/chat/SharedLinksBrowser";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import IconMoreVertical from "@/assets/icons/more-vertical.svg?react";
 import IconSearch from "@/assets/icons/search.svg?react";
 import IconMember from "@/assets/icons/member.svg?react";
+import IconMessage from "@/assets/icons/message.svg?react";
+import IconImage from "@/assets/icons/image.svg?react";
 import IconCamera from "@/assets/icons/camera.svg?react";
 import Avatar from "@/components/ui/Avatar";
 import Badge from "@/components/ui/Badge";
@@ -323,15 +325,17 @@ export default function RoomInfo() {
   return (
     <Page width="content">
       <section
-        className="rounded-2xl border border-line bg-surface p-5 shadow-card md:p-7"
+        className="room-info-overview rounded-2xl border border-line bg-surface p-5 md:p-7"
         aria-label={isDm ? "Conversation overview" : "Room overview"}
       >
         <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
           <div className="flex shrink-0 flex-col items-center gap-2">
             <Avatar
-              name={isDm
-                ? peer?.display_name || room?.display_name
-                : room?.display_name || room?.name}
+              name={
+                isDm
+                  ? peer?.display_name || room?.display_name
+                  : room?.display_name || room?.name
+              }
               src={
                 isDm
                   ? peer?.avatar_url
@@ -365,7 +369,7 @@ export default function RoomInfo() {
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-h1 text-ink">
                 {isDm
-                  ? `Conversation with ${peer?.display_name || room?.display_name || room?.name}`
+                  ? peer?.display_name || room?.display_name || room?.name
                   : room?.display_name || room?.name || "Room"}
               </h1>
               <Badge
@@ -414,6 +418,32 @@ export default function RoomInfo() {
         </div>
       </section>
 
+      <nav
+        aria-label="Conversation shortcuts"
+        className="mt-4 grid grid-cols-2 gap-3"
+      >
+        <Link
+          to={`/chats/${roomId}`}
+          className="flex min-h-14 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-label text-brand hover:bg-brand/5"
+        >
+          <IconMessage className="h-5 w-5" aria-hidden="true" />
+          Message
+        </Link>
+        <a
+          href="#room-shared-media"
+          onClick={(event) => {
+            event.preventDefault();
+            const section = document.getElementById("room-shared-media");
+            section?.focus({ preventScroll: true });
+            section?.scrollIntoView({ behavior: "instant", block: "start" });
+          }}
+          className="flex min-h-14 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-label text-brand hover:bg-brand/5"
+        >
+          <IconImage className="h-5 w-5" aria-hidden="true" />
+          Media and files
+        </a>
+      </nav>
+
       {isDm && peer && (
         <section
           className="mt-6 rounded-2xl border border-line bg-surface p-5 md:p-6"
@@ -425,14 +455,20 @@ export default function RoomInfo() {
               aria-hidden="true"
             />
             <div className="min-w-0 flex-1">
+              <Link
+                to={`/profile/${peer.id}`}
+                className="float-right inline-flex min-h-11 items-center text-label text-brand hover:underline"
+              >
+                View profile
+              </Link>
               <h2 id="person-details-heading" className="text-h2 text-ink">
-                About {peer.display_name}
+                About
               </h2>
               <p className="mt-1 text-metadata text-muted">
                 {labelFor(roomId, peer.id)}
               </p>
               <p className="mt-4 whitespace-pre-wrap text-body leading-relaxed text-ink">
-                {peer.bio || "No profile introduction yet."}
+                {peer.bio || "No about information"}
               </p>
             </div>
           </div>
@@ -596,9 +632,12 @@ export default function RoomInfo() {
                   <Avatar name={member.display_name} src={member.avatar_url} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="truncate text-body text-ink">
+                      <Link
+                        to={isSelf ? "/profile" : `/profile/${member.id}`}
+                        className="truncate text-body font-medium text-ink hover:text-brand hover:underline"
+                      >
                         {member.display_name}
-                      </span>
+                      </Link>
                       {isSelf && (
                         <span className="shrink-0 text-metadata text-muted">
                           You
@@ -618,7 +657,7 @@ export default function RoomInfo() {
 
                   {/* Admin controls are separate from member safety and DM actions. */}
                   {!isDm && !isSelf && (
-                    <div className="relative shrink-0">
+                    <div className="relative basis-full shrink-0 sm:basis-auto">
                       {isAdmin ? (
                         <RowMenu
                           person={member}
@@ -698,7 +737,7 @@ export default function RoomInfo() {
         className="mt-6 rounded-2xl border border-error/20 bg-surface p-5 md:p-6"
         aria-label="Conversation actions"
       >
-        <h2 className="text-h2 text-ink">Your conversation controls</h2>
+        <h2 className="text-h2 text-ink">Conversation controls</h2>
         <p className="mt-1 text-metadata text-muted">
           These actions affect your account or this device only.
         </p>

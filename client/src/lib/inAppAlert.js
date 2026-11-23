@@ -27,6 +27,7 @@ export const ALERTABLE_TYPES = [
  *          dndUntil?: string|null, inAppAlerts?: boolean}} [input.policy]
  * @param {string[]} [input.mutedRooms]
  * @param {string[]} [input.archivedRooms]
+ * @param {string} [input.visibilityState] - only visible documents interrupt
  * @param {Date} [input.now]
  * @returns {boolean}
  */
@@ -37,7 +38,9 @@ export function shouldAlert({
   mutedRooms = [],
   archivedRooms = [],
   now = new Date(),
+  visibilityState = "visible",
 }) {
+  if (visibilityState !== "visible") return false;
   if (!notification) return false;
   if (!ALERTABLE_TYPES.includes(notification.type)) return false;
 

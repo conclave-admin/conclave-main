@@ -30,7 +30,38 @@ async function login(page, session) {
     localStorage.setItem("conclave.session-user", JSON.stringify(s.user));
   }, session);
   await page.goto("/chats");
+  // Navigation completion precedes React's authenticated shell being ready.
+  await expect(page.getByRole("main")).toBeVisible();
 }
+// Record progress in the browser: short clips reset currentTime on ended,
+// which can happen between runner polls on a busy machine. Install a fresh
+// observer for each playback so offline checks cannot reuse earlier progress.
+async function expectPlaybackProgress(audio, seconds) {
+  await audio.evaluate(async (element) => {
+    element.__testPlaybackMax = 0;
+    element.__testPlaybackObserver = () => {
+      if (element.played.length)
+        element.__testPlaybackMax = Math.max(
+          element.__testPlaybackMax,
+          element.currentTime,
+        );
+    };
+    element.addEventListener("timeupdate", element.__testPlaybackObserver);
+    await element.play();
+  });
+  try {
+    await expect
+      .poll(() => audio.evaluate((element) => element.__testPlaybackMax))
+      .toBeGreaterThan(seconds);
+  } finally {
+    await audio.evaluate((element) => {
+      element.removeEventListener("timeupdate", element.__testPlaybackObserver);
+      delete element.__testPlaybackObserver;
+      delete element.__testPlaybackMax;
+    });
+  }
+}
+
 function voiceWave() {
   const samples = 16000,
     bytes = Buffer.alloc(44 + samples * 2);
@@ -54,170 +85,172 @@ function voiceWave() {
   return bytes;
 }
 test(`voice notes preview/discard and play cached audio offline`, async ({
-    page,
-    browser,
+  page,
+  browser,
+  request,
+}, info) => {
+  const sender = await account(request, `${info.project.name}-voice-sender`);
+  const receiver = await account(
     request,
-  }, info) => {
-    const sender = await account(
-      request,
-      `${info.project.name}-voice-sender`,
-    );
-    const receiver = await account(
-      request,
-      `${info.project.name}-voice-receiver`,
-    );
-    const receiverContext = await browser.newContext({
-      viewport: info.project.use.viewport,
-      isMobile: Boolean(info.project.use.isMobile),
-      hasTouch: Boolean(info.project.use.hasTouch),
-    });
-    try {
-      await login(page, sender);
-      const recipient = await receiverContext.newPage();
-      await login(recipient, receiver);
-      const created = await request.post(`${API}/rooms`, {
-        headers: { authorization: `Bearer ${sender.accessToken}` },
-        data: {
-          type: "group",
-          name: "Voice notes",
-          memberIds: [receiver.user.id],
-        },
-      });
-      expect(created.status()).toBe(201);
-      const room = (await created.json()).data;
-      await recipient.goto(`/chats/${room.id}`);
-      await page.goto(`/chats/${room.id}`);
-      await page.context().grantPermissions(["microphone"]);
-      await page
-        .getByRole("button", { name: "Record voice note", exact: true })
-        .click();
-      const stop = page.getByRole("button", {
-        name: "Stop voice note recording",
-        exact: true,
-      });
-      await expect(stop).toBeVisible();
-      // MediaRecorder needs real elapsed capture time to emit a decodable clip.
-      await page.waitForTimeout(500);
-      await stop.click();
-      let editor = page.getByRole("dialog", {
-        name: "Send attachment",
-        exact: true,
-      });
-      await expect(editor.locator("audio")).toBeVisible();
-      await editor
-        .getByRole("button", { name: "Discard voice message" })
-        .click();
-      await expect(editor).toBeHidden();
-      const empty = (
-        await (
-          await request.get(`${API}/messages/room/${room.id}`, {
-            headers: { authorization: `Bearer ${sender.accessToken}` },
-          })
-        ).json()
-      ).data;
-      expect(empty.messages).toHaveLength(0);
-      await page
-        .getByRole("button", { name: "Record voice note", exact: true })
-        .click();
-      await expect(stop).toBeVisible();
-      await page.waitForTimeout(500);
-      await stop.click();
-      editor = page.getByRole("dialog", {
-        name: "Send attachment",
-        exact: true,
-      });
-      await expect(editor.locator("audio")).toBeVisible();
-      await editor.getByRole("button", { name: "Send", exact: true }).click();
-      const recordedCard = recipient
-        .getByRole("region", { name: "Voice message", exact: true })
-        .first();
-      await expect(recordedCard).toBeVisible();
-      await recordedCard
-        .getByRole("button", { name: "Play Voice message" })
-        .click();
-      const recordedAudio = recordedCard.locator("audio");
-      await expect(recordedAudio).toBeAttached();
-      await expect
-        .poll(() =>
-          recordedAudio.evaluate(
-            (a) => Number.isFinite(a.duration) && a.duration > 0,
-          ),
-        )
-        .toBe(true);
-      await recordedAudio.evaluate((a) => a.play());
-      await expect
-        .poll(() => recordedAudio.evaluate((a) => a.currentTime))
-        .toBeGreaterThan(0);
-      await recordedAudio.evaluate((a) => a.pause());
-      const wave = voiceWave();
-      await page.locator('input[type="file"][multiple]').first().setInputFiles({
-        name: "voice-sample.wav",
-        mimeType: "audio/wav",
-        buffer: wave,
-      });
-      editor = page.getByRole("dialog", {
-        name: "Send attachment",
-        exact: true,
-      });
-      await expect(editor.locator("audio")).toBeVisible();
-      await editor.getByRole("button", { name: "Send", exact: true }).click();
-      await expect(recipient.getByRole("region", { name: "Voice message", exact: true })).toHaveCount(2);
-      const card = recipient
-        .getByRole("region", { name: "Voice message", exact: true })
-        .last();
-      await expect(card).toBeVisible();
-      await card
-        .getByRole("button", { name: "Play Voice message" })
-        .click();
-      const audio = card.locator("audio");
-      await expect(audio).toBeAttached();
-      await expect
-        .poll(() => audio.evaluate((a) => a.readyState))
-        .toBeGreaterThanOrEqual(1);
-      await expect(
-        card.getByText("Downloaded · available offline", { exact: true }),
-      ).toBeVisible();
-      await card
-        .getByRole("button", { name: "Playback speed 1 times. Change speed" })
-        .click();
-      await expect.poll(() => audio.evaluate((a) => a.playbackRate)).toBe(1.5);
-      await audio.evaluate((a) => {
-        a.currentTime = 0.5;
-      });
-      expect(await audio.evaluate((a) => a.currentTime)).toBeGreaterThan(0.4);
-      await receiverContext.setOffline(true);
-      await audio.evaluate((a) => a.play());
-      await expect
-        .poll(() => audio.evaluate((a) => a.currentTime))
-        .toBeGreaterThan(0.6);
-      await audio.evaluate((a) => a.pause());
-      expect(
-        await recipient.evaluate(
-          () => document.documentElement.scrollWidth <= innerWidth,
-        ),
-      ).toBe(true);
-      await receiverContext.setOffline(false);
-      await recipient.reload();
-      const reopened = recipient
-        .getByRole("region", { name: "Voice message", exact: true })
-        .last();
-      await expect(reopened.locator("audio")).toBeAttached();
-      await receiverContext.setOffline(true);
-      await reopened.locator("audio").evaluate((a) => a.play());
-      await expect
-        .poll(() => reopened.locator("audio").evaluate((a) => a.currentTime))
-        .toBeGreaterThan(0.1);
-      const playing = await reopened.locator("audio").elementHandle();
-      await recipient.evaluate(() =>
-        window.dispatchEvent(new Event("conclave:outbox-stop")),
-      );
-      await expect.poll(() => playing.evaluate((a) => a.paused)).toBe(true);
-      await expect(reopened.locator("audio")).not.toHaveAttribute("src");
-      await playing.dispose();
-    } finally {
-      await receiverContext.close();
-    }
+    `${info.project.name}-voice-receiver`,
+  );
+  const receiverContext = await browser.newContext({
+    viewport: info.project.use.viewport,
+    isMobile: Boolean(info.project.use.isMobile),
+    hasTouch: Boolean(info.project.use.hasTouch),
   });
+  try {
+    await login(page, sender);
+    const recipient = await receiverContext.newPage();
+    await login(recipient, receiver);
+    const created = await request.post(`${API}/rooms`, {
+      headers: { authorization: `Bearer ${sender.accessToken}` },
+      data: {
+        type: "group",
+        name: "Voice notes",
+        memberIds: [receiver.user.id],
+      },
+    });
+    expect(created.status()).toBe(201);
+    const room = (await created.json()).data;
+    await recipient.goto(`/chats/${room.id}`);
+    await page.goto(`/chats/${room.id}`);
+    await expect(
+      page.getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeVisible();
+    await expect(
+      recipient.getByRole("textbox", { name: "Message", exact: true }),
+    ).toBeVisible();
+    await page.context().grantPermissions(["microphone"]);
+    await page
+      .getByRole("button", { name: "Record voice note", exact: true })
+      .click();
+    const stop = page.getByRole("button", {
+      name: "Stop voice note recording",
+      exact: true,
+    });
+    await expect(stop).toBeVisible();
+    // MediaRecorder needs real elapsed capture time to emit a decodable clip.
+    await page.waitForTimeout(500);
+    await stop.click();
+    let editor = page.getByRole("dialog", {
+      name: "Send attachment",
+      exact: true,
+    });
+    await expect(editor.locator("audio")).toBeAttached();
+    await expect(
+      editor.getByRole("button", { name: "Play Voice message", exact: true }),
+    ).toBeVisible();
+    await editor.getByRole("button", { name: "Discard voice message" }).click();
+    await expect(editor).toBeHidden();
+    const empty = (
+      await (
+        await request.get(`${API}/messages/room/${room.id}`, {
+          headers: { authorization: `Bearer ${sender.accessToken}` },
+        })
+      ).json()
+    ).data;
+    expect(empty.messages).toHaveLength(0);
+    await page
+      .getByRole("button", { name: "Record voice note", exact: true })
+      .click();
+    await expect(stop).toBeVisible();
+    await page.waitForTimeout(500);
+    await stop.click();
+    editor = page.getByRole("dialog", {
+      name: "Send attachment",
+      exact: true,
+    });
+    await expect(editor.locator("audio")).toBeAttached();
+    await expect(
+      editor.getByRole("button", { name: "Play Voice message", exact: true }),
+    ).toBeVisible();
+    await editor.getByRole("button", { name: "Send", exact: true }).click();
+    const recordedCard = recipient
+      .getByRole("region", { name: "Voice message", exact: true })
+      .first();
+    await expect(recordedCard).toBeVisible();
+    await recordedCard
+      .getByRole("button", { name: "Play Voice message" })
+      .click();
+    const recordedAudio = recordedCard.locator("audio");
+    await expect(recordedAudio).toBeAttached();
+    await expect
+      .poll(() =>
+        recordedAudio.evaluate(
+          (a) => Number.isFinite(a.duration) && a.duration > 0,
+        ),
+      )
+      .toBe(true);
+    await expectPlaybackProgress(recordedAudio, 0);
+    await recordedAudio.evaluate((a) => a.pause());
+    const wave = voiceWave();
+    await page.locator('input[type="file"][multiple]').first().setInputFiles({
+      name: "voice-sample.wav",
+      mimeType: "audio/wav",
+      buffer: wave,
+    });
+    editor = page.getByRole("dialog", {
+      name: "Send attachment",
+      exact: true,
+    });
+    await expect(editor.locator("audio")).toBeAttached();
+    await expect(
+      editor.getByRole("button", { name: "Play Voice message", exact: true }),
+    ).toBeVisible();
+    await editor.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(
+      recipient.getByRole("region", { name: "Voice message", exact: true }),
+    ).toHaveCount(2);
+    const card = recipient
+      .getByRole("region", { name: "Voice message", exact: true })
+      .last();
+    await expect(card).toBeVisible();
+    await card.getByRole("button", { name: "Play Voice message" }).click();
+    const audio = card.locator("audio");
+    await expect(audio).toBeAttached();
+    await expect
+      .poll(() => audio.evaluate((a) => a.readyState))
+      .toBeGreaterThanOrEqual(1);
+    await expect(card).toHaveAttribute("data-media-offline", "true");
+    await card
+      .getByRole("button", { name: "Playback speed 1 times. Change speed" })
+      .click();
+    await expect.poll(() => audio.evaluate((a) => a.playbackRate)).toBe(1.5);
+    await audio.evaluate((a) => {
+      a.currentTime = 0.5;
+    });
+    expect(await audio.evaluate((a) => a.currentTime)).toBeGreaterThan(0.4);
+    await receiverContext.setOffline(true);
+    await expectPlaybackProgress(audio, 0.6);
+    await audio.evaluate((a) => a.pause());
+    expect(
+      await recipient.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await receiverContext.setOffline(false);
+    await recipient.reload();
+    const reopened = recipient
+      .getByRole("region", { name: "Voice message", exact: true })
+      .last();
+    await expect(reopened.locator("audio")).toBeAttached();
+    await receiverContext.setOffline(true);
+    await expect
+      .poll(() => reopened.locator("audio").evaluate((a) => a.readyState))
+      .toBeGreaterThanOrEqual(2);
+    await expectPlaybackProgress(reopened.locator("audio"), 0.1);
+    const playing = await reopened.locator("audio").elementHandle();
+    await recipient.evaluate(() =>
+      window.dispatchEvent(new Event("conclave:outbox-stop")),
+    );
+    await expect.poll(() => playing.evaluate((a) => a.paused)).toBe(true);
+    await expect(reopened.locator("audio")).not.toHaveAttribute("src");
+    await playing.dispose();
+  } finally {
+    await receiverContext.close();
+  }
+});
 
 async function phase6SignIn(page, session, path) {
   await page.goto("/login");

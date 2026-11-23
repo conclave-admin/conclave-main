@@ -3,6 +3,7 @@ import { createMediaDownloads } from "../lib/mediaDownloads";
 import useNetworkStatus from "./useNetworkStatus";
 import {
   allowsAutomaticDownload,
+  automaticMediaType,
   getMediaPreferences,
   networkSnapshot,
 } from "../lib/mediaPreferences";
@@ -21,7 +22,7 @@ const downloads = createMediaDownloads({
   cache: cacheAttachmentBlob,
 });
 window.addEventListener("conclave:media-cache-removed", (event) =>
-  downloads.invalidate(event.detail?.keys),
+  downloads.invalidate(event.detail?.keys, event.detail?.accountPrefix),
 );
 window.addEventListener("focus", () => downloads.recheck());
 const connection =
@@ -32,9 +33,7 @@ const enforceNetworkPolicy = () => {
   downloads.cancelAutomatic(
     (attachment) =>
       !allowsAutomaticDownload(prefs, network, navigator.onLine !== false) ||
-      !(attachment.mime_type?.startsWith("video/")
-        ? prefs.video
-        : prefs.documents),
+      !automaticMediaType(attachment, prefs),
   );
 };
 connection?.addEventListener?.("change", enforceNetworkPolicy);
@@ -94,17 +93,13 @@ export default function useAttachmentDownload(attachment) {
       !allowsAutomaticDownload(preferences, network, online)
     )
       return;
-    const type = attachment.mime_type || "";
-    // Photos always remain previews until opened. These explicit preferences
-    // opt into originals for video and documents, independent of cache policy.
-    if (
-      (type.startsWith("video/") && preferences.video) ||
-      (!/^(image|video)\//.test(type) && preferences.documents)
-    )
+    if (automaticMediaType(attachment, preferences))
       downloads.start(attachment, { automatic: true });
   }, [
     key,
     state.checking,
+    preferences.images,
+    preferences.audio,
     preferences.video,
     preferences.documents,
     preferences.network,

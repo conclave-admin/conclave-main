@@ -1,12 +1,12 @@
 import { useMatch, NavLink } from "react-router-dom";
 import { useChats } from "@/contexts/ChatsContext";
 import IconDecisions from "@/assets/icons/decisions.svg?react";
-import IconHome from "@/assets/icons/home.svg?react";
+import IconMessage from "@/assets/icons/message.svg?react";
 import IconMember from "@/assets/icons/member.svg?react";
 import IconTasks from "@/assets/icons/tasks.svg?react";
 
 const tabs = [
-  { to: "/chats", label: "Chats", Icon: IconHome, end: true },
+  { to: "/chats", label: "Chats", Icon: IconMessage, end: true },
   { to: "/tasks", label: "Tasks", Icon: IconTasks },
   { to: "/decisions", label: "Decisions", Icon: IconDecisions },
   { to: "/profile", label: "Me", Icon: IconMember },

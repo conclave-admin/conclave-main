@@ -39,14 +39,14 @@ tracked in the phases below.
 | 2     | P1       | Presence, typing, visibility-based reads, and group receipts      | Complete    |
 | 3     | P1       | Recoverable delivery and reconnect synchronization                | Complete    |
 | 4     | P1       | Background notifications and preference enforcement               | In progress |
-| 5     | P1       | Privacy controls, account recovery, devices, and encryption       | In progress |
+| 5     | P1       | Privacy controls, account recovery, and sessions       | In progress |
 | 6     | P2       | Voice messages, info pages, rooms, and personal history           | Complete    |
 | 7     | P2       | Deployed media, browser CI, real devices, accessibility, and load | In progress |
 | 8     | P3       | Calling, events, and further collaboration                        | Not started |
 
-Encryption architecture needs early planning alongside phases 1–3 because it
-affects the message model, media pipeline, search, and synchronization. Phase 5
-tracks that work explicitly; do not finalize conflicting designs beforehand.
+Current privacy policy: messages and attachments are server-readable. Migration
+061 removed former E2EE modes. Historical progress-log entries describe the
+implementation at their recorded dates, not the current product.
 
 ## Phase 1 — Realtime access revocation and session enforcement
 
@@ -242,9 +242,9 @@ mocks; real OS delivery remains unchecked. Configure the VAPID variables and
 complete the [live rollout checklist](docs/SYNC_AND_PUSH.md#verification-and-rollout)
 before marking this phase Complete.
 
-## Phase 5 — Privacy, account security, devices, and encryption
+## Phase 5 — Privacy, account security, and sessions
 
-**Priority:** P1; establish architecture early  
+**Priority:** P1
 **Status:** Implemented; release acceptance pending (see below)
 
 ### Privacy and DMs
@@ -260,28 +260,20 @@ before marking this phase Complete.
 - [x] **5.6** Provide device/session management and remote logout.
 - [x] **5.7** Integrate those controls with the session enforcement in phase 1.
 
-### End-to-end encryption
+### Message privacy after migration 061
 
-New DMs and explicit private rooms now encrypt on devices. Legacy conversations,
-public rooms, groups, and departments remain server readable. Authenticated R2
-access alone is not encryption. See [privacy and encryption policy](docs/PRIVACY_AND_ENCRYPTION.md).
-
-- [x] **5.8** Decide and document the encryption scope for DMs and rooms.
-- [x] **5.9** Design device identity keys, verification, and secure device linking.
-- [x] **5.10** Implement message and attachment encryption on the device within the chosen scope.
-- [x] **5.11** Design and implement secure key recovery and encrypted backups.
-- [x] **5.12** Decide how search, decisions, tasks, digests, and moderation work with encrypted content.
+Former encryption items 5.8–5.12 are retired. Device identity keys, encrypted
+backups, ratcheting, and local key-storage reviews no longer describe shipped
+features. See [current privacy policy](docs/PRIVACY_AND_ENCRYPTION.md).
 
 ### Acceptance checks
 
 - [x] Privacy and blocking controls behave consistently across API, realtime, and background delivery (automated checks).
 - [x] Recovery and remote logout work across devices, including already-open sessions (mocked email, real PostgreSQL/Redis).
-- [x] Encryption guarantees and recovery limitations are documented and covered by functional checks.
-- [ ] Complete independent protocol/security review before making audited-security claims. The custom protocol has no forward secrecy or post-compromise ratchet.
+- [x] Server-readable message privacy and account-recovery behavior are documented.
 - [ ] Verify Resend sending domain, add `RESEND_API_KEY` and verified `RESEND_FROM`, and exercise real verification/recovery email delivery.
 - [x] User confirmed a local recovery email works after correcting the sender address (26 October 2026). Deployed delivery, email verification, domain-status evidence, and expiry/single-use acceptance remain open under GH-03.
 - [ ] Complete deployed HTTPS, real R2, and real-device/browser acceptance; browser security checks mock storage.
-- [ ] Review secure local key storage and a ratcheting/rotation design for stronger security claims. Browser vaults currently rely on IndexedDB and the trusted origin/OS.
 
 ## Phase 6 — Voice messages, information pages, rooms, and personal history
 
@@ -291,8 +283,8 @@ access alone is not encryption. See [privacy and encryption policy](docs/PRIVACY
 ### Voice messages
 
 Voice notes now have inline playback, seeking, duration, speed controls, a local
-preview/discard flow, and cached offline playback through the existing encrypted
-or server-readable media path. See [voice-message notes](docs/VOICE_MESSAGES.md).
+preview/discard flow, and cached offline playback through the authenticated
+server-readable media path. See [voice-message notes](docs/VOICE_MESSAGES.md).
 
 - [x] **6.1** Add inline audio playback with seeking, duration, and playback speed.
 - [x] **6.2** Add recording preview and discard controls.
@@ -323,7 +315,7 @@ or server-readable media path. See [voice-message notes](docs/VOICE_MESSAGES.md)
 Account clearing now synchronizes a monotonic sequence boundary; device-only
 clearing remains a separate local action. Neither deletes peers’ history or
 pending sends. See [room and personal-history policy](docs/ROOMS_AND_PERSONAL_HISTORY.md)
-for permissions, invitations, encryption/history rules, and storage scopes.
+for permissions, invitations, history visibility, and storage scopes.
 
 ### Acceptance checks
 
@@ -406,7 +398,7 @@ implemented or verified equivalent behaviour.
 - [WhatsApp privacy](https://www.whatsapp.com/privacyquestions): end-to-end encryption for personal messages and media.
 - [WhatsApp groups](https://www.whatsapp.com/groups): group messaging, events, and calling.
 
-## Progress log
+## Progress log (historical evidence; earlier encryption entries are superseded by migration 061)
 
 | Date       | Phase / issue | Work completed                                                                                                                                                                                                                                                                                                                                                                                          | Verification / remaining work                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ---------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

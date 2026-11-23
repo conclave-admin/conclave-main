@@ -106,20 +106,17 @@ test("the built app reloads fully offline with its authenticated media draft int
     .click();
   const receivedViewer = page.getByRole("dialog", { name: "received.png" });
   await expect(
-    receivedViewer.getByText("Downloaded · available offline", { exact: true }),
+    receivedViewer.locator('[data-media-offline="true"]'),
   ).toBeVisible();
   await receivedViewer
     .getByRole("button", { name: "Close", exact: true })
     .click();
   expect(originals).toBe(1);
-  await page
-    .locator('input[type="file"][multiple]')
-    .first()
-    .setInputFiles({
-      name: "saved-photo.png",
-      mimeType: "image/png",
-      buffer: png,
-    });
+  await page.locator('input[type="file"][multiple]').first().setInputFiles({
+    name: "saved-photo.png",
+    mimeType: "image/png",
+    buffer: png,
+  });
   const editor = page.getByRole("dialog", {
     name: "Send attachment",
     exact: true,
@@ -195,8 +192,8 @@ test("the built app reloads fully offline with its authenticated media draft int
   ).toBeVisible();
   expect(before[0].size).toBe(png.length);
   await expect(
-    receivedBubble.getByText("Downloaded · available offline", { exact: true }),
-  ).toBeVisible();
+    receivedBubble.locator('[data-media-download-state="downloaded"]'),
+  ).toHaveAttribute("data-media-offline", "true");
   await receivedBubble
     .getByRole("button", { name: "Open received.png", exact: true })
     .click();

@@ -3,7 +3,7 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
   "base64",
 );
-async function setup(page) {
+async function setup(page, video = false, count = 3) {
   await page.route("**/attachments/album-file-*", (route) =>
     route.fulfill({ contentType: "image/png", body: png }),
   );
@@ -11,41 +11,44 @@ async function setup(page) {
   await expect(
     page.locator('a[href="/chats/preview-room"]').first(),
   ).toBeVisible();
-  await page.evaluate(async () => {
-    const { previewMessages } = await import("/src/config/devPreview.js");
-    const canvas = document.createElement("canvas");
-    canvas.width = 160;
-    canvas.height = 90;
-    canvas.getContext("2d").fillRect(0, 0, 160, 90);
-    const preview = canvas.toDataURL("image/jpeg", 0.5);
-    previewMessages.splice(
-      0,
-      previewMessages.length,
-      ...[0, 1, 2].map((index) => ({
-        id: `album-message-${index}`,
-        album_id: "album-test",
-        room_id: "preview-room",
-        sender_id: "peer",
-        sender_name: "Album Sender",
-        content: `ALBUM-CAPTION-${index} ${index === 1 ? "A long caption stays readable on a narrow screen. ".repeat(20) : ""}`,
-        created_at: new Date(Date.now() + index).toISOString(),
-        reactions: [],
-        pins: { mine: [], room: null },
-        attachments: [
-          {
-            id: `album-file-${index}`,
-            url: `r2://private/album-${index}`,
-            filename: `album-${index}.png`,
-            size: 70,
-            mime_type: "image/png",
-            width: 160,
-            height: 90,
-            preview_url: preview,
-          },
-        ],
-      })),
-    );
-  });
+  await page.evaluate(
+    async ({ video, count }) => {
+      const { previewMessages } = await import("/src/config/devPreview.js");
+      const canvas = document.createElement("canvas");
+      canvas.width = 160;
+      canvas.height = 90;
+      canvas.getContext("2d").fillRect(0, 0, 160, 90);
+      const preview = canvas.toDataURL("image/jpeg", 0.5);
+      previewMessages.splice(
+        0,
+        previewMessages.length,
+        ...Array.from({ length: count }, (_, index) => index).map((index) => ({
+          id: `album-message-${index}`,
+          album_id: "album-test",
+          room_id: "preview-room",
+          sender_id: "peer",
+          sender_name: "Album Sender",
+          content: `ALBUM-CAPTION-${index} ${index === 1 ? "A long caption stays readable on a narrow screen. ".repeat(20) : ""}`,
+          created_at: new Date(Date.now() + index).toISOString(),
+          reactions: [],
+          pins: { mine: [], room: null },
+          attachments: [
+            {
+              id: `album-file-${index}`,
+              url: `r2://private/album-${index}`,
+              filename: `album-${index}.png`,
+              size: 70,
+              mime_type: video && index === 0 ? "video/mp4" : "image/png",
+              width: 160,
+              height: 90,
+              preview_url: preview,
+            },
+          ],
+        })),
+      );
+    },
+    { video, count },
+  );
   await page.locator('a[href="/chats/preview-room"]').first().click();
 }
 test.beforeEach(async ({}, info) =>
@@ -55,6 +58,15 @@ test.beforeEach(async ({}, info) =>
 test("album grid preserves captions and opens a zoomable, navigable viewer with message jump", async ({
   page,
 }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() => {
+    window.__jumpBehaviors = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (options) {
+      window.__jumpBehaviors.push(options?.behavior);
+      return original.call(this, options);
+    };
+  });
   await setup(page);
   const album = page.locator('[data-album-id="album-test"]');
   await expect(album.locator("article")).toHaveCount(3);
@@ -81,6 +93,9 @@ test("album grid preserves captions and opens a zoomable, navigable viewer with 
     .getByRole("button", { name: "Show message", exact: true })
     .click();
   await expect(viewer).not.toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => window.__jumpBehaviors))
+    .toContain("instant");
   await expect(page.locator('[data-message-id="album-message-2"]')).toHaveClass(
     /message-jump-highlight/,
   );
@@ -241,4 +256,119 @@ test("direct multipart upload resumes a completed part after failure and reload"
   await expect(message.locator("[data-outbox-state]")).toHaveCount(0);
   expect(put1).toBe(1);
   expect(put2).toBe(2);
+});
+
+test("reduced-motion media viewer retains controls without autoplaying video", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setup(page, true);
+  await page.route("**/attachments/album-file-0", (route) =>
+    route.fulfill({
+      contentType: "video/mp4",
+      body: Buffer.from("test-video-bytes"),
+    }),
+  );
+  await page.getByRole("button", { name: /^Play video album-0.png/ }).click();
+  const viewer = page.getByRole("dialog", { name: "album-0.png", exact: true });
+  const video = viewer.locator("video");
+  await expect(video).toHaveCount(1);
+  expect(await video.evaluate((element) => element.autoplay)).toBe(false);
+  expect(await video.evaluate((element) => element.controls)).toBe(true);
+});
+
+test("five-photo albums stay compact, crop four tiles and open hidden photos without losing source jumps", async ({
+  page,
+}) => {
+  await setup(page, false, 5);
+  const album = page.locator('[data-album-id="album-test"]');
+  await expect(album.locator(".album-tile:visible")).toHaveCount(4);
+  expect((await album.boundingBox()).width).toBeLessThanOrEqual(360);
+  const tile = album.locator(".album-tile:visible").first();
+  const image = await tile.locator("img").boundingBox();
+  expect(image.width).toBeGreaterThanOrEqual(
+    (await tile.boundingBox()).width - 2,
+  );
+  await album
+    .getByRole("button", { name: "View 1 more photos and videos", exact: true })
+    .click();
+  let viewer = page.getByRole("dialog", { name: "album-3.png", exact: true });
+  await expect(viewer).toBeVisible();
+  await viewer.getByRole("button", { name: "Next media", exact: true }).click();
+  viewer = page.getByRole("dialog", { name: "album-4.png", exact: true });
+  await expect(viewer).toBeVisible();
+  await viewer
+    .getByRole("button", { name: "Show message", exact: true })
+    .click();
+  await expect(
+    page.locator('[data-message-id="album-message-4"]'),
+  ).toBeVisible();
+  await expect(page.locator('[data-message-id="album-message-4"]')).toHaveClass(
+    /message-jump-highlight/,
+  );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - innerWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+});
+
+test("image staging adds files without replacing the selection or losing per-file captions", async ({
+  page,
+}) => {
+  await setup(page);
+  const base64 = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 160;
+    canvas.height = 100;
+    canvas.getContext("2d").fillRect(0, 0, 160, 100);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  const file = (name) => ({
+    name,
+    mimeType: "image/png",
+    buffer: Buffer.from(base64, "base64"),
+  });
+  await page
+    .locator('form input[type="file"]')
+    .first()
+    .setInputFiles([file("first.png"), file("second.png")]);
+  const preview = page.getByRole("dialog", {
+    name: "Send attachment",
+    exact: true,
+  });
+  const caption = preview.getByRole("textbox", {
+    name: "Add a caption",
+    exact: true,
+  });
+  await caption.fill("First photo caption");
+  const choosing = page.waitForEvent("filechooser");
+  await preview
+    .getByRole("button", { name: "Add more files", exact: true })
+    .click();
+  await (await choosing).setFiles(file("third.png"));
+  await expect(
+    preview.getByText("3 files selected · captions are saved per file", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(caption).toHaveValue("First photo caption");
+  await preview
+    .getByRole("button", { name: "Preview third.png", exact: true })
+    .click();
+  await caption.fill("Third photo caption");
+  await preview
+    .getByRole("button", { name: "Preview first.png", exact: true })
+    .click();
+  await expect(caption).toHaveValue("First photo caption");
+  await preview
+    .getByRole("button", { name: "Remove second.png", exact: true })
+    .click();
+  await preview
+    .getByRole("button", { name: "Preview third.png", exact: true })
+    .click();
+  await expect(caption).toHaveValue("Third photo caption");
+  await expect(
+    preview.getByRole("button", { name: "Send", exact: true }),
+  ).toBeEnabled();
 });

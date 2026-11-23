@@ -843,3 +843,13 @@ creator or a room admin.
 | GET | `/work/search?q=` | Search accessible messages, files, tasks, decisions, rooms, and shared room members. At least two characters; at most 50 combined results. |
 | GET / PATCH | `/work/inbox` and `/work/inbox/state` | Read up to 100 actionable assignments, mentions, blocked and overdue tasks; mark an `eventKey` done or snoozed with `until` within 30 days. |
 | GET / POST / PATCH | `/work/projects/:projectId/automations[/:ruleId]` | List, create, or enable/pause a rule. One rule per trigger per project. `decision_recorded` creates an unassigned follow-up task; `task_overdue` notifies the assignee once per due date. Runs are recorded durably. |
+
+
+### Member profile reads
+
+`GET /users/:userId` requires authentication and a UUID. Returns
+`{ id, display_name, avatar_url, bio }` only for the caller or an active user
+sharing a room with the caller. `avatar_url` and `bio` honor existing photo/about
+visibility and block rules. Email and account security fields are never selected.
+Deleted users, unknown IDs, and users without shared membership return the same
+404. Existing `GET /users/me` remains the caller's editable account record.

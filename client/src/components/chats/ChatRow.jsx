@@ -1,3 +1,5 @@
+import MessageStatus from "../chat/MessageStatus";
+import { readStatus } from "@/lib/messageMeta";
 import useExpiryClock from "../../hooks/useExpiryClock";
 import { readDraft } from "../../lib/drafts";
 import Modal from "../ui/Modal";
@@ -80,7 +82,8 @@ export default function ChatRow({ room }) {
       ? null
       : room.last_message;
   const unread = room.unread_count || 0;
-  const displayName = room.display_name ||
+  const displayName =
+    room.display_name ||
     (room.type === "dm" ? "Deleted user" : room.name || "Conversation");
 
   return (
@@ -95,7 +98,7 @@ export default function ChatRow({ room }) {
       <NavLink
         to={`/chats/${room.id}`}
         className={({ isActive }) =>
-          `chat-row flex items-center gap-3.5 rounded-lg px-3 py-3 pr-10 transition-colors ${
+          `chat-row flex items-center gap-3 px-4 py-2.5 pr-12 transition-colors ${
             isActive ? "bg-brand-soft" : "hover:bg-canvas"
           }`
         }
@@ -105,37 +108,52 @@ export default function ChatRow({ room }) {
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline justify-between gap-2">
             <span
-              className={`truncate text-label ${unread ? "font-semibold" : "font-medium"}`}
+              className={`truncate text-[15px] ${unread ? "font-semibold" : "font-medium"}`}
             >
               {displayName}
             </span>
-            <span className="shrink-0 text-metadata text-muted">
+            <span
+              className={`shrink-0 text-[11px] tabular-nums ${unread && !isMuted ? "font-semibold text-brand" : "text-muted"}`}
+            >
               {formatRoomTime(room.last_message?.created_at)}
             </span>
           </span>
 
-          <span className="mt-1 flex items-center justify-between gap-2">
+          <span className="mt-0.5 flex items-center justify-between gap-2">
             <span
-              className={`truncate text-body ${
+              className={`flex min-w-0 items-center gap-1 truncate text-label ${
                 room.has_message ? "text-muted" : "text-muted/70"
               }`}
             >
-              {draft.text ? (
-                <>
-                  <strong className="text-brand">Draft: </strong>
-                  {draft.text}
-                </>
-              ) : recordingByRoom.get(room.id)?.size ? (
-                "recording a voice message…"
-              ) : typingByRoom.get(room.id)?.size ? (
-                "typing…"
-              ) : room.type !== "dm" &&
-                room.last_message?.sender_id !== user?.id &&
-                room.last_message?.sender_name ? (
-                `${room.last_message.sender_name}: ${formatRoomPreview(lastMessage)}`
-              ) : (
-                formatRoomPreview(lastMessage)
-              )}
+              {!draft.text &&
+                !recordingByRoom.get(room.id)?.size &&
+                !typingByRoom.get(room.id)?.size &&
+                lastMessage?.sender_id === user?.id &&
+                !lastMessage.is_deleted && (
+                  <MessageStatus
+                    status={readStatus(lastMessage, [], user?.id)}
+                  />
+                )}
+              <span
+                className={`truncate ${recordingByRoom.get(room.id)?.size || typingByRoom.get(room.id)?.size ? "text-brand" : ""}`}
+              >
+                {draft.text ? (
+                  <>
+                    <strong className="text-brand">Draft: </strong>
+                    {draft.text}
+                  </>
+                ) : recordingByRoom.get(room.id)?.size ? (
+                  "recording a voice message…"
+                ) : typingByRoom.get(room.id)?.size ? (
+                  "typing…"
+                ) : room.type !== "dm" &&
+                  room.last_message?.sender_id !== user?.id &&
+                  room.last_message?.sender_name ? (
+                  `${room.last_message.sender_name}: ${formatRoomPreview(lastMessage)}`
+                ) : (
+                  formatRoomPreview(lastMessage)
+                )}
+              </span>
             </span>
 
             <span className="flex shrink-0 items-center gap-1.5">
@@ -172,7 +190,7 @@ export default function ChatRow({ room }) {
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         aria-label={`Actions for ${displayName}`}
-        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-muted transition-colors hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+        className="absolute right-1 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-full text-muted transition-colors hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
       >
         <IconMore className="h-4 w-4" aria-hidden="true" />
       </button>

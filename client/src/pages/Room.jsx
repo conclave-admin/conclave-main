@@ -383,10 +383,10 @@ export default function Room() {
   );
 
   const handleMessageVisible = useCallback(
-    async (message) => {
+    async (message, { mediaViewer = false } = {}) => {
       if (
         !socket?.connected ||
-        !activeReadView() ||
+        !activeReadView(document, window, mediaViewer) ||
         !message?.id ||
         message._optimistic
       )

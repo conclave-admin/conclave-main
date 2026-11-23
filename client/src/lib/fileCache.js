@@ -1,5 +1,5 @@
 /**
- * A local, bounded copy of attachment bytes.
+ * Offline originals plus a bounded cache of previews and partial transfers.
  *
  * IndexedDB rather than localStorage. The two reasons are not decorative:
  * localStorage only stores strings, so every file would be base64'd and grow
@@ -12,11 +12,11 @@
  * and the URL is also the only key the sender has at upload time, before any
  * message row exists. One key, two callers, no reconciliation step.
  *
- * The store is capped by bytes, not by count: entries are `Blob`s of wildly
+ * Temporary previews and partial transfers are capped by bytes, not by count: entries are `Blob`s of wildly
  * different sizes, so a record limit would let a handful of videos occupy the
  * whole budget. Eviction is least-recently-*used* rather than oldest-inserted —
- * `lastUsedAt` is touched on every read, so a conversation the user scrolls
- * past daily keeps its images while a month-old PDF falls out.
+ * `lastUsedAt` is touched on every read. Completed originals are excluded from
+ * this eviction budget and remain until removal or browser storage eviction.
  *
  * Everything is best-effort. Private modes, storage pressure and quota errors
  * all degrade to "no cache", never to a failed render: a file the user can see
@@ -35,18 +35,21 @@ const cacheChannel =
     ? new BroadcastChannel("conclave-media-cache")
     : null;
 cacheChannel?.addEventListener("message", (event) => {
-  if (event.data === null) cacheEpoch += 1;
+  const detail =
+    event.data && !Array.isArray(event.data)
+      ? event.data
+      : { keys: event.data };
+  if (detail.keys === null || detail.accountPrefix) cacheEpoch += 1;
   window.dispatchEvent(
-    new CustomEvent("conclave:media-cache-removed", {
-      detail: { keys: event.data },
-    }),
+    new CustomEvent("conclave:media-cache-removed", { detail }),
   );
 });
-function cacheRemoved(keys = null) {
-  cacheChannel?.postMessage(keys);
+function cacheRemoved(keys = null, accountPrefix = null) {
+  const detail = { keys, accountPrefix };
+  cacheChannel?.postMessage(accountPrefix ? detail : keys);
   if (typeof window !== "undefined")
     window.dispatchEvent(
-      new CustomEvent("conclave:media-cache-removed", { detail: { keys } }),
+      new CustomEvent("conclave:media-cache-removed", { detail }),
     );
 }
 
@@ -92,9 +95,15 @@ function transact(stores, mode, work) {
       new Promise((resolve, reject) => {
         const transaction = db.transaction(stores, mode);
         let out;
-        transaction.oncomplete = () => { resolve(out && "result" in out ? out.result : out); };
-        transaction.onerror = () => { reject(transaction.error); };
-        transaction.onabort = () => { reject(transaction.error); };
+        transaction.oncomplete = () => {
+          resolve(out && "result" in out ? out.result : out);
+        };
+        transaction.onerror = () => {
+          reject(transaction.error);
+        };
+        transaction.onabort = () => {
+          reject(transaction.error);
+        };
         try {
           out = work(transaction);
         } catch (error) {
@@ -166,10 +175,16 @@ async function trim(maxBytes = MAX_BYTES) {
   const all = await transact(["meta"], "readonly", (t) =>
     t.objectStore("meta").getAll(),
   );
-  let total = all.reduce((sum, entry) => sum + (entry.size || 0), 0);
+  // Completed originals are retained until explicitly removed. Only disposable
+  // previews/transfer checkpoints use the automatic LRU budget.
+  const disposable = all.filter(
+    (entry) =>
+      entry.key.includes(":preview-v1:") || entry.key.includes(":part:"),
+  );
+  let total = disposable.reduce((sum, entry) => sum + (entry.size || 0), 0);
   if (total <= maxBytes) return;
 
-  const oldestFirst = [...all].sort((a, b) => a.lastUsed - b.lastUsed);
+  const oldestFirst = [...disposable].sort((a, b) => a.lastUsed - b.lastUsed);
   const drop = [];
   for (const entry of oldestFirst) {
     if (total <= maxBytes) break;
@@ -406,6 +421,8 @@ export async function accountMediaUsage(userId) {
     .reduce((sum, row) => sum + (row.size || 0), 0);
 }
 export async function clearAccountMediaCache(userId) {
+  cacheEpoch += 1;
+  cacheRemoved(null, `media:${userId}:`);
   const rows = await transact(["meta"], "readonly", (t) =>
     t.objectStore("meta").getAll(),
   );
@@ -418,6 +435,20 @@ export async function clearAccountMediaCache(userId) {
       t.objectStore("meta").delete(key);
     }),
   );
-  cacheRemoved(keys);
+  cacheRemoved(null, `media:${userId}:`);
   return keys.length;
+}
+
+export async function listAccountDownloads(userId) {
+  const rows = await transact(["meta"], "readonly", (t) =>
+    t.objectStore("meta").getAll(),
+  );
+  return rows
+    .filter(
+      (row) =>
+        row.key.startsWith(`media:${userId}:`) &&
+        !row.key.includes(":preview-v1:") &&
+        !row.key.includes(":part:"),
+    )
+    .sort((a, b) => b.lastUsed - a.lastUsed);
 }

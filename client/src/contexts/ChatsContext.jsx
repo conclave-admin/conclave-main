@@ -140,6 +140,7 @@ export function ChatsProvider({ children }) {
       if (
         !shouldAlert({
           notification,
+          visibilityState: document.visibilityState,
           activeRoomId: getActiveRoomId(),
           policy: alertPolicy.current,
           mutedRooms: mutedRef.current,

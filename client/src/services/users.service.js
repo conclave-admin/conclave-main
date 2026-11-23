@@ -179,3 +179,22 @@ export async function unblockUser(userId) {
   const { data } = await api.delete(`/users/${userId}/block`);
   return data.data;
 }
+
+export async function getProfile(userId) {
+  if (isDevAuthBypass) {
+    const person = [
+      previewUser,
+      ...previewRooms.flatMap((room) => room.members || []),
+      ...previewUsers,
+    ].find((person) => person.id === userId);
+    if (!person) throw new Error("Profile not available");
+    return {
+      id: person.id,
+      display_name: person.display_name,
+      avatar_url: person.avatar_url,
+      bio: person.bio,
+    };
+  }
+  const { data } = await api.get(`/users/${encodeURIComponent(userId)}`);
+  return data.data;
+}

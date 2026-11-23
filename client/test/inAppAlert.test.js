@@ -127,3 +127,8 @@ test("a notification without a resolvable room cannot be opened, so it cannot al
   );
   assert.equal(shouldAlert({ notification: null }), false);
 });
+
+test('hidden tabs suppress both toast and sound through their shared alert gate', () => {
+  assert.equal(shouldAlert({ notification: message(), visibilityState: 'hidden' }), false);
+  assert.equal(shouldAlert({ notification: message(), visibilityState: 'visible' }), true);
+});

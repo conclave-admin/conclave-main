@@ -359,7 +359,21 @@ const listRooms = asyncHandler(async (req, res) => {
     [req.user.id],
   );
 
-  return ok(res, result.rows);
+  const ownPreviews = result.rows
+    .map((room) => room.last_message)
+    .filter((message) => message?.sender_id === req.user.id);
+  const summaries =
+    await require("../services/messageReceipt.service").attachReceiptSummaries(
+      ownPreviews,
+    );
+  const byId = new Map(summaries.map((message) => [message.id, message]));
+  return ok(
+    res,
+    result.rows.map((room) => ({
+      ...room,
+      last_message: byId.get(room.last_message?.id) || room.last_message,
+    })),
+  );
 });
 
 // Public rooms are discoverable to signed-in users who are not members.

@@ -101,3 +101,24 @@ Room invitations, approval, permissions, handover, and personal history require
 migration **038** before deploying the updated API/client. See
 [Rooms and personal history](docs/ROOMS_AND_PERSONAL_HISTORY.md) for rollout,
 permission, and clearing rules.
+
+## Repository verification
+
+Use Node 22 (`nvm use`), then install dependencies with `npm ci --prefix backend`
+and `npm ci --prefix client`. From the repository root:
+
+```sh
+npm run check          # backend/client unit tests and client production build
+npm run test:db        # real PostgreSQL/Redis checks using disposable databases
+npm run test:browser   # desktop/mobile recovery and real-API security suites
+npm run test:media     # focused media transfer regressions
+npm run migrate        # explicit migration of DATABASE_URL; not part of check
+```
+
+Browser checks require `cd client && npx playwright install chromium` and local
+PostgreSQL/Redis. Never point test configuration at production. See
+[release evidence](docs/RELEASE_EVIDENCE.md) and
+[deferred feature designs](docs/DEFERRED_FEATURES.md).
+
+The messaging layout and interaction changes are described in
+[messaging UI](docs/MESSAGING_UI.md).

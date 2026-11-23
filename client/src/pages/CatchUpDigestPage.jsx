@@ -194,10 +194,8 @@ export default function CatchUpDigestPage() {
       ) : (
         <>
           <div className="rounded-xl border border-line bg-surface px-5 py-6 md:px-6">
-            <p className="text-label text-muted">CATCH UP AT A GLANCE</p>
-            <h1 className="mt-3 text-h1 text-ink">{digest.summary.headline}</h1>
+            <h1 className="text-h1 text-ink">{digest.summary.headline}</h1>
             <p className="mt-3 text-body text-muted">{digest.summary.summary}</p>
-            <p className="mt-2 text-metadata text-muted">Direct mentions and assignments appear first. Opening an item keeps it here until you mark it as read.</p>
             <Button variant="secondary" onClick={() => void mark()} disabled={Boolean(marking)} className="mt-5">
               {marking === "all" ? "Marking…" : "Mark all as read"}
             </Button>

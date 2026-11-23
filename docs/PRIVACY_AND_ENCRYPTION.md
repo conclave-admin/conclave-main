@@ -82,3 +82,10 @@ revocation. No system can erase messages or files already copied onto a revoked 
 ## Files and moderation
 
 Attachments use authenticated access and supported short-lived signed preview URLs. Previously downloaded or exported copies cannot be recalled. Reports contain the details submitted by the reporter.
+
+Report submission is implemented, but report review and enforcement tools are
+not yet available. Future review is reserved for explicitly appointed platform
+moderators, with audited access and minimum necessary investigation context;
+room administrators do not receive platform-wide report access. See
+[deferred feature designs](DEFERRED_FEATURES.md) and
+[release acceptance evidence](RELEASE_EVIDENCE.md).

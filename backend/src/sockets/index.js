@@ -193,7 +193,19 @@ function registerSocketHandlers(io) {
                 throw new ApiError(429, "Too many activity updates");
             }
             try {
-              await requireSession(socket.authClaims);
+              const session = await requireSession(socket.authClaims);
+              // Starts share one account budget across tabs and instances.
+              // Stops must still clear another device after a start flood.
+              if (event === "typing" || event === "start-recording") {
+                await rateLimit.requireShared(
+                  `indicators:user:${userId}`,
+                  {
+                    windowMs: 10_000,
+                    max: 24 * Math.max(1, session?.active_session_count || 1),
+                  },
+                  "Too many activity updates",
+                );
+              }
             } catch (error) {
               if (error.status === 401) {
                 socket.emit("session:revoked", {
@@ -308,11 +320,11 @@ function registerSocketHandlers(io) {
         forwardSource,
         [ACTIVITY_ORDER]: order,
       }) => {
-        if (!rateLimit.consume(`socket:${userId}:messages`, { max: 30 }))
-          throw new ApiError(
-            429,
-            "Too many messages. Please try again shortly.",
-          );
+        await rateLimit.requireShared(
+          `socket:${userId}:messages`,
+          { windowMs: 60_000, max: 30 },
+          "Too many messages. Please try again shortly.",
+        );
         const message = await createMessage({
           roomId,
           senderId: userId,

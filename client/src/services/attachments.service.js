@@ -13,8 +13,17 @@ import { isDevAuthBypass } from "../config/devPreview";
 
 export const attachmentAccount = () =>
   getSessionUserId() || (isDevAuthBypass ? "preview" : "signed-out");
-export const attachmentCacheKey = (attachment, preview = false) =>
-  `media:${attachmentAccount()}:${preview ? "preview-v1:" : ""}${attachment.url || attachment.id}`;
+const localBlobIds = new WeakMap();
+let nextLocalBlobId = 0;
+export const attachmentCacheKey = (attachment, preview = false) => {
+  let identity = attachment.url || attachment.id;
+  if (!identity && attachment.local_blob) {
+    if (!localBlobIds.has(attachment.local_blob))
+      localBlobIds.set(attachment.local_blob, `local-${++nextLocalBlobId}`);
+    identity = localBlobIds.get(attachment.local_blob);
+  }
+  return `media:${attachmentAccount()}:${preview ? "preview-v1:" : ""}${identity || "unavailable"}`;
+};
 
 async function readError(error) {
   const data = error.response?.data;
@@ -115,6 +124,7 @@ export async function cacheAttachmentBlob(attachment, blob) {
     start += DOWNLOAD_CHUNK_SIZE
   )
     await removeLocalFile(`${attachmentCacheKey(attachment)}:part:${start}`);
+  if (saved) window.dispatchEvent(new Event("conclave:media-cache-saved"));
   return saved;
 }
 

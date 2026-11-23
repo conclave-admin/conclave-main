@@ -25,14 +25,16 @@ test("responsive shell keeps controls on the right without horizontal overflow",
     const notify = await page
       .getByRole("link", { name: /^Notifications/ })
       .boundingBox();
-    const menu = await page
-      .getByRole("button", { name: /menu|sidebar/i })
-      .boundingBox();
+    const menuButton = page.getByRole("button", {
+      name: /Open menu|Expand sidebar|Collapse sidebar/i,
+    });
     expect(notify).not.toBeNull();
-    expect(menu).not.toBeNull();
-    expect(menu.x).toBeGreaterThan(notify.x);
+    if (width >= 768) await expect(menuButton).toBeHidden();
 
     if (width < 768) {
+      const menu = await menuButton.boundingBox();
+      expect(menu).not.toBeNull();
+      expect(menu.x).toBeGreaterThan(notify.x);
       const logo = await page
         .getByRole("link", { name: "Conclave, home" })
         .boundingBox();
@@ -59,8 +61,12 @@ test("open room keeps its mobile room header and form pages remain capped", asyn
 
   await page.setViewportSize({ width: 1920, height: 1000 });
   await page.goto("/settings");
-  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
-  const formContent = await page.locator("main .app-page-content").boundingBox();
+  await expect(
+    page.getByRole("heading", { name: "Settings", exact: true }),
+  ).toBeVisible();
+  const formContent = await page
+    .locator("main .app-page-content")
+    .boundingBox();
   expect(formContent).not.toBeNull();
   expect(formContent.width).toBeLessThanOrEqual(672);
 });
@@ -81,7 +87,9 @@ test("message actions open a thread panel with its reply action", async ({
     page.getByRole("complementary", { name: "Message thread" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("complementary", { name: "Message thread" }).getByRole("textbox", { name: "Message" }),
+    page
+      .getByRole("complementary", { name: "Message thread" })
+      .getByRole("textbox", { name: "Message" }),
   ).toBeVisible();
 });
 
@@ -158,7 +166,9 @@ test("room information describes the room and its members", async ({
       "Deployment, config and release coordination for the product surface.",
     ),
   ).toBeVisible();
-  await expect(page.getByText("4 members", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByText("4 members", { exact: true }).first(),
+  ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Room members" }),
   ).toBeVisible();
@@ -180,7 +190,9 @@ test("profile shows a public-facing preview and account overview", async ({
   await expect(
     page.getByRole("region", { name: "Profile preview" }),
   ).toContainText("Amina Yusuf");
-  await expect(page.getByText("amina@conclave.local", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByText("amina@conclave.local", { exact: true }).first(),
+  ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Edit your profile" }),
   ).toBeVisible();

@@ -462,6 +462,13 @@ async function emitChatUpdated(io, roomId) {
     // cascade could in principle leave one. Sending `lastMessage: null` is the
     // honest answer for "this room is now empty".
     const row = messageResult.rows[0] || null;
+    const receiptSummary = row
+      ? (
+          await require("./messageReceipt.service").attachReceiptSummaries([
+            row,
+          ])
+        )[0].receipt_summary
+      : null;
     const lastMessage = row
       ? {
           id: row.id,
@@ -489,7 +496,12 @@ async function emitChatUpdated(io, roomId) {
             : BigInt(row.room_sequence) <= BigInt(member.cleared_sequence || 0))
             ? null
             : await require("./privacy.service").present(
-                lastMessage,
+                lastMessage && {
+                  ...lastMessage,
+                  ...(member.user_id === row.sender_id
+                    ? { receipt_summary: receiptSummary }
+                    : {}),
+                },
                 member.user_id,
               ),
         unreadCount: member.unread_count,

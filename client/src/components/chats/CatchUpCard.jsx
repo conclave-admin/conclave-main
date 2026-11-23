@@ -63,13 +63,13 @@ export default function CatchUpCard() {
   return (
     <Link
       to="/digest"
-      className="mx-3 mb-2 flex items-center gap-3 rounded-lg border border-brand/30 bg-brand-soft/50 px-3 py-3 transition-colors hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+      className="mx-4 my-2 flex items-center gap-3 rounded-xl bg-brand-soft/50 px-3 py-2 transition-colors hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
     >
       <span className="min-w-0 flex-1">
         <span className="block text-label text-ink">
           {counts.headline}
         </span>
-        <span className="mt-1 block text-metadata text-muted">{counts.summary}</span>
+        <span className="mt-0.5 block truncate text-metadata text-muted">{counts.summary}</span>
       </span>
       <IconArrow className="h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
     </Link>
