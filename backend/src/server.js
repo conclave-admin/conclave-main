@@ -4,7 +4,11 @@ const { createAdapter } = require("@socket.io/redis-adapter");
 
 const app = require("./app");
 const env = require("./config/env");
-const { connectRedis, redisClient } = require("./config/redis");
+const {
+  connectRedis,
+  connectRedisAdapter,
+  redisClient,
+} = require("./config/redis");
 const { pool } = require("./config/db");
 const presence = require("./services/presence.service");
 const storageCleanup = require("./services/storageCleanup.service");
@@ -12,7 +16,7 @@ const registerSocketHandlers = require("./sockets");
 
 // Every rolling deploy, container restart and `docker compose down` delivers
 // SIGTERM. Without a handler the process is killed mid-request: the HTTP server
-// never closes, the pg pool and the three Redis connections are never drained,
+// never closes, the pg pool and any Redis connections are never drained,
 // and sockets are cut without their presence state being cleaned up. These refs
 // exist so shutdown can actually reach all of it.
 let httpServer = null;
@@ -59,10 +63,15 @@ async function shutdown(signal) {
       await new Promise((resolve) => httpServer.close(resolve));
     }
 
-    // All three Redis connections: the base client plus the pub/sub pair
-    // created for the Socket.IO adapter.
+    // Close the base client and, when enabled, the adapter pub/sub pair.
     for (const client of [pubClient, subClient, redisClient]) {
-      if (client && client.isOpen) await client.quit();
+      if (client?.isOpen) {
+        try {
+          await client.disconnect();
+        } catch (error) {
+          console.warn("Could not close Redis connection", error.message);
+        }
+      }
     }
 
     // Release pooled Postgres clients so the platform can finish the cycle.
@@ -88,13 +97,15 @@ async function main() {
     cors: { origin: env.clientOrigin, credentials: true },
   });
 
-  // Wire up the Redis adapter for multi-instance pub/sub.
-  // This lets io.to(roomId).emit() reach clients connected to
-  // OTHER server instances via Redis — required for horizontal scaling.
-  pubClient = redisClient.duplicate();
-  subClient = redisClient.duplicate();
-  await Promise.all([pubClient.connect(), subClient.connect()]);
-  io.adapter(createAdapter(pubClient, subClient));
+  // Enable SOCKET_REDIS_ADAPTER only when running 2+ instances.
+  if (process.env.SOCKET_REDIS_ADAPTER === "true") {
+    const clients = await connectRedisAdapter();
+    if (clients) {
+      pubClient = clients.pub;
+      subClient = clients.sub;
+      io.adapter(createAdapter(pubClient, subClient));
+    }
+  }
 
   registerSocketHandlers(io);
 
@@ -118,6 +129,9 @@ async function main() {
 // Registered before main() so a signal arriving during startup is still caught.
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("unhandledRejection", (error) => {
+  console.error("Unhandled promise rejection", error);
+});
 
 main().catch((err) => {
   console.error("Failed to start server", err);

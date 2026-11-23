@@ -8,7 +8,7 @@ services:
     rootDir: backend
     buildCommand: npm ci --omit=dev
     startCommand: sh docker-entrypoint.sh
-    healthCheckPath: /health
+    healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION
         value: "22"
@@ -20,6 +20,8 @@ services:
         sync: false
       - key: REDIS_URL
         sync: false
+      - key: SOCKET_REDIS_ADAPTER
+        value: "false"
       - key: CLIENT_ORIGIN
         sync: false
       - key: JWT_ACCESS_SECRET

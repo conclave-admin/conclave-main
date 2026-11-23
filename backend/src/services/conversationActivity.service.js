@@ -1,16 +1,105 @@
-const { redisClient } = require("../config/redis");
+const { isRedisReady, safe } = require("../config/redis");
 const TTL_MS = 5000;
 const kinds = ["typing", "recording"];
 const stateKey = (room, user, kind) => `activity:${room}:${user}:${kind}`;
+const localRooms = new Map();
+const localOrders = new Map();
+let localVersion = 0;
+const useSharedRedis = () =>
+  process.env.SOCKET_REDIS_ADAPTER === "true" && isRedisReady();
+
+function updateLocal(roomId, userId, socketId, kind, active) {
+  let room = localRooms.get(roomId);
+  if (!room) {
+    room = new Map();
+    localRooms.set(roomId, room);
+  }
+  let user = room.get(userId);
+  if (!user) {
+    user = new Map();
+    room.set(userId, user);
+  }
+  let sockets = user.get(kind);
+  if (!sockets) {
+    sockets = new Map();
+    user.set(kind, sockets);
+  }
+  if (active) sockets.set(socketId, Date.now() + TTL_MS);
+  else sockets.delete(socketId);
+  if (sockets.size === 0) user.delete(kind);
+  if (user.size === 0) room.delete(userId);
+  if (room.size === 0) localRooms.delete(roomId);
+  localVersion += 1;
+  return true;
+}
+
+function readLocalSnapshot(roomId, now = Date.now()) {
+  const room = localRooms.get(roomId);
+  const activity = [];
+  if (!room) return { activity, version: localVersion };
+  for (const [userId, user] of room) {
+    for (const [kind, sockets] of user) {
+      let expiresAt = 0;
+      for (const [socketId, expiry] of sockets) {
+        if (expiry <= now) sockets.delete(socketId);
+        else expiresAt = Math.max(expiresAt, expiry);
+      }
+      if (expiresAt > now)
+        activity.push({ userId, kind, ttlMs: Math.min(TTL_MS, expiresAt - now) });
+      if (sockets.size === 0) user.delete(kind);
+    }
+    if (user.size === 0) room.delete(userId);
+  }
+  if (room.size === 0) localRooms.delete(roomId);
+  return { activity, version: localVersion };
+}
+
+function clearLocalSocket(userId, socketId) {
+  const affected = [];
+  for (const [roomId, room] of localRooms) {
+    const user = room.get(userId);
+    if (!user) continue;
+    let changed = false;
+    for (const sockets of user.values())
+      changed = sockets.delete(socketId) || changed;
+    for (const [kind, sockets] of user)
+      if (sockets.size === 0) user.delete(kind);
+    if (user.size === 0) room.delete(userId);
+    if (changed) {
+      affected.push(roomId);
+      localVersion += 1;
+    }
+    if (room.size === 0) localRooms.delete(roomId);
+  }
+  for (const key of localOrders.keys())
+    if (key.endsWith(`:${socketId}`)) localOrders.delete(key);
+  return affected;
+}
+
+function clearLocalRoomUser(roomId, userId) {
+  if (localRooms.get(roomId)?.delete(userId)) localVersion += 1;
+  if (localRooms.get(roomId)?.size === 0) localRooms.delete(roomId);
+}
 
 // Socket event order is assigned before asynchronous authorization. A delayed
 // start cannot overwrite a later stop, send, or navigation from the same device.
 async function update(roomId, userId, socketId, kind, active, order) {
-  if (!redisClient.isReady) return false;
   if (!kinds.includes(kind)) throw new Error("Invalid conversation activity");
+  const orderKey = `${roomId}:${socketId}`;
+  const previousOrder = localOrders.get(orderKey);
+  if (
+    Number.isSafeInteger(order) &&
+    Number.isSafeInteger(previousOrder) &&
+    order < previousOrder
+  )
+    return false;
+  if (Number.isSafeInteger(order)) localOrders.set(orderKey, order);
+  if (!useSharedRedis())
+    return updateLocal(roomId, userId, socketId, kind, active);
   const now = Date.now();
-  return Boolean(
-    await redisClient.eval(
+  const changed = await safe(
+    (client) =>
+      client.eval(
       `
     local previous = tonumber(redis.call('GET', KEYS[6]) or '-1')
     if tonumber(ARGV[8]) < previous then return 0 end
@@ -32,7 +121,7 @@ async function update(roomId, userId, socketId, kind, active, order) {
     end
     redis.call('INCR', KEYS[9]); return 1
   `,
-      {
+        {
         keys: [
           stateKey(roomId, userId, kind),
           stateKey(roomId, userId, kind === "typing" ? "recording" : "typing"),
@@ -55,14 +144,22 @@ async function update(roomId, userId, socketId, kind, active, order) {
           String(order),
           kind === "typing" ? "recording" : "typing",
         ],
-      },
-    ),
+        },
+      ),
+    undefined,
   );
+  if (changed === undefined || changed) {
+    updateLocal(roomId, userId, socketId, kind, active);
+    return true;
+  }
+  return false;
 }
 
 async function readSnapshot(roomId, now = Date.now()) {
-  if (!redisClient.isReady) return { activity: [], version: 0 };
-  const flat = await redisClient.eval(
+  if (!useSharedRedis()) return readLocalSnapshot(roomId, now);
+  const flat = await safe(
+    (client) =>
+      client.eval(
     `
     local result = {}; local changed = false; local users = redis.call('SMEMBERS', KEYS[1])
     for _, user in ipairs(users) do
@@ -89,7 +186,7 @@ async function readSnapshot(roomId, now = Date.now()) {
     if changed then redis.call('INCR', KEYS[4]) end
     table.insert(result, 1, tostring(redis.call('GET', KEYS[4]) or '0')); return result
   `,
-    {
+        {
       keys: [
         `activity:${roomId}:users`,
         "presence:leases",
@@ -97,8 +194,11 @@ async function readSnapshot(roomId, now = Date.now()) {
         `activity:${roomId}:version`,
       ],
       arguments: [roomId, String(now)],
-    },
+        },
+      ),
+    null,
   );
+  if (!flat) return readLocalSnapshot(roomId, now);
   const result = [];
   for (let index = 1; index < flat.length; index += 3)
     result.push({
@@ -116,8 +216,10 @@ async function clearDevice(roomId, userId, socketId, order) {
     await update(roomId, userId, socketId, kind, false, order);
 }
 async function clearSocket(userId, socketId) {
-  if (!redisClient.isReady) return [];
-  const rooms = await redisClient.eval(
+  if (!useSharedRedis()) return clearLocalSocket(userId, socketId);
+  const rooms = await safe(
+    (client) =>
+      client.eval(
     `
     if redis.call('ZSCORE', KEYS[1], ARGV[1] .. ':' .. ARGV[2]) then return {} end
     local entries = redis.call('SMEMBERS', KEYS[2]); local rooms = {}
@@ -130,18 +232,24 @@ async function clearSocket(userId, socketId) {
     end
     redis.call('DEL', KEYS[2]); return rooms
   `,
-    {
+        {
       keys: ["presence:leases", `socket:${socketId}:activity`],
       arguments: [userId, socketId],
-    },
+        },
+      ),
+    null,
   );
-  return [...new Set(rooms)];
+  if (!rooms) return clearLocalSocket(userId, socketId);
+  const localCleared = clearLocalSocket(userId, socketId);
+  return [...new Set([...rooms, ...localCleared])];
 }
 async function clearRoomUser(roomId, userId) {
-  if (!redisClient.isReady) return;
-  await redisClient.eval(
+  if (!useSharedRedis()) return clearLocalRoomUser(roomId, userId);
+  await safe(
+    (client) =>
+      client.eval(
     "redis.call('DEL', KEYS[1], KEYS[2]); redis.call('SREM', KEYS[3], ARGV[1]); return redis.call('INCR', KEYS[4])",
-    {
+        {
       keys: [
         stateKey(roomId, userId, "typing"),
         stateKey(roomId, userId, "recording"),
@@ -149,12 +257,20 @@ async function clearRoomUser(roomId, userId) {
         `activity:${roomId}:version`,
       ],
       arguments: [userId],
-    },
+        },
+      ),
+    undefined,
   );
+  clearLocalRoomUser(roomId, userId);
 }
 async function sweepExpired() {
-  if (!redisClient.isReady) return [];
-  const rooms = await redisClient.sMembers("activity:rooms");
+  if (!useSharedRedis()) {
+    const rooms = [...localRooms.keys()];
+    for (const roomId of rooms) readLocalSnapshot(roomId);
+    return rooms;
+  }
+  const rooms = await safe((client) => client.sMembers("activity:rooms"), null);
+  if (!rooms) return [];
   for (const roomId of rooms) await snapshot(roomId);
   return rooms;
 }

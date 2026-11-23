@@ -3,7 +3,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const { pool } = require("./config/db");
-const { redisClient } = require("./config/redis");
+const { isRedisReady, safe } = require("./config/redis");
 
 const env = require("./config/env");
 const routes = require("./routes");
@@ -37,6 +37,7 @@ app.use(morgan(env.nodeEnv === "development" ? "dev" : "combined"));
 // message payloads stay small (BACKEND_TASKS.md Bug 14).
 app.use(express.json({ limit: "1mb" }));
 
+app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 // Liveness stays dependency-free; readiness confirms both stores before a
@@ -44,8 +45,9 @@ app.get("/health", (req, res) => res.json({ status: "ok" }));
 app.get("/ready", async (_req, res) => {
   try {
     await pool.query("SELECT 1");
-    if (!redisClient.isReady) throw new Error("Redis is not ready");
-    await redisClient.ping();
+    if (!isRedisReady()) throw new Error("Redis is not ready");
+    if (!(await safe((client) => client.ping(), null)))
+      throw new Error("Redis is not ready");
     return res.json({ status: "ready" });
   } catch {
     res.set("Retry-After", "5");

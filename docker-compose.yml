@@ -60,10 +60,10 @@ services:
     volumes:
       - ./backend/src:/app/src
       - ./backend/database:/app/database
-    # /health is declared before the /api router, so it needs no auth token.
+    # /healthz is declared before the /api router, so it needs no auth token.
     # node:20-alpine has busybox wget, not curl, hence the form used here.
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://localhost:$${PORT}/health"]
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:$${PORT}/healthz"]
       interval: 10s
       timeout: 3s
       retries: 5

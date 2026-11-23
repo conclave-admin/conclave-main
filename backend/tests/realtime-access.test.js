@@ -19,6 +19,7 @@ const databaseUrl = new URL(adminUrl);
 databaseUrl.pathname = `/${database}`;
 process.env.DATABASE_URL = databaseUrl.toString();
 process.env.REDIS_URL ||= "redis://127.0.0.1:6379";
+process.env.SOCKET_REDIS_ADAPTER = "true";
 process.env.JWT_ACCESS_SECRET ||= "security-test-access";
 process.env.JWT_REFRESH_SECRET ||= "security-test-refresh";
 const { pool, query } = require("../src/config/db");

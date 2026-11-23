@@ -12,7 +12,7 @@ const indicatorEvents = new Set([
   "start-recording",
   "stop-recording",
 ]);
-const { redisClient } = require("../config/redis");
+const { redisClient, isRedisReady, safe } = require("../config/redis");
 const socketHandler = require("../utils/socketHandler");
 const rateLimit = require("../middlewares/rateLimit.middleware");
 const ApiError = require("../utils/ApiError");
@@ -249,6 +249,7 @@ function registerSocketHandlers(io) {
         await requireSession(socket.authClaims);
         if (!socket.connected) return false;
         await presence.socketConnected(userId, socket.id);
+        socket.data.presenceRenewedAt = Date.now();
         await presence.publishUserPresence(io, userId);
         return true;
       } catch (error) {
@@ -371,15 +372,16 @@ function registerSocketHandlers(io) {
       onEvent(event, async ({ roomId, [ACTIVITY_ORDER]: order }) => {
         if (!roomId) throw new ApiError(400, "roomId is required");
         if (active) {
-          if (!redisClient.isReady)
-            throw new ApiError(
-              503,
-              "Activity updates are temporarily unavailable",
-            );
-          const allowed = await rateLimit.consumeShared(`activity:${userId}`, {
-            windowMs: 60000,
-            max: 120,
-          });
+          const allowed =
+            process.env.SOCKET_REDIS_ADAPTER === "true"
+              ? await rateLimit.consumeShared(`activity:${userId}`, {
+                  windowMs: 60000,
+                  max: 120,
+                })
+              : rateLimit.consume(`activity:${userId}`, {
+                  windowMs: 60000,
+                  max: 120,
+                });
           if (!allowed) throw new ApiError(429, "Too many activity updates");
         }
         return withRoomMembership(roomId, userId, async (client) => {
@@ -434,15 +436,32 @@ function registerSocketHandlers(io) {
             if (!socket.connected) return false;
             if (!read) return true;
             if (!socket.rooms.has(roomId)) return false;
-            if (!redisClient.isReady)
-              throw new ApiError(
-                503,
-                "Read receipts are temporarily unavailable",
+            if (
+              process.env.SOCKET_REDIS_ADAPTER !== "true" ||
+              !isRedisReady() ||
+              !redisClient
+            )
+              return (
+                socket.data.activity?.foreground === true &&
+                socket.data.activity.roomId === roomId
               );
-            const [lease, meta] = await Promise.all([
-              redisClient.zScore("presence:leases", `${userId}:${socket.id}`),
-              redisClient.hGetAll(`presence:socket:${socket.id}`),
-            ]);
+            const presenceState = await safe(
+              async (client) =>
+                Promise.all([
+                  client.zScore(
+                    "presence:leases",
+                    `${userId}:${socket.id}`,
+                  ),
+                  client.hGetAll(`presence:socket:${socket.id}`),
+                ]),
+              null,
+            );
+            if (!presenceState)
+              return (
+                socket.data.activity?.foreground === true &&
+                socket.data.activity.roomId === roomId
+              );
+            const [lease, meta] = presenceState;
             return (
               Number(lease) > Date.now() &&
               meta.foreground === "1" &&
@@ -465,7 +484,7 @@ function registerSocketHandlers(io) {
             ? payload.revision
             : previous.revision + 1;
           if (revision < previous.revision || !socket.connected)
-            return { available: redisClient.isReady };
+            return { available: true };
           let roomId =
             typeof payload?.roomId === "string" ? payload.roomId : null;
           if (roomId && !/^[0-9a-f-]{36}$/i.test(roomId))
@@ -478,24 +497,54 @@ function registerSocketHandlers(io) {
           };
           if (!activity.foreground) activity.roomId = roomId = null;
           let changed;
-          if (roomId) {
-            try {
-              changed = await withRoomMembership(roomId, userId, () =>
-                presence.renewSocket(userId, socket.id, activity),
-              );
-            } catch (error) {
-              if (error.status !== 403) throw error;
-              activity.roomId = null;
+          const stateChanged =
+            previous.foreground !== activity.foreground ||
+            previous.roomId !== activity.roomId;
+          const refreshDue =
+            Date.now() - (socket.data.presenceRenewedAt || 0) >=
+            4 * 60 * 1000;
+          const rebuildPresence =
+            refreshDue || socket.data.presenceNeedsResync === true;
+          if (stateChanged || rebuildPresence) {
+            if (roomId) {
+              try {
+                changed = await withRoomMembership(roomId, userId, () =>
+                  presence.renewSocket(userId, socket.id, activity),
+                );
+              } catch (error) {
+                if (error.status !== 403) throw error;
+                activity.roomId = null;
+                changed = await presence.renewSocket(userId, socket.id, activity);
+              }
+            } else {
               changed = await presence.renewSocket(userId, socket.id, activity);
             }
-          } else
-            changed = await presence.renewSocket(userId, socket.id, activity);
+            socket.data.presenceRenewedAt = Date.now();
+            if (rebuildPresence) {
+              const rooms = [...socket.rooms].filter((id) =>
+                /^[0-9a-f-]{36}$/i.test(id),
+              );
+              for (const id of rooms) {
+                try {
+                  await withRoomMembership(id, userId, async () => {
+                    if (socket.connected && socket.rooms.has(id))
+                      await presence.userJoinedRoom(userId, id, socket.id);
+                  });
+                } catch (error) {
+                  if (error.status !== 403) throw error;
+                  await socket.leave(id);
+                  await presence.userLeftRoom(userId, id, socket.id);
+                  socket.emit("room:members", {
+                    roomId: id,
+                    userId,
+                    action: "removed",
+                  });
+                }
+              }
+              socket.data.presenceNeedsResync = false;
+            }
+          }
           socket.data.activity = activity;
-          if (activity.foreground)
-            await query(
-              "UPDATE users SET last_active_at=NOW() WHERE id=$1 AND (last_active_at IS NULL OR last_active_at<NOW()-INTERVAL '1 minute')",
-              [userId],
-            );
           if (previous.roomId && previous.roomId !== activity.roomId) {
             await conversationActivity.clearDevice(
               previous.roomId,
@@ -510,33 +559,13 @@ function registerSocketHandlers(io) {
               userId,
             );
           }
-          // Rebuild this device's indexes after Redis data loss. Check membership
-          // under the same lock as removal, rather than trusting cached Redis sets.
-          const rooms = [...socket.rooms].filter((id) =>
-            /^[0-9a-f-]{36}$/i.test(id),
-          );
-          for (const id of rooms) {
-            try {
-              await withRoomMembership(id, userId, async () => {
-                if (socket.connected && socket.rooms.has(id))
-                  await presence.userJoinedRoom(userId, id, socket.id);
-              });
-            } catch (error) {
-              if (error.status !== 403) throw error;
-              await socket.leave(id);
-              await presence.userLeftRoom(userId, id, socket.id);
-              socket.emit("room:members", {
-                roomId: id,
-                userId,
-                action: "removed",
-              });
-            }
-          }
           if (changed) await presence.publishUserPresence(io, userId);
-          for (const id of rooms)
-            if (socket.rooms.has(id))
-              await presence.publishRoomPresence(io, id);
-          return { available: redisClient.isReady, checkedAt: Date.now() };
+          if (stateChanged) {
+            for (const id of socket.rooms)
+              if (/^[0-9a-f-]{36}$/i.test(id))
+                await presence.publishRoomPresence(io, id);
+          }
+          return { available: true, checkedAt: Date.now() };
         });
       return activityWork;
     });
@@ -565,6 +594,15 @@ function registerSocketHandlers(io) {
 
       // Remove the account from the online index only after its last device.
       await presence.userDisconnected(userId);
+      try {
+        await query("UPDATE users SET last_active_at=NOW() WHERE id=$1", [
+          userId,
+        ]);
+      } catch (error) {
+        console.error("Could not update last-seen timestamp", {
+          message: error.message,
+        });
+      }
     });
   });
 
@@ -573,15 +611,19 @@ function registerSocketHandlers(io) {
   presence.startHeartbeatSweep(io);
   const local = io.local || io;
   const unavailable = () => local.emit?.("presence:unavailable");
-  const resync = () => local.emit?.("presence:resync");
-  redisClient.on("reconnecting", unavailable);
-  redisClient.on("end", unavailable);
-  redisClient.on("ready", resync);
+  const resync = () => {
+    for (const socket of io.of("/").sockets.values())
+      socket.data.presenceNeedsResync = true;
+    local.emit?.("presence:resync");
+  };
+  redisClient?.on("reconnecting", unavailable);
+  redisClient?.on("end", unavailable);
+  redisClient?.on("ready", resync);
   io.httpServer?.once("close", () => {
     presence.stopHeartbeatSweep(io);
-    redisClient.off("reconnecting", unavailable);
-    redisClient.off("end", unavailable);
-    redisClient.off("ready", resync);
+    redisClient?.off("reconnecting", unavailable);
+    redisClient?.off("end", unavailable);
+    redisClient?.off("ready", resync);
   });
 }
 

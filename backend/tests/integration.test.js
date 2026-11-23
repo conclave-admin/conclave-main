@@ -41,6 +41,7 @@ const TEST_DB_URL = testUrl.toString();
 // Must be set before src/config/db is required, since env.js reads it at load.
 process.env.DATABASE_URL = TEST_DB_URL;
 process.env.REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
+process.env.SOCKET_REDIS_ADAPTER = "true";
 process.env.JWT_ACCESS_SECRET ||= "integration-test-access-secret";
 process.env.JWT_REFRESH_SECRET ||= "integration-test-refresh-secret";
 process.env.CLIENT_ORIGIN ||= "http://localhost:5173";

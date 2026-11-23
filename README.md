@@ -12,7 +12,7 @@ Full product/architecture context: [`docs/PKB_Project_Architecture_Brief.docx`](
 - **Backend:** Node.js + Express
 - **Real-time:** Socket.IO
 - **Database:** PostgreSQL
-- **Cache / presence / pub-sub:** Redis
+- **Cache / multi-instance pub-sub:** Optional Redis
 - **Media storage:** Cloudinary
 - **Auth:** JWT (access + refresh token)
 - **Frontend:** React + Tailwind (Vite)
@@ -87,9 +87,10 @@ docker-compose.yml   Postgres + Redis for local dev
 ## Architecture and documentation
 
 REST requests follow routes → controllers → shared services → PostgreSQL.
-Socket.IO uses the same message write service; Redis maintains presence and
-relays events between API instances. R2 stores new attachments; legacy Cloudinary
-attachments remain supported.
+Socket.IO uses the same message write service. A single API instance keeps
+presence and typing state locally; optional Redis relays events when running
+multiple instances. See [Redis operations](docs/redis.md). R2 stores new
+attachments; legacy Cloudinary attachments remain supported.
 
 - [API contracts](docs/API_CONTRACTS.md): endpoint payloads and integration notes.
 - [Backend backlog](docs/BACKEND_TASKS.md): current status, priorities and risks.

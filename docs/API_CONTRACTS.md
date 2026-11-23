@@ -70,7 +70,8 @@ subtracting `updated` deltas. See [setup and delivery guarantees](SYNC_AND_PUSH.
 
 | Method | Path      | Notes                                         |
 | ------ | --------- | --------------------------------------------- |
-| GET    | `/health` | Outside `/api`. No auth. → `{ status: 'ok' }` |
+| GET    | `/healthz` | Outside `/api`. No auth or Redis dependency. → `ok` |
+| GET    | `/health` | Backward-compatible liveness route. → `{ status: 'ok' }` |
 
 ## Auth
 
