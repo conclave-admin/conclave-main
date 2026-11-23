@@ -1538,9 +1538,9 @@ async function pushMessage(f, text = "Private text never put in push") {
   return response.body.data;
 }
 
-test("push delivery retries transient failure, uses generic content and expires dead subscriptions", async () =>
+test("push delivery retries transient failure, previews by default, groups by room and expires dead subscriptions", async () =>
   pushFixture(async (f) => {
-    const message = await pushMessage(f);
+    const message = await pushMessage(f, "Can you review the draft?");
     let calls = 0;
     await f.push.dispatch(100, async () => {
       calls++;
@@ -1562,10 +1562,15 @@ test("push delivery retries transient failure, uses generic content and expires 
       "UPDATE push_jobs SET next_attempt_at=NOW() WHERE subscription_id=$1",
       [f.registration.subscriptionId],
     );
+    // push_preview_enabled defaults to TRUE: the recipient's name/room and a
+    // truncated preview are included, grouped under one tag per conversation
+    // so a later message in the same room updates this notification instead
+    // of stacking a new one.
     await f.push.dispatch(100, async (sub, payload) => {
       const data = JSON.parse(payload);
       assert.equal(data.bindingId, f.registration.bindingId);
-      assert.ok(!payload.includes(message.content));
+      assert.ok(payload.includes(message.content));
+      assert.equal(data.tag, `conclave:room:${f.id}`);
       assert.equal(data.url, "/notifications");
       calls++;
     });
@@ -1579,6 +1584,29 @@ test("push delivery retries transient failure, uses generic content and expires 
       ).rows[0].outcome,
       "accepted",
     );
+    // Opting out of previews restores the fully generic payload.
+    await query(
+      `INSERT INTO notification_preferences(user_id,push_preview_enabled) VALUES($1,FALSE)
+       ON CONFLICT(user_id) DO UPDATE SET push_preview_enabled=FALSE`,
+      [f.member.userId],
+    );
+    const generic = await pushMessage(f, "Private text never put in push");
+    await f.push.dispatch(100, async (sub, payload) => {
+      const data = JSON.parse(payload);
+      assert.equal(data.title, "Conclave");
+      assert.equal(data.body, "You have new activity in Conclave");
+      assert.ok(!payload.includes(generic.content));
+      // Grouping still holds with previews off: the conversation-kind tag is
+      // what collapses the stack, independent of what the body says.
+      assert.equal(data.tag, `conclave:room:${f.id}:new_message`);
+      calls++;
+    });
+    assert.equal(calls, 3);
+    await query(
+      "UPDATE notification_preferences SET push_preview_enabled=TRUE WHERE user_id=$1",
+      [f.member.userId],
+    );
+    // The row now exists (inserted above), so this UPDATE affects it.
     await pushMessage(f, "Second");
     await f.push.dispatch(100, async () => {
       const error = new Error("Gone");

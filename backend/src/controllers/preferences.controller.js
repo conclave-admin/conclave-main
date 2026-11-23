@@ -17,6 +17,8 @@ const DEFAULTS = {
   activity_level: "all",
   muted: {},
   push_enabled: true,
+  push_preview_enabled: true,
+  in_app_alerts_enabled: true,
 };
 
 // Upsert rather than update-then-insert. Two concurrent saves on a first-ever
@@ -24,20 +26,22 @@ const DEFAULTS = {
 // duplicate-key error from the loser. ON CONFLICT resolves that in the database
 // instead of in application code.
 const UPSERT = `
-  INSERT INTO notification_preferences (user_id, activity_level, muted, push_enabled)
-  VALUES ($1, $2, $3::jsonb, $4)
+  INSERT INTO notification_preferences (user_id, activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled)
+  VALUES ($1, $2, $3::jsonb, $4, $5, $6)
   ON CONFLICT (user_id) DO UPDATE
-    SET activity_level = EXCLUDED.activity_level,
-        muted           = EXCLUDED.muted,
-        push_enabled    = EXCLUDED.push_enabled,
-        updated_at      = NOW()
-  RETURNING activity_level, muted, push_enabled, updated_at
+    SET activity_level        = EXCLUDED.activity_level,
+        muted                 = EXCLUDED.muted,
+        push_enabled          = EXCLUDED.push_enabled,
+        push_preview_enabled  = EXCLUDED.push_preview_enabled,
+        in_app_alerts_enabled = EXCLUDED.in_app_alerts_enabled,
+        updated_at            = NOW()
+  RETURNING activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, updated_at
 `;
 
 // ---------- getPreferences ----------
 const getPreferences = asyncHandler(async (req, res) => {
   const result = await query(
-    "SELECT activity_level, muted, push_enabled, updated_at FROM notification_preferences WHERE user_id = $1",
+    "SELECT activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, updated_at FROM notification_preferences WHERE user_id = $1",
     [req.user.id],
   );
 
@@ -54,23 +58,47 @@ const getPreferences = asyncHandler(async (req, res) => {
     // the column existed rather than trusting the NOT NULL default to hold.
     muted: row.muted || {},
     push_enabled: row.push_enabled,
+    push_preview_enabled: row.push_preview_enabled,
+    in_app_alerts_enabled: row.in_app_alerts_enabled,
     updatedAt: row.updated_at || null,
   });
 });
 
 // ---------- updatePreferences ----------
-// Same whitelist discipline as users.controller updateProfile: only these three
+// Same whitelist discipline as users.controller updateProfile: only these
 // fields, and an empty body is an error rather than a silent no-op, so a client
 // that sends the wrong key finds out instead of believing it saved.
 const updatePreferences = asyncHandler(async (req, res) => {
-  const { activity_level: level, muted, push_enabled: push } = req.body;
+  const {
+    activity_level: level,
+    muted,
+    push_enabled: push,
+    push_preview_enabled: preview,
+    in_app_alerts_enabled: inApp,
+  } = req.body;
 
-  if (level === undefined && muted === undefined && push === undefined) {
+  if (
+    level === undefined &&
+    muted === undefined &&
+    push === undefined &&
+    preview === undefined &&
+    inApp === undefined
+  ) {
     throw new ApiError(
       400,
-      `No updatable fields provided. Allowed: activity_level, muted, push_enabled`,
+      `No updatable fields provided. Allowed: activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled`,
     );
   }
+
+  // Both new switches are plain booleans; a non-boolean here would otherwise
+  // reach Postgres as a string and be stored as a truthy value.
+  for (const [name, value] of [
+    ["push_enabled", push],
+    ["push_preview_enabled", preview],
+    ["in_app_alerts_enabled", inApp],
+  ])
+    if (value !== undefined && typeof value !== "boolean")
+      throw new ApiError(400, `${name} must be a boolean`);
 
   if (level !== undefined && !ACTIVITY_LEVELS.includes(level)) {
     throw new ApiError(
@@ -110,7 +138,7 @@ const updatePreferences = asyncHandler(async (req, res) => {
   // never-saved row produce the same result as a GET on one: the row comes into
   // existence already holding the values a reader would have synthesised.
   const existing = await query(
-    "SELECT activity_level, muted, push_enabled FROM notification_preferences WHERE user_id = $1",
+    "SELECT activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled FROM notification_preferences WHERE user_id = $1",
     [req.user.id],
   );
   const current = existing.rows.length > 0 ? existing.rows[0] : DEFAULTS;
@@ -120,6 +148,8 @@ const updatePreferences = asyncHandler(async (req, res) => {
     level === undefined ? current.activity_level : level,
     JSON.stringify(muted === undefined ? current.muted || {} : muted),
     push === undefined ? current.push_enabled : push,
+    preview === undefined ? current.push_preview_enabled : preview,
+    inApp === undefined ? current.in_app_alerts_enabled : inApp,
   ]);
 
   const row = result.rows[0];
@@ -127,6 +157,8 @@ const updatePreferences = asyncHandler(async (req, res) => {
     activity_level: row.activity_level,
     muted: row.muted || {},
     push_enabled: row.push_enabled,
+    push_preview_enabled: row.push_preview_enabled,
+    in_app_alerts_enabled: row.in_app_alerts_enabled,
     updatedAt: row.updated_at,
   });
 });

@@ -3,7 +3,15 @@ import { useAuth } from "../../contexts/AuthContext";
 import { readDraft, writeDraft } from "../../lib/drafts";
 import { voiceRecordingFile, voiceRecorderOptions } from "@/lib/voiceRecording";
 import { createActivitySender } from "@/lib/conversationActivity";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import IconClose from "@/assets/icons/close.svg?react";
 import IconMention from "@/assets/icons/mention.svg?react";
 import IconSend from "@/assets/icons/send.svg?react";
@@ -58,7 +66,7 @@ const MAX_LINES = 5;
  * @param {() => void} [onCreateDecision] - opens the decision dialog when supplied
  * @param {() => void} [onCreateTask] - opens the task dialog when supplied
  */
-export default function MessageComposer({
+const MessageComposer = forwardRef(function MessageComposer({
   disabled,
   isOnline = true,
   onSend,
@@ -78,7 +86,7 @@ export default function MessageComposer({
   // The room pane is a grid and addresses its rows explicitly, so the composer
   // needs to accept the placement the parent decides rather than hardcoding one.
   className = "",
-}) {
+}, ref) {
   const { user: draftUser } = useAuth();
   const draftOwner = `${draftUser?.id}:${activityScope}`;
   const [content, setContent] = useState(
@@ -363,6 +371,13 @@ export default function MessageComposer({
       setPendingFiles(accepted);
     }
   };
+
+  // Lets a drop zone outside this component (the conversation pane, in
+  // Room.jsx) reuse the exact same validation/compression/preview path a
+  // picked or pasted file goes through, instead of a second, divergent one.
+  useImperativeHandle(ref, () => ({
+    addFiles: (files, options) => handleFiles(files, options),
+  }));
 
   const removeFile = (index) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
@@ -803,4 +818,6 @@ export default function MessageComposer({
       />
     </form>
   );
-}
+});
+
+export default MessageComposer;

@@ -4,6 +4,84 @@ const { pool } = require("../config/db");
 const env = require("../config/env");
 const ApiError = require("../utils/ApiError");
 const policy = require("./notificationPolicy.service");
+const { preview: previewText } = require("./notification.service");
+
+// Opt-out rich content: sender/actor name, room, and a truncated message
+// preview, grouped per conversation so several unread messages in one room
+// update a single OS notification instead of stacking separately. Falls back
+// to a fully generic payload when the recipient disabled previews, or when
+// nothing safe to show is available (e.g. the subject itself is a
+// not-otherwise-readable type) — never when content is merely absent, since a
+// missing preview must look identical to an intentionally generic one.
+function buildPayload(n, unseenCount) {
+  // One OS notification per conversation *and kind*: several unread messages
+  // in a room collapse into a single updating entry, while a task assignment
+  // in the same room keeps its own entry instead of silently replacing the
+  // message one (and vice versa).
+  const messageTag = `conclave:room:${n.room_id}`;
+  const kindTag = (kind) => `${messageTag}:${kind}`;
+  const generic = {
+    title: "Conclave",
+    body: "You have new activity in Conclave",
+    tag: messageTag,
+  };
+  // No saved row (NULL) means the default, which is enabled — the same
+  // convention notification_preferences uses for push_enabled/activity_level.
+  if (n.push_preview_enabled === false) return { ...generic, tag: kindTag(n.type) };
+
+  const room = n.room_name || "a conversation";
+  const isDm = n.room_type === "dm";
+  const who = n.actor_name || n.sender_name || "Someone";
+
+  if (["mention", "new_message", "file_uploaded", "reminder"].includes(n.type)) {
+    if (unseenCount > 0) {
+      return {
+        // Grouped: the room (or the person, in a DM) is the headline and the
+        // count is the body, so the entry reads at a glance like Slack's
+        // collapsed stack rather than repeating the same sender per message.
+        title: isDm ? who : room,
+        body: `${unseenCount + 1} new message${unseenCount + 1 === 1 ? "" : "s"}${
+          isDm ? "" : ` in ${room}`
+        }`,
+        tag: messageTag,
+      };
+    }
+    const body =
+      n.type === "file_uploaded"
+        ? `${who} sent a file`
+        : previewText(n.message_content) || `${who} sent a message`;
+    return {
+      title: isDm ? who : `${who} in ${room}`,
+      body,
+      tag: messageTag,
+    };
+  }
+  if (n.type === "room_invite")
+    return {
+      title: room,
+      body: `${who} invited you to ${room}`,
+      tag: kindTag("invite"),
+    };
+  if (n.type === "member_joined")
+    return {
+      title: room,
+      body: `${who} joined ${room}`,
+      tag: kindTag("joined"),
+    };
+  if (n.type === "task")
+    return {
+      title: room,
+      body: `${who} assigned you a task: ${n.task_title || "Untitled task"}`,
+      tag: kindTag("task"),
+    };
+  if (n.type === "decision")
+    return {
+      title: room,
+      body: `${who} updated a decision: ${n.decision_title || "Untitled decision"}`,
+      tag: kindTag("decision"),
+    };
+  return { ...generic, tag: kindTag(n.type) };
+}
 const digest = (value) =>
   crypto.createHash("sha256").update(value).digest("hex");
 function configured() {
@@ -208,14 +286,16 @@ async function dispatch(limit = 50, transport = webpush.sendNotification) {
         sub.rows[0].user_id === checked.notification.recipient_id &&
         new Date(job.expires_at) > new Date()
       ) {
+        const payload = buildPayload(checked.notification, checked.unseenCount || 0);
         await transport(
           sub.rows[0].subscription,
           JSON.stringify({
             id: job.notification_id,
             bindingId: job.binding_id,
             roomId: checked.notification.room_id,
-            title: "Conclave",
-            body: "You have new activity in Conclave",
+            title: payload.title,
+            body: payload.body,
+            tag: payload.tag,
             url: "/notifications",
           }),
           {

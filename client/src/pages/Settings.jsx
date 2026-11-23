@@ -116,6 +116,12 @@ export default function Settings() {
     try {
       const saved = await updatePreferences(updates);
       setPreferences(saved);
+      // Let the live alert policy (ChatsContext) pick up the new values
+      // immediately instead of on the next full page load — otherwise a user
+      // who mutes a type here keeps getting in-app toasts until they refresh.
+      window.dispatchEvent(
+        new CustomEvent("conclave:preferences-changed", { detail: saved }),
+      );
     } catch (err) {
       setPreferences(previous);
       toast({
@@ -230,10 +236,56 @@ export default function Settings() {
               </button>
             )}
           </div>
+          <label className="flex items-center justify-between gap-3 text-body text-ink">
+            Show sender and message preview in notifications
+            <input
+              type="checkbox"
+              checked={preferences?.push_preview_enabled !== false}
+              disabled={savingKey === "preview"}
+              onChange={(event) =>
+                save(
+                  { push_preview_enabled: event.target.checked },
+                  "preview",
+                )
+              }
+              className="h-4 w-4 rounded border-line text-brand"
+            />
+          </label>
           <p className="text-metadata text-muted">
-            Background alerts use a generic preview. Your saved preferences,
-            conversation mutes, blocks and active conversations control
-            delivery. Browser and operating system settings also apply.
+            {preferences?.push_preview_enabled !== false
+              ? "Background alerts show who sent it and a short preview, like a text message. Turn this off to show only “You have new activity in Conclave” — useful on a shared screen or lock screen."
+              : "Background alerts show only “You have new activity in Conclave”, with no sender or message text."}{" "}
+            Your saved preferences, conversation mutes, blocks and active
+            conversations still control delivery either way. Browser and
+            operating system settings also apply.
+          </p>
+        </div>
+
+        <div className="mt-4 space-y-3 rounded-lg border border-line p-4">
+          <h3 className="text-label font-semibold text-ink">
+            While the app is open
+          </h3>
+          <label className="flex items-center justify-between gap-3 text-body text-ink">
+            In-app alerts for new messages
+            <input
+              type="checkbox"
+              checked={preferences?.in_app_alerts_enabled !== false}
+              disabled={savingKey === "inApp"}
+              onChange={(event) =>
+                save(
+                  { in_app_alerts_enabled: event.target.checked },
+                  "inApp",
+                )
+              }
+              className="h-4 w-4 rounded border-line text-brand"
+            />
+          </label>
+          <p className="text-metadata text-muted">
+            {preferences?.in_app_alerts_enabled !== false
+              ? "A short sound and a banner appear for messages in conversations you are not currently reading. Clicking the banner opens that conversation."
+              : "No sound or banner while the app is open — unread counts on the chat list still update."}{" "}
+            Never applies to the conversation on screen, and always respects
+            do-not-disturb, muted conversations and your notify settings below.
           </p>
         </div>
 

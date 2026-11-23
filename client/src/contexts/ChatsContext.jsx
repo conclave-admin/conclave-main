@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   listRooms,
   resolveChatPreview,
@@ -18,7 +19,13 @@ import {
 import { useRealtime } from "./RealtimeContext";
 import { usePresence } from "./PresenceContext";
 import { useAuth } from "./AuthContext";
+import { useToast } from "./ToastContext";
 import { readChatList, saveChatList, saveRoomMetadata } from "../lib/fileCache";
+import { getPreferences } from "@/services/users.service";
+import { api } from "../lib/api";
+import { getActiveRoomId } from "../lib/activeRoom";
+import { playNotificationSound } from "../lib/notificationSound";
+import { shouldAlert } from "../lib/inAppAlert";
 
 const ChatsContext = createContext(null);
 
@@ -42,6 +49,8 @@ const ChatsContext = createContext(null);
 export function ChatsProvider({ children }) {
   const { socket } = useRealtime();
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const { toast, dismiss } = useToast();
   const userId = user?.id;
   const [rooms, setRooms] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -55,9 +64,117 @@ export function ChatsProvider({ children }) {
   const refreshGeneration = useRef(0);
   const currentUser = useRef(userId);
   currentUser.current = userId;
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
+  const archivedRef = useRef(archived);
+  archivedRef.current = archived;
+  // Mirrors the server's allowsInterruption rules (notificationPolicy.service)
+  // closely enough for an in-app alert, which is lower stakes than push: a
+  // stale read here means a toast is shown or skipped a few seconds later
+  // than a fresh preference change, never that private content leaks.
+  const alertPolicy = useRef({
+    activityLevel: "all",
+    muted: {},
+    dndUntil: null,
+    inAppAlerts: true,
+  });
   useEffect(() => {
     revokedRooms.current.clear();
   }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return undefined;
+    let active = true;
+    const refreshPolicy = () => {
+      getPreferences()
+        .then((preferences) => {
+          if (!active) return;
+          alertPolicy.current = {
+            ...alertPolicy.current,
+            activityLevel: preferences?.activity_level ?? "all",
+            muted: preferences?.muted ?? {},
+            inAppAlerts: preferences?.in_app_alerts_enabled !== false,
+          };
+        })
+        .catch(() => {});
+      api
+        .get("/experience/personal-settings")
+        .then(({ data }) => {
+          if (!active) return;
+          alertPolicy.current = {
+            ...alertPolicy.current,
+            dndUntil: data?.data?.dnd_until ?? null,
+          };
+        })
+        .catch(() => {});
+    };
+    refreshPolicy();
+    window.addEventListener("conclave:preferences-changed", refreshPolicy);
+    return () => {
+      active = false;
+      window.removeEventListener("conclave:preferences-changed", refreshPolicy);
+    };
+  }, [userId]);
+
+  /**
+   * An in-app toast + short sound for an incoming notification.
+   *
+   * Driven by the `notification` socket event rather than `chat:updated`,
+   * because that event is the only one that knows *what kind* of thing
+   * happened. `chat:updated` fires for every message and says nothing about
+   * mentions, so it cannot honour `activity_level: "mentions"` — it would have
+   * to either stay silent for mentions too, or alert for every message anyway.
+   *
+   * The server already skips this event for a recipient whose live device is
+   * viewing that room, so the usual "you are watching it arrive" case never
+   * reaches here. `getActiveRoomId` is the same-tab backstop for the gap
+   * between a stale presence lease and reality.
+   *
+   * Suppressed by the same signals that suppress push: a muted or archived
+   * room, `activity_level` none/mentions, the per-type override, an active
+   * do-not-disturb window, and the in-app-alerts switch. This never overrides
+   * those settings.
+   */
+  const notifyFromNotification = useCallback(
+    (notification) => {
+      if (
+        !shouldAlert({
+          notification,
+          activeRoomId: getActiveRoomId(),
+          policy: alertPolicy.current,
+          mutedRooms: mutedRef.current,
+          archivedRooms: archivedRef.current,
+        })
+      )
+        return;
+
+      const context = notification.context || {};
+      const roomId = context.room_id;
+      const actor = context.actor_name || "Someone";
+      const room = context.room_name;
+      const title = room || actor;
+      const description = context.message_preview
+        ? room
+          ? `${actor}: ${context.message_preview}`
+          : context.message_preview
+        : notification.type === "file_uploaded"
+          ? `${actor} shared a file`
+          : notification.type === "mention"
+            ? `${actor} mentioned you`
+            : `${actor} sent a message`;
+
+      const id = toast({
+        title,
+        description,
+        onClick: () => {
+          dismiss(id);
+          navigate(`/chats/${roomId}`);
+        },
+      });
+      playNotificationSound();
+    },
+    [toast, dismiss, navigate],
+  );
 
   const refresh = useCallback(
     async (options = {}) => {
@@ -214,6 +331,9 @@ export function ChatsProvider({ children }) {
             : room,
         ),
       );
+      // Deliberately no alert here: `chat:updated` cannot say what kind of
+      // event this was, and the `notification` handler below is the one that
+      // can. Alerting from both would double-toast every new message.
     };
 
     const onMembers = ({ roomId, userId: targetId, action }) => {
@@ -232,12 +352,21 @@ export function ChatsProvider({ children }) {
     socket.on("connect", refresh);
     socket.on("room:members", onMembers);
     socket.on("chat:updated", onChatUpdated);
+    // The notification event is emitted per recipient to `user:<id>`, already
+    // filtered for blocks/visibility and skipped for anyone viewing the room
+    // on a live device — which makes it the right source for an interruption.
+    const onNotification = ({ notification } = {}) => {
+      if (currentUser.current !== userId) return;
+      notifyFromNotification(notification);
+    };
+    socket.on("notification", onNotification);
     return () => {
       socket.off("connect", refresh);
       socket.off("room:members", onMembers);
       socket.off("chat:updated", onChatUpdated);
+      socket.off("notification", onNotification);
     };
-  }, [socket, userId, refresh]);
+  }, [socket, userId, refresh, notifyFromNotification]);
 
   useEffect(() => {
     const cleared = (event) => {

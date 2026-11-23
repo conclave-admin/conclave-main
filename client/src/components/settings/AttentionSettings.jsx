@@ -66,6 +66,10 @@ export default function AttentionSettings() {
             await api.patch("/experience/personal-settings", { status, dnd });
             dirty.current = false;
             await load();
+            // Same signal Settings sends: the live alert policy in ChatsContext
+            // re-reads dnd_until so turning focus mode on takes effect for the
+            // current session's toasts without a reload.
+            window.dispatchEvent(new CustomEvent("conclave:preferences-changed"));
             setNotice("Status and focus saved");
           } catch (e) {
             setError(

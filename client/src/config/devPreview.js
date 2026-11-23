@@ -743,6 +743,8 @@ export const previewPreferences = {
   activity_level: "all",
   muted: {},
   push_enabled: true,
+  push_preview_enabled: true,
+  in_app_alerts_enabled: true,
   updatedAt: null,
 };
 

@@ -27,22 +27,22 @@ const TONES = {
  * @param {string} [description]
  * @param {keyof TONES} [tone]
  * @param {() => void} [onDismiss]
+ * @param {() => void} [onClick] - makes the whole toast a button, e.g. to
+ *   open the conversation a new-message alert is about. Dismiss keeps its own
+ *   click handler and stops propagation, so closing it never also navigates.
  */
 export default function Toast({
   title,
   description,
   tone = "neutral",
   onDismiss,
+  onClick,
 }) {
   const { icon: Icon, edge } = TONES[tone] ?? TONES.neutral;
   const isError = tone === "error";
 
-  return (
-    <div
-      role={isError ? "alert" : "status"}
-      aria-live={isError ? "assertive" : "polite"}
-      className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border-l-4 border bg-surface p-4 shadow-modal ${edge}`}
-    >
+  const body = (
+    <>
       {Icon && <Icon className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />}
 
       <div className="min-w-0 flex-1">
@@ -51,11 +51,34 @@ export default function Toast({
           <p className="mt-1 text-metadata text-muted">{description}</p>
         )}
       </div>
+    </>
+  );
+
+  return (
+    <div
+      role={isError ? "alert" : "status"}
+      aria-live={isError ? "assertive" : "polite"}
+      className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border-l-4 border bg-surface p-4 shadow-modal ${edge}`}
+    >
+      {onClick ? (
+        <button
+          type="button"
+          onClick={onClick}
+          className="flex min-w-0 flex-1 items-start gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+        >
+          {body}
+        </button>
+      ) : (
+        body
+      )}
 
       {onDismiss && (
         <button
           type="button"
-          onClick={onDismiss}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDismiss();
+          }}
           aria-label="Dismiss"
           className="-m-1 shrink-0 rounded-lg p-1 text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
         >

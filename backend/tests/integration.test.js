@@ -5653,6 +5653,16 @@ dbTest(
     assert.equal(defaults.activity_level, "all");
     assert.deepEqual(defaults.muted, {});
     assert.equal(defaults.push_enabled, true);
+    assert.equal(
+      defaults.push_preview_enabled,
+      true,
+      "rich push previews are on unless turned off",
+    );
+    assert.equal(
+      defaults.in_app_alerts_enabled,
+      true,
+      "in-app toast/sound alerts are on unless turned off",
+    );
     assert.equal(defaults.updatedAt, null, "defaults are not a saved state");
 
     const saved = await prefsVia(me.token, "PATCH", {
@@ -5720,6 +5730,15 @@ dbTest(
 
     const notObject = await prefsVia(me.token, "PATCH", { muted: ["mention"] });
     assert.equal(notObject.status, 400, "muted must be a map, not an array");
+
+    const notBoolean = await prefsVia(me.token, "PATCH", {
+      in_app_alerts_enabled: "on",
+    });
+    assert.equal(
+      notBoolean.status,
+      400,
+      "the in-app alert switch must be a boolean",
+    );
 
     // Nothing above should have written a row.
     const after = JSON.parse(await (await prefsVia(me.token)).text()).data;
