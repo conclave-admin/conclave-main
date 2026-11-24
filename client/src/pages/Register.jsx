@@ -19,6 +19,7 @@ export default function Register() {
     displayName: "",
     email: "",
     password: "",
+    website: "",
   });
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -46,10 +47,28 @@ export default function Register() {
       alternateLabel="Sign in"
     >
       <form onSubmit={submit} className="space-y-5">
+        <div
+          className="absolute -left-[10000px] top-auto h-px w-px overflow-hidden"
+          aria-hidden="true"
+        >
+          <label htmlFor="website">Website</label>
+          <input
+            id="website"
+            name="website"
+            type="text"
+            tabIndex={-1}
+            autoComplete="off"
+            value={form.website}
+            onChange={(event) =>
+              setForm({ ...form, website: event.target.value })
+            }
+          />
+        </div>
         <Input
           id="displayName"
           label="Display name"
           autoComplete="name"
+          maxLength={100}
           required
           value={form.displayName}
           onChange={(event) =>
@@ -61,6 +80,7 @@ export default function Register() {
           label="Email"
           type="email"
           autoComplete="email"
+          maxLength={254}
           required
           value={form.email}
           onChange={(event) => setForm({ ...form, email: event.target.value })}

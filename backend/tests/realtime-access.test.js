@@ -84,7 +84,7 @@ async function account() {
   const id = randomUUID();
   await query(
     "INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, $3, $4)",
-    [id, `${id}@security.test`, "unused", "Security fixture"],
+    [id, `${id}@security.test`, "unused", `Security ${id}`],
   );
   users.push(id);
   return session(id);

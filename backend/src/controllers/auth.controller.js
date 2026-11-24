@@ -6,6 +6,12 @@ const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
 const { revokeSessionAccess } = require("../services/realtimeAccess.service");
+const accountSecurity = require("../services/accountSecurity.service");
+const {
+  validateDisplayName,
+  identityCollisionError,
+  validateEmail,
+} = require("../utils/userIdentity");
 const {
   signAccessToken,
   signRefreshToken,
@@ -16,9 +22,6 @@ const {
 // of the API: validate input -> hit the DB -> return a consistent shape.
 // Everything else in /controllers follows this same structure.
 
-// Deliberately permissive; the point is to catch typos, not to re-implement
-// RFC 5322. Anything this rejects, the client form should have caught first.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD = 8;
 // bcrypt only considers the first 72 bytes and silently ignores the rest, so
 // reject longer input rather than let a user believe a long passphrase is
@@ -30,18 +33,11 @@ const MAX_PASSWORD_BYTES = 72;
 const USER_COLUMNS =
   "id, email, display_name, avatar_url, bio, created_at, email_verified_at";
 
-function normalizeEmail(email) {
-  return String(email).trim().toLowerCase();
-}
-
 function validateCredentials(email, password) {
   if (!email || !password) {
     throw new ApiError(400, "email and password are required");
   }
-  const normalized = normalizeEmail(email);
-  if (!EMAIL_RE.test(normalized)) {
-    throw new ApiError(400, "email is not a valid address");
-  }
+  const normalized = validateEmail(email);
   if (typeof password !== "string" || password.length < MIN_PASSWORD) {
     throw new ApiError(
       400,
@@ -106,33 +102,52 @@ async function issueSession(user, req, expectedPasswordHash) {
 }
 
 const register = asyncHandler(async (req, res) => {
-  const { displayName } = req.body;
-
-  if (!displayName || !String(displayName).trim()) {
-    throw new ApiError(400, "displayName is required");
+  // This field is visually moved off-canvas for people but looks like an
+  // ordinary website field to basic form-filling bots. Return a bland success
+  // without creating credentials so automated submitters get no tuning signal.
+  if (typeof req.body.website === "string" && req.body.website.trim()) {
+    return ok(res, { accepted: true }, 201);
   }
+  const displayName = validateDisplayName(req.body.displayName);
   const email = validateCredentials(req.body.email, req.body.password);
 
   // Compare case-insensitively so A@x.com and a@x.com cannot both register.
   // Stored values are normalised on write, so this also matches rows created
   // before normalisation existed.
-  const existing = await query("SELECT id FROM users WHERE lower(email) = $1", [
-    email,
-  ]);
-  if (existing.rows.length > 0) {
+  const existing = await query(
+    `SELECT
+       EXISTS(SELECT 1 FROM users WHERE lower(btrim(email)) = $1) AS email_taken,
+       EXISTS(
+         SELECT 1 FROM users
+         WHERE deleted_at IS NULL AND lower(btrim(display_name)) = lower($2)
+       ) AS display_name_taken`,
+    [email, displayName],
+  );
+  if (existing.rows[0]?.email_taken) {
     throw new ApiError(409, "An account with that email already exists");
+  }
+  if (existing.rows[0]?.display_name_taken) {
+    throw new ApiError(409, "That display name is already taken");
   }
 
   const passwordHash = await bcrypt.hash(req.body.password, 12);
 
-  const result = await query(
-    `INSERT INTO users (email, password_hash, display_name)
-     VALUES ($1, $2, $3)
-     RETURNING ${USER_COLUMNS}`,
-    [email, passwordHash, String(displayName).trim()],
-  );
+  let result;
+  try {
+    result = await query(
+      `INSERT INTO users (email, password_hash, display_name)
+       VALUES ($1, $2, $3)
+       RETURNING ${USER_COLUMNS}`,
+      [email, passwordHash, displayName],
+    );
+  } catch (error) {
+    throw identityCollisionError(error) || error;
+  }
 
-  return ok(res, await issueSession(result.rows[0], req, passwordHash), 201);
+  const session = await issueSession(result.rows[0], req, passwordHash);
+  const verificationEmailQueued =
+    await accountSecurity.queueVerificationAfterRegistration(result.rows[0]);
+  return ok(res, { ...session, verificationEmailQueued }, 201);
 });
 
 const login = asyncHandler(async (req, res) => {

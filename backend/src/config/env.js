@@ -3,6 +3,7 @@ require("dotenv").config();
 module.exports = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: process.env.PORT || 7000,
+  trustProxyHops: Math.max(0, Number.parseInt(process.env.TRUST_PROXY_HOPS || "0", 10) || 0),
   clientOrigin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
   databaseUrl: process.env.DATABASE_URL,
   redisUrl: process.env.REDIS_URL,

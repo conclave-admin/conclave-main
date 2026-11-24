@@ -150,6 +150,23 @@ async function requestToken(email, purpose, { userId, send } = {}) {
     message: "If the account is eligible, an email will arrive shortly.",
   };
 }
+
+async function queueVerificationAfterRegistration(user) {
+  if (!user?.id || !user?.email || user.email_verified_at || !mailConfigured()) {
+    return false;
+  }
+  try {
+    await sendToken(user, "verify_email");
+    return true;
+  } catch (error) {
+    // Registration must remain usable during a provider or worker outage. The
+    // authenticated resend endpoint gives the user a retry path afterward.
+    console.error("Registration verification email deferred", {
+      code: error.code || "MAIL_FAILED",
+    });
+    return false;
+  }
+}
 async function redeem(token, purpose, newPassword, io) {
   if (typeof token !== "string" || !/^[\w-]{43}$/.test(token))
     throw new ApiError(400, "This link is invalid or expired");
@@ -375,6 +392,7 @@ module.exports = {
   confirm,
   mailConfigured,
   requestToken,
+  queueVerificationAfterRegistration,
   redeem,
   listSessions,
   revoke,

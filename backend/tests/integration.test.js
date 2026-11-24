@@ -372,12 +372,12 @@ dbTest(
 // --- Email normalisation (Bug 11) --------------------------------------------
 
 dbTest(
-  "email lookup is case-insensitive and matches legacy mixed-case rows",
+  "email lookup is case-insensitive and storage remains normalized",
   async () => {
     const u = (
       await query(
         `INSERT INTO users (email, password_hash, display_name)
-       VALUES ('Case@Test.com', 'x', 'Casey') RETURNING id`,
+       VALUES ('case@test.com', 'x', 'Casey') RETURNING id`,
       )
     ).rows[0];
 
@@ -398,16 +398,12 @@ dbTest(
       );
     }
 
-    // A row stored before normalisation existed must still match, because the
-    // comparison is on lower(email) rather than the raw column.
-    await query(`UPDATE users SET email = 'Legacy@Mixed.Case' WHERE id = $1`, [
-      u.id,
-    ]);
-    const legacy = await query(
-      `SELECT display_name FROM users WHERE lower(email) = $1 AND deleted_at IS NULL`,
-      ["legacy@mixed.case"],
+    await assert.rejects(
+      query(`UPDATE users SET email = 'Legacy@Mixed.Case' WHERE id = $1`, [
+        u.id,
+      ]),
+      { code: "23514" },
     );
-    assert.equal(legacy.rows.length, 1);
   },
 );
 
@@ -440,7 +436,7 @@ async function authedUser(email) {
     body: JSON.stringify({
       email,
       password: "correct-horse-battery",
-      displayName: "Slug Tester",
+      displayName: `Slug ${email.split("@")[0]}`.slice(0, 100),
     }),
   });
   // Read the body once. Passing `await res.text()` as an assert message
@@ -455,6 +451,7 @@ async function authedUser(email) {
 // cross-account checks (assigning a task to a non-member, patching another
 // user's task).
 async function authedAccount(email) {
+  const displayName = `Task ${email.split("@")[0]}`.slice(0, 100);
   const reg = await fetch(`${baseUrl}/api/auth/register`, {
     method: "POST",
     headers: {
@@ -464,14 +461,203 @@ async function authedAccount(email) {
     body: JSON.stringify({
       email,
       password: "correct-horse-battery",
-      displayName: "Task Tester",
+      displayName,
     }),
   });
   const body = await reg.text();
   assert.equal(reg.status, 201, `register failed: ${reg.status} ${body}`);
   const { data } = JSON.parse(body);
-  return { token: data.accessToken, userId: data.user.id };
+  return { token: data.accessToken, userId: data.user.id, displayName };
 }
+
+dbTest("registration enforces normalized identity and silently traps honeypot submissions", async () => {
+  const id = randomUUID();
+  const first = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": "198.51.100.201",
+    },
+    body: JSON.stringify({
+      email: `identity-${id}@example.test`,
+      password: "correct-horse-battery",
+      displayName: "  Beta   Member  ",
+    }),
+  });
+  assert.equal(first.status, 201);
+  const created = await first.json();
+  assert.equal(created.data.user.display_name, "Beta Member");
+
+  const reserved = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": "198.51.100.205",
+    },
+    body: JSON.stringify({
+      email: `reserved-${id}@example.test`,
+      password: "correct-horse-battery",
+      displayName: " deleted   USER ",
+    }),
+  });
+  assert.equal(reserved.status, 400);
+
+  const duplicateEmail = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": "198.51.100.206",
+    },
+    body: JSON.stringify({
+      email: ` IDENTITY-${id}@EXAMPLE.TEST `,
+      password: "correct-horse-battery",
+      displayName: `Other ${id}`,
+    }),
+  });
+  assert.equal(duplicateEmail.status, 409);
+  assert.match((await duplicateEmail.json()).message, /email/i);
+
+  const collision = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": "198.51.100.202",
+    },
+    body: JSON.stringify({
+      email: `other-${id}@example.test`,
+      password: "correct-horse-battery",
+      displayName: "beta member",
+    }),
+  });
+  assert.equal(collision.status, 409);
+  assert.match((await collision.json()).message, /display name/i);
+
+  const second = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": "198.51.100.207",
+    },
+    body: JSON.stringify({
+      email: `profile-${id}@example.test`,
+      password: "correct-horse-battery",
+      displayName: `Profile ${id}`,
+    }),
+  });
+  assert.equal(second.status, 201);
+  const secondAccount = await second.json();
+  const profileCollision = await fetch(`${baseUrl}/api/users/me`, {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${secondAccount.data.accessToken}`,
+    },
+    body: JSON.stringify({ display_name: "  Beta   Member " }),
+  });
+  assert.equal(profileCollision.status, 409);
+  assert.match((await profileCollision.json()).message, /display name/i);
+
+  const deleted = await fetch(`${baseUrl}/api/users/me`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${created.data.accessToken}` },
+  });
+  assert.equal(deleted.status, 200);
+  const reused = await fetch(`${baseUrl}/api/users/me`, {
+    method: "PATCH",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${secondAccount.data.accessToken}`,
+    },
+    body: JSON.stringify({ display_name: "Beta Member" }),
+  });
+  assert.equal(reused.status, 200, "a deleted account releases its display name");
+
+  const concurrentName = `Concurrent ${id}`;
+  const concurrent = await Promise.all(
+    [208, 209].map((lastOctet, index) =>
+      fetch(`${baseUrl}/api/auth/register`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": `198.51.100.${lastOctet}`,
+        },
+        body: JSON.stringify({
+          email: `concurrent-${index}-${id}@example.test`,
+          password: "correct-horse-battery",
+          displayName: concurrentName,
+        }),
+      }),
+    ),
+  );
+  assert.deepEqual(
+    concurrent.map((response) => response.status).sort(),
+    [201, 409],
+  );
+
+  const countBefore = (await query("SELECT count(*)::int AS count FROM users")).rows[0]
+    .count;
+  const trapped = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": "198.51.100.203",
+    },
+    body: JSON.stringify({
+      email: `bot-${id}@example.test`,
+      password: "correct-horse-battery",
+      displayName: `Bot ${id}`,
+      website: "https://spam.example",
+    }),
+  });
+  assert.equal(trapped.status, 201);
+  assert.equal(
+    (await query("SELECT count(*)::int AS count FROM users")).rows[0].count,
+    countBefore,
+  );
+});
+
+dbTest("registration queues an encrypted verification email when mail is configured", async () => {
+  const env = require("../src/config/env");
+  const previousMail = env.mail;
+  const id = randomUUID();
+  env.mail = {
+    ...previousMail,
+    apiKey: "fixture-only",
+    from: "Conclave <mail@example.test>",
+    encryptionKey: randomBytes(32).toString("base64url"),
+  };
+  try {
+    const response = await fetch(`${baseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-forwarded-for": "198.51.100.204",
+      },
+      body: JSON.stringify({
+        email: `verification-${id}@example.test`,
+        password: "correct-horse-battery",
+        displayName: `Verify ${id}`,
+      }),
+    });
+    assert.equal(response.status, 201);
+    const body = await response.json();
+    assert.equal(body.data.verificationEmailQueued, true);
+    const job = await query(
+      `SELECT j.encrypted_payload
+       FROM account_mail_jobs j
+       JOIN account_tokens t ON t.id = j.token_id
+       WHERE t.user_id = $1`,
+      [body.data.user.id],
+    );
+    assert.equal(job.rowCount, 1);
+    assert.equal(
+      JSON.stringify(job.rows[0].encrypted_payload).includes(body.data.user.email),
+      false,
+    );
+  } finally {
+    env.mail = previousMail;
+  }
+});
 
 // A bearer token for the fixture user, who is an admin of `room` but was created
 // with SQL rather than through /auth/register — so no token exists for it yet.
@@ -2055,7 +2241,8 @@ dbTest(
     const { token: myToken, userId: me } = await authedAccount(
       "notif-resolve@test.com",
     );
-    const { userId: authorId } = await authedAccount("notif-author@test.com");
+    const { userId: authorId, displayName: authorName } =
+      await authedAccount("notif-author@test.com");
 
     const room = (
       await query(
@@ -2091,7 +2278,7 @@ dbTest(
     const { notifications } = JSON.parse(await res.text()).data;
     assert.equal(
       notifications[0].context.actor_name,
-      "Task Tester",
+      authorName,
       "the actor name resolves",
     );
     assert.equal(notifications[0].context.room_name, "Notify Room");
@@ -2189,7 +2376,7 @@ dbTest(
     assert.equal(data.notifications[0].type, "room_invite");
     assert.equal(
       data.notifications[0].context.actor_name,
-      "Task Tester",
+      inviter.displayName,
       "must name the inviter",
     );
     assert.equal(data.notifications[0].context.room_name, "Invite Test Room");
@@ -2247,7 +2434,7 @@ dbTest(
     assert.equal(targetList.notifications[0].type, "mention");
     assert.equal(
       targetList.notifications[0].context.actor_name,
-      "Task Tester",
+      sender.displayName,
       "the sender is the actor",
     );
 
@@ -2671,9 +2858,7 @@ dbTest("mentions follow the id, not the display name", async () => {
   );
 });
 
-dbTest("two users sharing a display name are distinguishable", async () => {
-  // display_name is not unique — only email is — so text matching genuinely cannot
-  // tell these two apart. Ids can.
+dbTest("structured mentions identify one user while duplicate names are refused", async () => {
   const { sender, target, roomId } = await mentionFixture("twin");
   const twin = await authedAccount("twin-second@test.com");
   await query(
@@ -2685,10 +2870,13 @@ dbTest("two users sharing a display name are distinguishable", async () => {
     "Twin",
     target.userId,
   ]);
-  await query("UPDATE users SET display_name = $1 WHERE id = $2", [
-    "Twin",
-    twin.userId,
-  ]);
+  await assert.rejects(
+    query("UPDATE users SET display_name = $1 WHERE id = $2", [
+      "Twin",
+      twin.userId,
+    ]),
+    { code: "23505" },
+  );
 
   const { createMessage } = require("../src/services/message.service");
   const message = await createMessage({
@@ -2704,7 +2892,7 @@ dbTest("two users sharing a display name are distinguishable", async () => {
       [message.id],
     )
   ).rows.map((r) => r.user_id);
-  assert.equal(rows.length, 1, "exactly one of the twins is mentioned");
+  assert.equal(rows.length, 1, "exactly one selected user is mentioned");
   assert.equal(rows[0], twin.userId);
 
   const targetGot = (
@@ -2716,7 +2904,7 @@ dbTest("two users sharing a display name are distinguishable", async () => {
   assert.equal(
     targetGot,
     0,
-    "the twin that was not named must not be notified",
+    "the user that was not selected must not be notified",
   );
 });
 
@@ -4559,7 +4747,7 @@ dbTest(
       "the sender does not count their own message",
     );
     assert.equal(mine.lastMessage.content, "from them");
-    assert.equal(mine.lastMessage.sender_name, "Task Tester");
+    assert.equal(mine.lastMessage.sender_name, them.displayName);
     assert.equal(mine.lastMessage.is_deleted, false);
 
     // No socket and no room are both no-ops rather than throws: io is optional on
@@ -5850,7 +6038,7 @@ dbTest(
     assert.equal(room.type, "dm");
     // The stored name is the other person's display name, not an empty string and
     // not a placeholder the client had to invent.
-    assert.equal(room.name, "Task Tester");
+    assert.equal(room.name, them.displayName);
     assert.ok(
       room.slug,
       "a slug is still allocated, so the NOT NULL column holds",
@@ -6277,7 +6465,7 @@ dbTest(
 
     assert.equal(
       detail.display_name,
-      "Task Tester",
+      them.displayName,
       "getRoom derives the other member",
     );
     assert.equal(
@@ -6344,7 +6532,7 @@ dbTest(
     assert.equal(taskNotice.context.room_name, "Task Room");
     assert.equal(
       taskNotice.context.actor_name,
-      "Task Tester",
+      author.displayName,
       "and names who assigned it",
     );
     assert.equal(
@@ -7310,7 +7498,7 @@ dbTest(
     );
     assert.equal(
       a.voters[0].display_name,
-      "Task Tester",
+      me.displayName,
       "the voter is named, not merely counted",
     );
     assert.ok(

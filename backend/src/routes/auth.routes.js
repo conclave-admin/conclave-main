@@ -11,7 +11,16 @@ const router = Router();
 
 router.post(
   "/register",
-  rateLimit({ windowMs: 60 * 60_000, max: 10 }),
+  rateLimit({
+    windowMs: 60 * 60_000,
+    max: 10,
+    key: (req) => [
+      req.ip,
+      String(req.body?.email || "")
+        .trim()
+        .toLowerCase(),
+    ],
+  }),
   register,
 );
 router.post(
