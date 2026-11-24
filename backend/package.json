@@ -14,6 +14,7 @@
     "test:db": "node --test tests/*.test.js",
     "test:integration": "npm run test:db",
     "media:cleanup": "node scripts/media-cleanup.js",
+    "storage:report": "node scripts/storage-usage-report.js",
     "storage:configure": "node scripts/storage-configure.js"
   },
   "dependencies": {

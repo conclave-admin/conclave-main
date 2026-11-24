@@ -78,7 +78,8 @@ async function issueSession(user, req, expectedPasswordHash) {
   // One statement ensures a refresh token never exists without its session.
   const issued = await query(
     `WITH authorized AS MATERIALIZED (
-       SELECT id FROM users WHERE id=$2 AND password_hash=$7 AND deleted_at IS NULL FOR NO KEY UPDATE
+       SELECT id FROM users WHERE id=$2 AND password_hash=$7 AND deleted_at IS NULL
+         AND suspended_at IS NULL FOR NO KEY UPDATE
      ), session AS (
        INSERT INTO auth_sessions (id, user_id, expires_at,device_label,user_agent)
        SELECT $1,id,NOW()+$4::interval,$5,$6 FROM authorized RETURNING id
@@ -108,6 +109,7 @@ const register = asyncHandler(async (req, res) => {
   if (typeof req.body.website === "string" && req.body.website.trim()) {
     return ok(res, { accepted: true }, 201);
   }
+  if (!env.beta.signupsEnabled) throw new ApiError(403, "Registration is closed");
   const displayName = validateDisplayName(req.body.displayName);
   const email = validateCredentials(req.body.email, req.body.password);
 
@@ -130,18 +132,38 @@ const register = asyncHandler(async (req, res) => {
     throw new ApiError(409, "That display name is already taken");
   }
 
+  // Fast rejection avoids an expensive password hash when the beta cohort is
+  // already full. The locked check below remains authoritative under races.
+  const activeAccounts = Number((await query(
+    "SELECT count(*)::int AS count FROM users WHERE deleted_at IS NULL",
+  )).rows[0].count);
+  if (activeAccounts >= env.beta.maxActiveAccounts)
+    throw new ApiError(403, "The beta cohort is currently full");
+
   const passwordHash = await bcrypt.hash(req.body.password, 12);
 
   let result;
+  const db = await pool.connect();
   try {
-    result = await query(
+    await db.query("BEGIN");
+    await db.query("SELECT pg_advisory_xact_lock(hashtext('conclave:beta:signup-cap'))");
+    const activeAccounts = (await db.query(
+      "SELECT count(*)::int AS count FROM users WHERE deleted_at IS NULL",
+    )).rows[0].count;
+    if (activeAccounts >= env.beta.maxActiveAccounts)
+      throw new ApiError(403, "The beta cohort is currently full");
+    result = await db.query(
       `INSERT INTO users (email, password_hash, display_name)
        VALUES ($1, $2, $3)
        RETURNING ${USER_COLUMNS}`,
       [email, passwordHash, displayName],
     );
+    await db.query("COMMIT");
   } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
     throw identityCollisionError(error) || error;
+  } finally {
+    db.release();
   }
 
   const session = await issueSession(result.rows[0], req, passwordHash);
@@ -156,7 +178,7 @@ const login = asyncHandler(async (req, res) => {
   const result = await query(
     `SELECT ${USER_COLUMNS}, password_hash
        FROM users
-      WHERE lower(email) = $1 AND deleted_at IS NULL`,
+      WHERE lower(email) = $1 AND deleted_at IS NULL AND suspended_at IS NULL`,
     [email],
   );
   const user = result.rows[0];
@@ -197,9 +219,10 @@ const refresh = asyncHandler(async (req, res) => {
     await client.query("BEGIN");
 
     const stored = await client.query(
-      `SELECT s.id FROM auth_sessions s
+        `SELECT s.id FROM auth_sessions s JOIN users u ON u.id=s.user_id
         JOIN refresh_tokens r ON r.session_id = s.id
         WHERE s.id = $3 AND s.user_id = $1 AND s.revoked_at IS NULL AND s.expires_at > NOW()
+          AND u.deleted_at IS NULL AND u.suspended_at IS NULL
           AND r.user_id = $1 AND r.token_hash = $2 AND r.revoked_at IS NULL AND r.expires_at > NOW()
         FOR UPDATE OF s, r`,
       [payload.sub, tokenHash, payload.sid],

@@ -8,6 +8,8 @@ const { ok } = require('../utils/apiResponse');
 const rate = require('../middlewares/rateLimit.middleware');
 const { revokeRoomAccess } = require('../services/realtimeAccess.service');
 const { queueTeamInvite } = require('../services/accountSecurity.service');
+const { createTeamProject } = require('../services/project.service');
+const { projectNameConflict } = require('../utils/projectIdentity');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validId = (value) => { if (!UUID.test(value || '')) throw new ApiError(400, 'Invalid identifier'); return value; };
@@ -116,7 +118,7 @@ router.get('/:teamId',wrap(async(req,res)=>{
       WHERE r.team_id=$1 ORDER BY r.id=$3 DESC,r.name LIMIT 200`,[t.id,req.user.id,t.general_room_id]),
     query(`SELECT DISTINCT p.id,p.name,p.description,p.status FROM projects p
       LEFT JOIN project_rooms pr ON pr.project_id=p.id LEFT JOIN room_members rm ON rm.room_id=pr.room_id AND rm.user_id=$2
-      WHERE p.team_id=$1 AND (p.created_by=$2 OR rm.user_id IS NOT NULL OR $3::boolean) ORDER BY p.name LIMIT 100`,[t.id,req.user.id,t.my_role==='owner']),
+      WHERE p.team_id=$1 AND (p.created_by=$2 OR rm.user_id IS NOT NULL OR $3::boolean) ORDER BY p.name LIMIT 100`,[t.id,req.user.id,t.my_role!=='member']),
     t.my_role==='member' ? Promise.resolve({rows:[]}) : query(`SELECT id,email_normalized,expires_at,max_uses,uses,revoked_at,created_at
       FROM team_invites WHERE team_id=$1 ORDER BY created_at DESC LIMIT 100`,[t.id]),
     t.my_role==='member' ? Promise.resolve({rows:[]}) : query(`SELECT q.user_id,u.display_name,q.source_room_id,q.status,q.requested_at
@@ -199,12 +201,13 @@ router.post('/invites/accept',rate({max:20}),wrap(async(req,res)=>{
   const result=await tx(async db=>{
     const i=(await db.query(`SELECT i.*,t.name,t.general_room_id,t.archived_at FROM team_invites i JOIN teams t ON t.id=i.team_id
       WHERE i.token_hash=$1 FOR UPDATE OF i,t`,[tokenHash(token)])).rows[0];
-    if(!i||i.revoked_at||i.expires_at<=new Date()||i.uses>=i.max_uses||i.archived_at) throw new ApiError(404,'Invitation unavailable');
+    if(!i||i.revoked_at||i.expires_at<=new Date()||i.archived_at) throw new ApiError(404,'Invitation unavailable');
     const u=(await db.query('SELECT email,email_verified_at,deleted_at FROM users WHERE id=$1',[req.user.id])).rows[0];
     if(!u||u.deleted_at) throw new ApiError(403,'Account unavailable');
     if(i.email_normalized && (u.email?.toLowerCase()!==i.email_normalized||!u.email_verified_at))
       throw new ApiError(403,'Verify the invited email address before accepting');
     const existing=await db.query('SELECT 1 FROM team_members WHERE team_id=$1 AND user_id=$2',[i.team_id,req.user.id]);
+    if(!existing.rowCount&&i.uses>=i.max_uses) throw new ApiError(404,'Invitation unavailable');
     if(!existing.rowCount){await joinTeam(db,{id:i.team_id,general_room_id:i.general_room_id},req.user.id);await db.query('UPDATE team_invites SET uses=uses+1 WHERE id=$1',[i.id]);}
     return {teamId:i.team_id,generalRoomId:i.general_room_id,existing:!!existing.rowCount};
   });
@@ -279,11 +282,10 @@ router.post('/:teamId/rooms',wrap(async(req,res)=>{
   return ok(res,result,201);
 }));
 router.post('/:teamId/projects',wrap(async(req,res)=>{
-  const name=trimmed(req.body?.name,160,'project name',true);
-  const description=trimmed(req.body?.description || '',2000,'description');
-  const result=await tx(async db=>{const t=await team(db,req.params.teamId,req.user.id,['owner','admin','member'],true);active(t);
-    return (await db.query(`INSERT INTO projects(name,description,created_by,team_id)
-      VALUES($1,$2,$3,$4) RETURNING id,name,description,team_id`,[name,description,req.user.id,t.id])).rows[0];});
+  const result=await tx(db=>createTeamProject(db,{
+    teamId:req.params.teamId,userId:req.user.id,name:req.body?.name,
+    description:req.body?.description,roomIds:req.body?.roomIds
+  }));
   return ok(res,result,201);
 }));
 async function roomTransfer(db,t,roomId,actorId,apply=false){
@@ -311,9 +313,13 @@ router.get('/:teamId/transfer-preview',wrap(async(req,res)=>{
   if(roomId) return ok(res,await roomTransfer({query},t,validId(roomId),req.user.id));
   if(projectId){const p=(await query('SELECT id,created_by,team_id FROM projects WHERE id=$1',[validId(projectId)])).rows[0];
     if(!p||p.team_id||p.created_by!==req.user.id) throw new ApiError(404,'Project unavailable');
-    const links=(await query(`SELECT count(*)::int AS count FROM project_rooms pr JOIN rooms r ON r.id=pr.room_id
-      WHERE pr.project_id=$1 AND r.team_id IS DISTINCT FROM $2`,[projectId,t.id])).rows[0].count;
-    return ok(res,{projectId,blockers:links?['Move all linked rooms into this team first']:[]});}
+    const links=(await query(`SELECT count(*)::int AS total,
+      count(*) FILTER (WHERE r.team_id IS DISTINCT FROM $2)::int AS outside_team
+      FROM project_rooms pr JOIN rooms r ON r.id=pr.room_id WHERE pr.project_id=$1`,[projectId,t.id])).rows[0];
+    const blockers=[];
+    if(!links.total) blockers.push('Add at least one team room before moving this project');
+    if(links.outside_team) blockers.push('Move all linked rooms into this team first');
+    return ok(res,{projectId,blockers});}
   throw new ApiError(400,'Choose a room or project');
 }));
 router.post('/:teamId/rooms/:roomId',wrap(async(req,res)=>{
@@ -325,10 +331,16 @@ router.post('/:teamId/projects/:projectId',wrap(async(req,res)=>{
   const result=await tx(async db=>{const t=await team(db,req.params.teamId,req.user.id,['owner','admin'],true);active(t);
     const p=(await db.query('SELECT id,created_by,team_id FROM projects WHERE id=$1 FOR UPDATE',[validId(req.params.projectId)])).rows[0];
     if(!p||p.team_id||p.created_by!==req.user.id) throw new ApiError(404,'Project unavailable');
-    const bad=(await db.query(`SELECT 1 FROM project_rooms pr JOIN rooms r ON r.id=pr.room_id
-      WHERE pr.project_id=$1 AND r.team_id IS DISTINCT FROM $2 LIMIT 1`,[p.id,t.id])).rowCount;
-    if(bad) throw new ApiError(409,'Move linked rooms into this team first');
-    return (await db.query('UPDATE projects SET team_id=$2 WHERE id=$1 RETURNING id,team_id',[p.id,t.id])).rows[0];});
+    const links=(await db.query(`SELECT count(*)::int AS total,
+      count(*) FILTER (WHERE r.team_id IS DISTINCT FROM $2)::int AS outside_team
+      FROM project_rooms pr JOIN rooms r ON r.id=pr.room_id WHERE pr.project_id=$1`,[p.id,t.id])).rows[0];
+    if(!links.total) throw new ApiError(409,'Add at least one team room before moving this project');
+    if(links.outside_team) throw new ApiError(409,'Move linked rooms into this team first');
+    try {
+      return (await db.query('UPDATE projects SET team_id=$2 WHERE id=$1 RETURNING id,team_id',[p.id,t.id])).rows[0];
+    } catch (error) {
+      throw projectNameConflict(error) || error;
+    }});
   return ok(res,result);
 }));
 

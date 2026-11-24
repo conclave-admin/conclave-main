@@ -834,9 +834,9 @@ creator or a room admin.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET / POST | `/work/projects` | List visible projects or create one with `name`, `description`, and 1–20 `roomIds`. |
-| GET / PATCH | `/work/projects/:projectId` | Read project, visible rooms, milestone progress, tasks, decisions, dependencies, and exact task counts; or update `name`, `description`, `status`. Task and decision lists are capped at 200 and 50; `truncated` signals the cap. |
-| POST / DELETE | `/work/projects/:projectId/rooms[/:roomId]` | Attach `roomId` or detach a room. Detaching clears task milestone links and dependencies involving that room. |
+| GET / POST | `/work/projects` | List visible projects or, for a team owner/admin, create one with `name`, `description`, and 1–20 team `roomIds` the actor administers. This uses the same creation policy as `POST /teams/:teamId/projects`. |
+| GET / PATCH | `/work/projects/:projectId` | Read project, visible rooms, milestone progress, tasks, decisions, dependencies, and exact task counts; or, for a team owner/admin, update `name`, `description`, `status`. Task and decision lists are capped at 200 and 50; `truncated` signals the cap. |
+| POST / DELETE | `/work/projects/:projectId/rooms[/:roomId]` | A team owner/admin may attach an administered room from the same team or detach a room. A project must retain one room. Detaching clears task milestone links and dependencies involving that room. |
 | POST / PATCH | `/work/projects/:projectId/milestones[/:milestoneId]` | Create or update a milestone using `title`, `dueDate`, and, on update, `completed`. |
 | PATCH | `/work/tasks/:taskId/milestone` | Set `milestoneId` or `null`. |
 | POST / DELETE | `/work/tasks/:taskId/dependencies[/:dependsOnId]` | Add `dependsOnId` or remove it. Dependencies require both tasks in the same project and reject cycles. A blocked task cannot be completed. |

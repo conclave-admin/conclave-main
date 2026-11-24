@@ -157,8 +157,8 @@ function registerSocketHandlers(io) {
       socket.data.userId = payload.sub;
     } catch (error) {
       return reject(
-        error.status === 401 ? error.message : "Could not verify account",
-        error.status === 401 ? "SESSION_REVOKED" : "AUTH_UNAVAILABLE",
+        [401, 403].includes(error.status) ? error.message : "Could not verify account",
+        error.status === 401 ? "SESSION_REVOKED" : error.status === 403 ? "ACCOUNT_SUSPENDED" : "AUTH_UNAVAILABLE",
       );
     }
     return next();
@@ -207,7 +207,7 @@ function registerSocketHandlers(io) {
                 );
               }
             } catch (error) {
-              if (error.status === 401) {
+              if ([401, 403].includes(error.status)) {
                 socket.emit("session:revoked", {
                   sessionId: socket.data.sessionId,
                 });

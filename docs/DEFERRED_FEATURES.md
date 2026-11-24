@@ -7,13 +7,22 @@ implementation; they are not enabled product behavior.
 
 ## Platform moderation
 
-- Current: users can submit reports; there is no reader, triage UI or status-transition API.
+- Current: platform moderators and administrators have a protected report inbox,
+  bounded nearby message context, audited report reads and concurrency-safe
+  status transitions. They can suspend/restore accounts; suspension blocks
+  requests, login and refresh and revokes active sessions. Moderator roles are
+  provisioned by an operator script. Reporter identity is not shown in triage.
 - Outcome: explicitly appointed platform moderators can investigate and resolve reports. Room admins receive no platform-wide report access.
-- Approach: add a server-enforced moderator role, paginated/filterable report inbox, bounded investigation context, assignment and audited open/reviewed/actioned/dismissed transitions. Record actor, reason and timestamps; protect against concurrent decisions.
+- Approach: implemented for the controlled beta. Assignment, appeals and direct
+  moderator content removal remain unimplemented.
 - Authorization/privacy: deny ordinary users, room admins and revoked sessions; audit both reads and actions. Avoid exposing unrelated messages or reporter identity unnecessarily.
-- Dependencies: role provisioning, investigation policy and enforcement primitives. Separate triage from suspension/removal operations and define appeals.
-- Decisions: appointment/revocation, evidence retention, response targets, escalation, reporter disclosure, suspension duration and account-deletion handling.
-- Acceptance: unauthorized access rejected; cross-room leakage prevented; report goes from submission to audited decision and verified enforcement; duplicate/concurrent actions remain consistent; revocation takes effect immediately.
+- Dependencies: operator database access to provision roles; a named moderator and
+  support contact; explicit retention and escalation policy.
+- Decisions: response targets, appeals, reporter disclosure, suspension duration,
+  formal evidence retention and who can perform urgent content takedown.
+- Acceptance: regression coverage is authored for authorization, bounded context,
+  concurrent transitions, suspension and cross-instance session revocation. It
+  remains unexecuted in this pass at the user's request; run it before beta.
 
 ## Storage quotas
 
@@ -27,11 +36,18 @@ implementation; they are not enabled product behavior.
 
 ## Malware scanning
 
-- Current: MIME, magic-byte and size validation do not establish that content is harmless. Scanning remains deferred.
+- Current: MIME, magic-byte and size validation do not establish that content is
+  harmless. Scanning remains deferred only for a small personally known beta
+  cohort whose signup URL is distributed selectively. A numeric account cap by
+  itself does not make an open signup population trusted. Beta operations and a
+  takedown escalation are documented in `BETA_OPERATIONS.md`.
 - Outcome: attachments become distributable only after an approved scanner result.
 - Approach: quarantine object keys, durable scan jobs, bounded retry and explicit pending/clean/rejected/error states. Validate results server-side and preserve authenticated downloads.
 - Authorization/privacy: limit scanner access to necessary objects, prohibit public quarantine URLs and document provider processing/retention.
-- Dependencies: approved provider or managed ClamAV infrastructure, resource limits and budget.
+- Dependencies: approved provider or managed ClamAV infrastructure, resource
+  limits and budget. Public promotion, repeated malicious uploads, or inability
+  to complete takedown are stop conditions that require scanning before signup
+  or upload acceptance resumes.
 - Decisions: provider, supported archives/encryption, timeout/failure policy, rescanning and appeals/false positives.
 - Acceptance: EICAR rejected, pending files inaccessible, spoofed callbacks rejected, retries idempotent, scanner outage handled visibly without silently bypassing scanning.
 

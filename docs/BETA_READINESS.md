@@ -27,6 +27,11 @@ This document does not replace the broader evidence in `RELEASE_EVIDENCE.md`.
   global uniqueness.
 - **Moderation:** a protected platform-moderator workflow and suspension
   enforcement are part of the beta floor.
+- **Beta cohort:** signup remains open but is admitted up to a configurable
+  active-account cap. Malware scanning remains deferred only while the URL is
+  selectively distributed to personally known testers, with the documented
+  takedown process available. A numeric cap does not make unknown signups
+  trusted.
 
 ## Already solid — retain and regression-test
 
@@ -132,59 +137,101 @@ These are implementation strengths, not substitutes for final candidate tests.
 
 ### Authorization policy
 
-- [ ] Preserve room creation for owner, admin and member roles. Verify that the
+- [x] Preserve room creation for owner, admin and member roles. Verify that the
   creator becomes room admin without gaining wider team administration.
-- [ ] Restrict team project creation to owner/admin at the API, service and UI
+- [x] Restrict team project creation to owner/admin at the API, service and UI
   layers. Members must not see an enabled creation control and direct API calls
   must return `403`.
-- [ ] Document the owner/admin/member matrix for settings, invites, requests,
-  roles, rooms, projects, discovery, archive and transfers.
+- [x] Document the owner/admin/member matrix for settings, invites, requests,
+  roles, rooms, projects, discovery, archive and transfers in
+  `TEAM_PROJECT_PERMISSIONS.md`.
 - [ ] Preserve the single-owner database invariant and require ownership
   transfer before the owner can leave or be removed.
 
 ### Required lifecycle evidence
 
-- [ ] Add database coverage for team creation idempotency and ordinary member
+- [x] Add database coverage for team creation idempotency and ordinary member
   room creation.
-- [ ] Cover email-bound invitation acceptance by a verified user, rejection for
+- [x] Cover email-bound invitation acceptance by a verified user, rejection for
   an unverified or mismatched user, expiry, revocation, maximum uses and
   concurrent acceptance. Repeated acceptance must not consume another use.
-- [ ] Cover shareable invitations and join-request decisions without widening
+- [x] Cover shareable invitations and join-request decisions without widening
   access to unrelated rooms.
 - [ ] Cover ownership transfer: old-owner demotion, new-owner administration in
   every team room, history boundary and the single-owner invariant under races.
 - [ ] Cover member removal and self-leave, including HTTP/socket revocation,
   pending-task cleanup, invite cleanup and loss of project access.
-- [ ] Cover archive/restore as read-only behavior across messages, tasks,
+- [x] Cover archive/restore as read-only behavior across messages, tasks,
   decisions, projects, briefs and automations.
 - [ ] Keep team names non-unique and document that IDs identify teams. Add a
   stable slug or visible disambiguator before duplicate names cause confusion.
 - [ ] Set a beta cohort cap per team and document owner recovery/support.
 
+### Team lifecycle test implementation — 24 November 2026
+
+- The real PostgreSQL/Redis/two-server integration suite now covers concurrent
+  creation-key retries, conflicting key reuse, and room creation by an ordinary
+  member without changing that member's team role.
+- Invitation coverage includes verified acceptance, unverified and mismatched
+  rejection, expiry, revocation, maximum-use enforcement, repeat acceptance by
+  the same member, and competing one-use acceptances. Repeat acceptance was
+  corrected so it remains idempotent without consuming another use.
+- Join-request approval grants the general room and requested public room while
+  withholding unrelated private rooms; rejection grants no membership.
+- Ownership transfer verifies one retained owner and owner grants across every
+  team room. Removal coverage verifies immediate API denial and eviction from
+  sockets connected to both server instances.
+- Archive coverage asserts read-only behavior for rooms, messages, tasks,
+  decisions, projects, briefs and automations, followed by successful writes
+  after restoration. Brief writes now apply the archived-team guard.
+- The broader unchecked ownership/removal bullets still require race coverage,
+  self-leave, pending-task/invite cleanup and explicit history-boundary checks.
+  No lifecycle test was executed in this implementation pass.
+
 ## P0 — projects and connected work fit for beta
 
 ### Creation and naming rules
 
-- [ ] Require owner/admin team membership for project creation in both
+- [x] Require owner/admin team membership for project creation in both
   `/teams/:teamId/projects` and `/work/projects`. Eliminate policy differences
   between these entry points.
-- [ ] Require 1–20 distinct initial rooms. Every room must belong to the same
+- [x] Require 1–20 distinct initial rooms. Every room must belong to the same
   team, the creator must have required room administration rights, and the team
   must be active.
-- [ ] Remove or disable the current empty-project path in the team page. Guide an
+- [x] Remove or disable the current empty-project path in the team page. Guide an
   owner/admin to select at least one eligible team room.
-- [ ] Add case-insensitive project-name uniqueness scoped to `team_id` and
-  return a specific `409`. Decide a corresponding scope for retained personal
-  projects before applying the migration.
-- [ ] Define project management as project creator, team owner or team admin so
-  an admin can operate a project created by another authorized administrator.
-  Apply the same rule to milestones, rooms, briefs and automations.
+- [x] Add case-insensitive project-name uniqueness scoped to `team_id` and
+  return a specific `409`. Retained legacy personal projects remain scoped to
+  their creator and cannot be created through the beta UI or API.
+- [x] Define team-project management as team owner or team admin so an admin can
+  operate a project created by another authorized administrator. Apply the same
+  rule to project details, status, rooms, milestones, dependencies and
+  automations. Room briefs retain their separate room-admin authorization.
+
+### Team and project authorization implementation — 24 November 2026
+
+- Both project-creation endpoints now call the same transactional service. It
+  requires an active team, owner/admin membership, 1–20 distinct non-DM team
+  rooms, and room-admin access for the creator.
+- Migration `066_require_team_project_room.sql` adds deferred database guards so
+  a team project cannot commit without a room or lose its final room. Transfer
+  previews and mutations report the same requirement, the client disables
+  final-room removal, and a database trigger rejects cross-team or DM links.
+- Migration `067_unique_team_project_names.sql` normalizes historical team
+  project names, records changes for audit, resolves collisions
+  deterministically, and adds the team-scoped case-insensitive unique index.
+  Create, rename, and legacy-project transfer paths map collisions to a stable
+  `409` response.
+- The global projects screen is read-only for creation; owners and admins create
+  projects from a team page with required room selection. Member creation and
+  management controls are absent, while all team members retain room creation.
+- No tests or migrations were run for this implementation batch, as requested.
 
 ### Required lifecycle evidence
 
-- [ ] Cover creation, initial room linking, room add/remove, cross-team
+- [x] Cover creation, initial room linking, room add/remove, cross-team
   rejection, duplicate room assignment, archived-team rejection and status.
-- [ ] Cover visibility: non-members see nothing; eligible members see only
+- [x] Cover visibility: non-members see nothing; eligible members see only
   projects and linked rooms allowed by policy; removal immediately removes access.
 - [ ] Cover milestones, task assignment, dependency cycle prevention, dependency
   cleanup on room removal and decision/task summaries.
@@ -197,32 +244,89 @@ These are implementation strengths, not substitutes for final candidate tests.
 - [ ] Leave `teams.avatar_url` unwired only if no team-avatar control is shown.
   Track avatar upload as polish rather than implying it works.
 
+### Project lifecycle test implementation — 24 November 2026
+
+- Creation coverage requires initial rooms and rejects duplicate selections,
+  duplicate attachment, cross-team attachment and member creation. Visibility
+  covers owners, administrators, members without room access, and immediate
+  loss of project access after team removal.
+- Milestone coverage creates, assigns and completes a milestone. Dependency
+  coverage creates a blocker, rejects a cycle, and verifies that removing a
+  room clears its project and milestone links plus every related dependency.
+- Brief coverage races two writers at the same version and verifies one commit,
+  one `409`, the winning body and the revision history.
+- Automation coverage runs competing workers for one decision event and verifies
+  one durable claim and one generated task across repeated scans.
+- Work discovery coverage verifies assignment inbox and cross-room search,
+  message deletion, task completion, and immediate disappearance after team
+  membership removal.
+- The broader unchecked bullets still require source-message brief checks,
+  automation failure/retry, history clearing, explicit room leave, and complete
+  decision/task summary coverage. No lifecycle test was executed in this
+  implementation pass.
+
 ## P0 — moderation and enforcement
 
-- [ ] Add server-enforced platform-role middleware. Ordinary users and room
+- [x] Add server-enforced platform-role middleware. Ordinary users and room
   admins must never gain platform report access.
-- [ ] Add an explicit provisioning script for granting/revoking the existing
+- [x] Add an explicit provisioning script for granting/revoking the existing
   moderator role; do not expose unaudited public role management.
-- [ ] Add a paginated/filterable moderator report inbox with bounded context.
+- [x] Add a paginated/filterable moderator report inbox with bounded context.
   Reporter identity should remain hidden until operationally necessary.
-- [ ] Add concurrency-safe `open`, `reviewed`, `actioned` and `dismissed`
+- [x] Add concurrency-safe `open`, `reviewed`, `actioned` and `dismissed`
   transitions with actor, reason, timestamps and an append-only audit table.
-- [ ] Add account suspension/restoration. Suspension must block login and API
+- [x] Add account suspension/restoration. Suspension must block login and API
   access and revoke all sessions immediately.
-- [ ] Add authorization/privacy tests: users denied, room admins denied, revoked
-  sessions denied and unrelated room/message context withheld.
-- [ ] Assignment can remain deferred for a single-moderator beta. Appeals may be
-  intake-only; full appeals and content-removal enforcement can follow.
+- [x] Author authorization/privacy regressions for ordinary users, room admins,
+  bounded report context, concurrent transitions, suspended sessions, login,
+  refresh and restoration. They were deliberately not executed in this pass at
+  the user's request; execution is still a candidate gate.
+- Assignment and full appeals may remain deferred for a single-moderator beta.
+- [ ] Name the moderator, support contact and storage operator; confirm who can
+  perform urgent content takedown when a room admin or author cannot act.
+
+### Private operator console at `admin.conclave.com.ng` — planned, not implemented
+
+The hostname is a separate workspace for operators, not a secret URL or an
+authorization boundary. Keep registration on the public app; do not provide a
+public self-registration path that assigns platform roles.
+
+- [ ] Configure DNS, TLS and hosting for `admin.conclave.com.ng`, serving an
+  operator-focused frontend with the moderation inbox and audited platform-role
+  administration. The current inbox is `/moderation/reports` in the main app;
+  it is not yet restricted to the admin hostname, and role administration UI
+  does not exist.
+- [ ] Put an identity-aware access gate in front of the operator host and
+  restrict it to the founders/developers selected to operate Conclave. Keep the
+  backend's platform-role check as the authority even when the access gate
+  permits the request. Do not rely on an unlisted link or `noindex` as security.
+- [ ] Allow only the exact public and operator frontend origins in validated
+  backend HTTP CORS and Socket.IO CORS configuration. The current backend
+  accepts one `CLIENT_ORIGIN`, so dual-host support must be implemented before
+  deployment.
+- [ ] Keep operator role grants out of public signup. Bootstrap the first
+  platform administrator through a one-time controlled operator procedure;
+  subsequent grants/revocations should require an authenticated platform admin
+  and create append-only audit entries. The existing CLI provisions moderators
+  only and does not provide this admin console or first-admin bootstrap.
+- [ ] Document that browser storage is origin-scoped: operators sign in
+  separately on the admin subdomain, and both the host access gate and Conclave
+  session/role authorization must succeed.
 
 ## P0 — deployment, media and candidate verification
 
-- [ ] Make allowed client origins configurable as a validated list. The current
-  exact `CLIENT_ORIGIN` cannot serve separate beta/staging origins and has
-  caused browser-suite CORS failures.
+- [ ] Implement validated exact client-origin allowlists for HTTP and
+  Socket.IO, covering production, staging and the admin subdomain as explicitly
+  configured. The current single `CLIENT_ORIGIN` cannot serve these separately
+  and has caused browser-suite CORS failures.
 - [ ] Complete the approved media path: streaming wiring, preview Worker width
   support and CI, medium viewer step, gallery work and live Worker deployment.
-- [ ] Set beta storage caps or, at minimum, cohort limits plus storage/spend
-  alarms and an operator response threshold.
+- [x] Add an atomic active-account signup cap, signup kill switch, storage usage
+  overview, configured storage-only spend estimate, cleanup-failure alerts and
+  a report command. See `BETA_OPERATIONS.md` for the daily manual billing review
+  and response thresholds. These are not provider-side real-time alerts.
+- [ ] Set production beta cohort thresholds, schedule the report, configure the
+  provider billing alert where available, and name the operator who reviews it.
 - [ ] Run with Node 22 as declared by the repository and CI.
 - [ ] Run `npm run check`, fresh/rerun migrations, the complete database suite,
   browser/security suites and media suites against the final candidate.
@@ -271,13 +375,17 @@ not describe all cross-room search as unimplemented.
 
 The following deferred items require an explicit beta control:
 
-- **Platform moderation:** the minimum inbox, audit and suspension workflow above
-  is required because reports are already exposed in the product.
-- **Storage quotas:** reservation accounting may trail beta only with cohort
-  caps, alarms and an operator response threshold.
+- **Platform moderation:** the minimum inbox, audit and suspension workflow is
+  implemented. Its authored authorization and revocation regressions still need
+  execution, and a moderator/support owner must be provisioned before beta.
+- **Storage quotas:** reservation accounting may trail beta only with the
+  active-account cap, daily storage report, provider billing review and named
+  operator response described in `BETA_OPERATIONS.md`.
 - **Malware scanning:** may remain deferred only for a trusted small cohort with
-  documented risk acceptance, strict file controls and a rapid takedown path.
-  It becomes a public-launch requirement as the population opens.
+  selectively distributed signup, strict file controls and the documented
+  takedown escalation. Open signup is still enabled, so this is an operational
+  trust boundary rather than a technical allowlist. Public signup promotion or
+  inability to remove harmful content is a stop condition.
 
 ## Candidate exit criteria
 

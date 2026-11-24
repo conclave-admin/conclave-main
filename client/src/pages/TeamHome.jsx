@@ -23,7 +23,7 @@ export default function TeamHome(){
   const [teamName,setTeamName]=useState(''),[description,setDescription]=useState('');
   const [creationKey,setCreationKey]=useState(()=>crypto.randomUUID());
   const [email,setEmail]=useState(''),[invite,setInvite]=useState(null);
-  const [roomName,setRoomName]=useState(''),[projectName,setProjectName]=useState('');
+  const [roomName,setRoomName]=useState(''),[projectName,setProjectName]=useState(''),[projectRoomIds,setProjectRoomIds]=useState([]);
   const [roomType,setRoomType]=useState('group');
   const [moveRoomId,setMoveRoomId]=useState(''),[moveProjectId,setMoveProjectId]=useState(''),[preview,setPreview]=useState(null);
   const [legacyProjects,setLegacyProjects]=useState([]);
@@ -34,7 +34,7 @@ export default function TeamHome(){
   }catch(e){setError(errorText(e));}finally{setLoading(false);}},[teamId]);
   useEffect(()=>{void load();},[load]);
   useEffect(()=>{
-    const clear=()=>{setTeamName('');setDescription('');setRoomName('');setProjectName('');setEmail('');setInvite(null);setError('');};
+    const clear=()=>{setTeamName('');setDescription('');setRoomName('');setProjectName('');setProjectRoomIds([]);setEmail('');setInvite(null);setError('');};
     clear();
   },[user?.id]);
   useEffect(()=>{setRoomHeader(detail?.team?.name || 'Teams');return()=>setRoomHeader(null);},[detail?.team?.name,setRoomHeader]);
@@ -75,8 +75,10 @@ export default function TeamHome(){
           </section>
           <section className={card}><h2 className="text-h2">Projects</h2><div className="mt-4 space-y-2">{detail.projects.map(p=><Link className="block rounded-xl bg-canvas px-4 py-3 text-label hover:text-brand" key={p.id} to={`/work/projects/${p.id}`}>{p.name}</Link>)}
             {!detail.projects.length&&<p className="text-body text-muted">No accessible projects yet. Add one when your team is ready.</p>}</div>
-            {!current.archived_at&&<form className="mt-5 flex flex-wrap gap-2" onSubmit={e=>{e.preventDefault();void act(async()=>{await teams.createTeamProject(teamId,{name:projectName});setProjectName('');});}}>
-              <input className={`${field} max-w-sm flex-1`} aria-label="New project name" maxLength={160} required placeholder="Optional first project" value={projectName} onChange={e=>setProjectName(e.target.value)}/><button disabled={busy} className={button}>New project</button></form>}
+            {admin&&!current.archived_at&&<form className="mt-5 space-y-3" onSubmit={e=>{e.preventDefault();void act(async()=>{await teams.createTeamProject(teamId,{name:projectName,roomIds:projectRoomIds});setProjectName('');setProjectRoomIds([]);});}}>
+              <input className={`${field} max-w-sm`} aria-label="New project name" maxLength={160} required placeholder="Project name" value={projectName} onChange={e=>setProjectName(e.target.value)}/>
+              <fieldset><legend className="text-label">Starting rooms</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{detail.rooms.filter(r=>r.my_role==='admin').map(r=><label key={r.id} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-body"><input type="checkbox" checked={projectRoomIds.includes(r.id)} onChange={e=>setProjectRoomIds(ids=>e.target.checked?[...ids,r.id]:ids.filter(id=>id!==r.id))}/>{r.name}</label>)}</div></fieldset>
+              <button disabled={busy||!projectName.trim()||!projectRoomIds.length} className={button}>New project</button></form>}
           </section>
           {admin&&!current.archived_at&&<section className={card}><h2 className="text-h2">Move existing work</h2><p className="mt-2 text-body text-muted">Choose an unassigned room or project. A newly added team owner sees room messages from the move onward.</p>
             <div className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-label">Room<select className={`mt-2 ${field}`} value={moveRoomId} onChange={e=>{setMoveRoomId(e.target.value);setMoveProjectId('');setPreview(null);}}><option value="">Choose a room</option>{legacyRooms.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
