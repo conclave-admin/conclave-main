@@ -9,7 +9,7 @@ async function requireSession(claims) {
     throw new ApiError(401, "Please sign in again to renew this session");
   }
   const result = await query(
-    `SELECT s.id, s.user_id, s.expires_at,
+    `SELECT s.id, s.user_id, s.expires_at,u.suspended_at,
        (SELECT COUNT(*)::integer FROM auth_sessions active
          WHERE active.user_id=s.user_id AND active.revoked_at IS NULL
            AND active.expires_at>NOW()) AS active_session_count
@@ -23,6 +23,8 @@ async function requireSession(claims) {
       401,
       "Session expired or revoked — please sign in again",
     );
+  if (result.rows[0].suspended_at)
+    throw new ApiError(403, "This account is suspended");
   await query(
     "UPDATE auth_sessions SET last_active_at=NOW() WHERE id=$1 AND last_active_at<NOW()-INTERVAL '5 minutes'",
     [claims.sid],

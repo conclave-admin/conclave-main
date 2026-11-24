@@ -3,12 +3,14 @@ import { Link, useParams } from "react-router-dom";
 import AuthLayout from "../components/layout/AuthLayout";
 import Input from "../components/ui/Input";
 import Button from "../components/ui/Button";
+import { useAuth } from "../contexts/AuthContext";
 import {
   requestRecovery,
   redeemAccountToken,
 } from "../services/security.service";
 export default function AccountRecovery() {
   const { kind } = useParams();
+  const { isAuthenticated, refreshUser } = useAuth();
   const [token] = useState(() => {
     const value =
       new URLSearchParams(location.hash.slice(1)).get("token") || "";
@@ -32,6 +34,7 @@ export default function AccountRecovery() {
       const result = token
         ? await redeemAccountToken(kind, token, password)
         : await requestRecovery(email);
+      if (kind === "verify" && isAuthenticated) await refreshUser();
       setNotice(result.message);
       setDone(true);
     } catch (e) {
@@ -112,8 +115,13 @@ export default function AccountRecovery() {
             {error}
           </p>
         )}
-        <Link to="/login" className="block text-body text-brand">
-          Back to sign in
+        <Link
+          to={kind === "verify" && isAuthenticated ? "/join-team" : "/login"}
+          className="block text-body text-brand"
+        >
+          {kind === "verify" && isAuthenticated
+            ? "Return to invitation"
+            : "Back to sign in"}
         </Link>
       </form>
     </AuthLayout>

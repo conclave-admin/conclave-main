@@ -2,6 +2,11 @@ const { pool, query } = require("../config/db");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const { ok } = require("../utils/apiResponse");
+const {
+  validateProjectName,
+  projectNameConflict,
+} = require("../utils/projectIdentity");
+const { createTeamProject } = require("../services/project.service");
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const date = (value) => value == null || value === "" ? null :
@@ -36,22 +41,31 @@ async function member(db, roomId, userId, admin = false) {
 }
 async function project(db, projectId, userId, manage = false) {
   const result = await db.query(
-    `SELECT p.* FROM projects p WHERE p.id=$1 AND
+    `SELECT p.*,
+       (SELECT tm.role FROM team_members tm WHERE tm.team_id=p.team_id AND tm.user_id=$2) AS team_role
+     FROM projects p WHERE p.id=$1 AND
      (p.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=p.team_id AND tm.user_id=$2)) AND
-     (p.created_by=$2 OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=p.team_id AND tm.user_id=$2 AND tm.role='owner') OR EXISTS(SELECT 1 FROM project_rooms pr JOIN room_members rm
+     (p.created_by=$2 OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=p.team_id AND tm.user_id=$2 AND tm.role IN ('owner','admin')) OR EXISTS(SELECT 1 FROM project_rooms pr JOIN room_members rm
        ON rm.room_id=pr.room_id AND rm.user_id=$2 WHERE pr.project_id=p.id))`,
     [projectId, userId]);
   if (!result.rowCount) throw new ApiError(404, "Project unavailable");
-  if (manage && result.rows[0].created_by !== userId) {
-    const owner=result.rows[0].team_id && (await db.query(`SELECT 1 FROM team_members
-      WHERE team_id=$1 AND user_id=$2 AND role='owner'`,[result.rows[0].team_id,userId])).rowCount;
-    if(!owner) throw new ApiError(403, "Only the project creator or team owner can manage it");
+  if (manage) {
+    const allowed = result.rows[0].team_id
+      ? ["owner", "admin"].includes(result.rows[0].team_role)
+      : result.rows[0].created_by === userId;
+    if (!allowed)
+      throw new ApiError(403, "Team owner or administrator required");
   }
   if(manage && result.rows[0].team_id){
     const state=(await db.query('SELECT archived_at FROM teams WHERE id=$1',[result.rows[0].team_id])).rows[0];
     if(state?.archived_at) throw new ApiError(409,'Team is archived');
   }
-  return result.rows[0];
+  return {
+    ...result.rows[0],
+    can_manage: result.rows[0].team_id
+      ? ["owner", "admin"].includes(result.rows[0].team_role)
+      : result.rows[0].created_by === userId,
+  };
 }
 async function plainRoom(db, roomId) {
   const room = await db.query("SELECT id FROM rooms WHERE id=$1", [roomId]);
@@ -61,41 +75,26 @@ async function plainRoom(db, roomId) {
 const listProjects = asyncHandler(async (req, res) => {
   const rows = await query(
     `SELECT p.id,p.name,p.description,p.status,p.created_by,p.team_id,p.updated_at,
+       COALESCE(bool_or(tm.role IN ('owner','admin')),FALSE) AS can_manage,
        COUNT(DISTINCT pr.room_id) FILTER (WHERE rm.user_id IS NOT NULL)::int AS room_count
      FROM projects p LEFT JOIN project_rooms pr ON pr.project_id=p.id
      LEFT JOIN room_members rm ON rm.room_id=pr.room_id AND rm.user_id=$1
+     LEFT JOIN team_members tm ON tm.team_id=p.team_id AND tm.user_id=$1
      WHERE (p.team_id IS NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=p.team_id AND tm.user_id=$1))
-       AND (p.created_by=$1 OR rm.user_id IS NOT NULL OR EXISTS(SELECT 1 FROM team_members tm WHERE tm.team_id=p.team_id AND tm.user_id=$1 AND tm.role='owner'))
+       AND (p.created_by=$1 OR rm.user_id IS NOT NULL OR tm.role IN ('owner','admin'))
      GROUP BY p.id ORDER BY p.updated_at DESC,p.id DESC LIMIT 100`, [req.user.id]);
   return ok(res, { projects: rows.rows });
 });
 
 const createProject = asyncHandler(async (req, res) => {
-  const name = text(req.body?.name, 160, "Project name", true);
-  const description = text(req.body?.description || "", 2000, "Description");
-  const roomIds = req.body?.roomIds;
-  if (!Array.isArray(roomIds) || !roomIds.length || roomIds.length > 20 ||
-      new Set(roomIds).size !== roomIds.length) throw new ApiError(400, "Choose 1–20 distinct conversations");
-  roomIds.forEach((id) => uuid(id, "conversation"));
-  const result = await transaction(async (db) => {
-    for (const roomId of roomIds) { await member(db, roomId, req.user.id, true); await plainRoom(db, roomId); }
-    const roomTeams=(await db.query('SELECT id,team_id FROM rooms WHERE id=ANY($1::uuid[]) FOR UPDATE',[roomIds])).rows;
-    const teamIds=new Set(roomTeams.map((room)=>room.team_id || 'personal'));
-    if(teamIds.size!==1) throw new ApiError(409,'Project rooms must belong to one team');
-    const teamId=roomTeams[0].team_id;
-    if(teamId) {
-      const team=(await db.query('SELECT archived_at FROM teams WHERE id=$1 FOR UPDATE',[teamId])).rows[0];
-      if(team?.archived_at) throw new ApiError(409,'Team is archived');
-    }
-    const p = (await db.query(
-      "INSERT INTO projects(name,description,created_by,team_id) VALUES($1,$2,$3,$4) RETURNING *",
-      [name, description, req.user.id, teamId])).rows[0];
-    for (const roomId of roomIds) {
-      await db.query("INSERT INTO project_rooms(project_id,room_id) VALUES($1,$2)", [p.id, roomId]);
-      await db.query("UPDATE tasks SET project_id=$1 WHERE room_id=$2", [p.id, roomId]);
-    }
-    return p;
-  });
+  const result = await transaction((db) =>
+    createTeamProject(db, {
+      userId: req.user.id,
+      name: req.body?.name,
+      description: req.body?.description,
+      roomIds: req.body?.roomIds,
+    }),
+  );
   return ok(res, result, 201);
 });
 
@@ -155,22 +154,30 @@ const getProject = asyncHandler(async (req, res) => {
 
 const updateProject = asyncHandler(async (req, res) => {
   await project({ query }, req.params.projectId, req.user.id, true);
-  const name = text(req.body?.name, 160, "Project name", true);
+  const name = validateProjectName(req.body?.name);
   const description = text(req.body?.description || "", 2000, "Description");
   const status = req.body?.status;
   if (!["active", "completed", "archived"].includes(status)) throw new ApiError(400, "Invalid project status");
-  const row = await query(
-    "UPDATE projects SET name=$2,description=$3,status=$4,updated_at=NOW() WHERE id=$1 RETURNING *",
-    [req.params.projectId, name, description, status]);
+  let row;
+  try {
+    row = await query(
+      "UPDATE projects SET name=$2,description=$3,status=$4,updated_at=NOW() WHERE id=$1 RETURNING *",
+      [req.params.projectId, name, description, status]);
+  } catch (error) {
+    throw projectNameConflict(error) || error;
+  }
   return ok(res, row.rows[0]);
 });
 
 const addProjectRoom = asyncHandler(async (req, res) => {
   const roomId = uuid(req.body?.roomId, "conversation");
   await transaction(async (db) => {
-    await project(db, req.params.projectId, req.user.id, true);
+    const currentProject = await project(db, req.params.projectId, req.user.id, true);
     await member(db, roomId, req.user.id, true);
-    await plainRoom(db, roomId);
+    const room = (await db.query("SELECT team_id,type FROM rooms WHERE id=$1 FOR SHARE", [roomId])).rows[0];
+    if (!room) throw new ApiError(404, "Conversation unavailable");
+    if (room.type === "dm" || room.team_id !== currentProject.team_id)
+      throw new ApiError(409, "Choose a room from this project’s team");
     await db.query("INSERT INTO project_rooms(project_id,room_id) VALUES($1,$2)",
       [req.params.projectId, roomId]);
     await db.query("UPDATE tasks SET project_id=$1 WHERE room_id=$2", [req.params.projectId, roomId]);
@@ -183,6 +190,17 @@ const removeProjectRoom = asyncHandler(async (req, res) => {
   await transaction(async (db) => {
     await project(db, projectId, req.user.id, true);
     await member(db, roomId, req.user.id, true);
+    await db.query("SELECT id FROM projects WHERE id=$1 FOR UPDATE", [projectId]);
+    const membership = await db.query(
+      "SELECT 1 FROM project_rooms WHERE project_id=$1 AND room_id=$2",
+      [projectId, roomId],
+    );
+    if (!membership.rowCount) throw new ApiError(404, "Project conversation unavailable");
+    const linked = (await db.query(
+      "SELECT count(*)::int AS count FROM project_rooms WHERE project_id=$1",
+      [projectId],
+    )).rows[0].count;
+    if (linked <= 1) throw new ApiError(409, "A project must keep at least one conversation");
     await db.query("DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE room_id=$1) OR depends_on_id IN (SELECT id FROM tasks WHERE room_id=$1)", [roomId]);
     await db.query("UPDATE tasks SET milestone_id=NULL,project_id=NULL WHERE room_id=$1 AND project_id=$2", [roomId, projectId]);
     await db.query("DELETE FROM project_rooms WHERE project_id=$1 AND room_id=$2", [projectId, roomId]);
@@ -222,9 +240,8 @@ async function managedTask(db, taskId, userId) {
      WHERE t.id=$1 FOR UPDATE OF t`, [taskId, userId]);
   if (!result.rowCount) throw new ApiError(404, "Task unavailable");
   const task = result.rows[0];
-  if (task.created_by !== userId && task.role !== "admin")
-    throw new ApiError(403, "Only the task creator or room admin can organize this task");
   if (!task.project_id) throw new ApiError(409, "Add this conversation to a project first");
+  await project(db, task.project_id, userId, true);
   return task;
 }
 const setTaskMilestone = asyncHandler(async (req, res) => {
@@ -293,6 +310,9 @@ const putBrief = asyncHandler(async (req, res) => {
   const brief = await transaction(async (db) => {
     await member(db, req.params.roomId, req.user.id, true);
     await plainRoom(db, req.params.roomId);
+    const teamState = (await db.query(`SELECT t.archived_at FROM rooms r
+      LEFT JOIN teams t ON t.id=r.team_id WHERE r.id=$1`, [req.params.roomId])).rows[0];
+    if (teamState?.archived_at) throw new ApiError(409, "Team is archived");
     if (sourceId) {
       const source = await db.query(
         "SELECT 1 FROM messages WHERE id=$1 AND room_id=$2 AND deleted_at IS NULL AND message_visible(id,$3)",

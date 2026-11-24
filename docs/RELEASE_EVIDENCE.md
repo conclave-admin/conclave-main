@@ -1,5 +1,8 @@
 # Release evidence and blockers
 
+The minimum invite-only release gate is tracked in
+[Controlled beta readiness](BETA_READINESS.md).
+
 ## Candidate
 
 - Assessment date: 23 November 2026 (Africa/Lagos).

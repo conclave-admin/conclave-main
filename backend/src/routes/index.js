@@ -20,6 +20,7 @@ router.use("/push", require("./push.routes"));
 router.use("/sync", require("./sync.routes"));
 router.use("/work", require("./work.routes"));
 router.use("/teams", require("./teams.routes"));
+router.use("/moderation", require("./moderation.routes"));
 router.use("/auth", authRoutes);
 router.use("/users", usersRoutes);
 router.use("/rooms", require("./roomLifecycle.routes"));

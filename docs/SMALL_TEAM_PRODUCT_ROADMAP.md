@@ -92,7 +92,7 @@ This section defines the product and technical contract for a team home and onbo
 | Initial setup | Create one general room; creating a project is optional. |
 | Last owner | The only owner must transfer ownership before leaving. |
 | General-room access | Accepting a team invitation also joins the general room automatically. |
-| Member creation rights | Ordinary team members may create team rooms and projects. |
+| Member creation rights | Ordinary team members may create team rooms. Project creation and management require the owner or admin role. |
 | Admin removal | An owner or another admin may remove an admin; the owner is protected. |
 | Email invitations | Acceptance requires the addressed email to be verified on the accepting account. |
 | Directory email privacy | Only owners and admins see other members' email addresses. |

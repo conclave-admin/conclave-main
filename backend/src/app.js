@@ -15,9 +15,7 @@ const app = express();
 // The API is deployed behind one trusted Render/Vercel-facing proxy hop.
 // Keep this explicit and configurable; trusting arbitrary forwarded headers
 // would let callers rotate their apparent address to evade the auth limiter.
-const proxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
-if (Number.isInteger(proxyHops) && proxyHops > 0)
-  app.set("trust proxy", proxyHops);
+if (env.trustProxyHops > 0) app.set("trust proxy", env.trustProxyHops);
 
 app.use(helmet());
 app.use(

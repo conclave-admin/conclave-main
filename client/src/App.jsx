@@ -42,6 +42,7 @@ const WorkSearch = lazy(() => import("./pages/WorkSearch"));
 const RoomBrief = lazy(() => import("./pages/RoomBrief"));
 const TeamHome = lazy(() => import("./pages/TeamHome"));
 const JoinTeam = lazy(() => import("./pages/JoinTeam"));
+const ModerationInbox = lazy(() => import("./pages/ModerationInbox"));
 
 // Keep public-page illustrations and content outside the signed-in app bundle.
 const Landing = lazy(() => import("./pages/Landing"));
@@ -179,6 +180,7 @@ export default function App() {
                           />
                           <Route path="/work/inbox" element={<WorkInbox />} />
                           <Route path="/work/search" element={<WorkSearch />} />
+                          <Route path="/moderation/reports" element={<ModerationInbox />} />
                           <Route
                             path="/work/rooms/:roomId/brief"
                             element={<RoomBrief />}

@@ -84,7 +84,7 @@ async function account() {
   const id = randomUUID();
   await query(
     "INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, $3, $4)",
-    [id, `${id}@security.test`, "unused", "Security fixture"],
+    [id, `${id}@security.test`, "unused", `Security ${id}`],
   );
   users.push(id);
   return session(id);
@@ -120,6 +120,34 @@ async function room(owner, member, type = "group") {
   );
   roomIds.push(id);
   return id;
+}
+
+async function createTeam(owner, label = "Lifecycle team") {
+  const response = await request("/teams", owner.token, "POST", {
+    name: `${label} ${randomBytes(4).toString("hex")}`,
+    description: "Lifecycle coverage",
+    creationKey: randomUUID(),
+  });
+  assert.equal(response.status, 201, JSON.stringify(response.body));
+  return response.body.data;
+}
+
+async function acceptTeamInvite(owner, teamId, member, { emailBound = false } = {}) {
+  const email = emailBound
+    ? (await query("SELECT email FROM users WHERE id=$1", [member.userId])).rows[0].email
+    : undefined;
+  if (emailBound)
+    await query("UPDATE users SET email_verified_at=NOW() WHERE id=$1", [member.userId]);
+  const invitation = await request(`/teams/${teamId}/invites`, owner.token, "POST", {
+    ...(email ? { email } : {}),
+    maxUses: 1,
+  });
+  assert.equal(invitation.status, 201, JSON.stringify(invitation.body));
+  const accepted = await request("/teams/invites/accept", member.token, "POST", {
+    token: invitation.body.data.token,
+  });
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+  return { invitation: invitation.body.data, accepted: accepted.body.data };
 }
 
 async function startInstance(port = 0) {
@@ -2048,10 +2076,282 @@ test("teams and rooms work after message encryption removal", async () => {
   assert.equal(detail.body.data.team.name, input.name);
   const room = await request(`/teams/${teamId}/rooms`, owner.token, "POST", { name: "Planning", type: "group" });
   assert.equal(room.status, 201);
-  const project = await request(`/teams/${teamId}/projects`, owner.token, "POST", { name: "Project" });
+  const project = await request(`/teams/${teamId}/projects`, owner.token, "POST", { name: "Project", roomIds: [room.body.data.id] });
   assert.equal(project.status, 201);
   const rejected = await request("/teams", owner.token, "POST", { ...input, creationKey: randomUUID(), encryptionMode: "e2ee-v2" });
   assert.equal(rejected.status, 400);
+});
+
+test("team creation is idempotent and rejects reuse with different input", async () => {
+  const owner = await account();
+  const creationKey = randomUUID();
+  const input = { name: "Idempotent team", description: "First request", creationKey };
+  const [first, retry] = await Promise.all([
+    request("/teams", owner.token, "POST", input),
+    request("/teams", owner.token, "POST", input),
+  ]);
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal(retry.status, 201, JSON.stringify(retry.body));
+  assert.equal(first.body.data.id, retry.body.data.id);
+  assert.equal((await query("SELECT count(*)::int AS count FROM teams WHERE created_by=$1 AND creation_key=$2", [owner.userId, creationKey])).rows[0].count, 1);
+  const member = await account();
+  await acceptTeamInvite(owner, first.body.data.id, member);
+  const memberRoom = await request(`/teams/${first.body.data.id}/rooms`, member.token, "POST", {
+    name: "Member-created room",
+    type: "group",
+  });
+  assert.equal(memberRoom.status, 201, JSON.stringify(memberRoom.body));
+  assert.equal((await query("SELECT role FROM room_members WHERE room_id=$1 AND user_id=$2", [memberRoom.body.data.id, member.userId])).rows[0].role, "admin");
+  assert.equal((await query("SELECT role FROM team_members WHERE team_id=$1 AND user_id=$2", [first.body.data.id, member.userId])).rows[0].role, "member");
+  const conflict = await request("/teams", owner.token, "POST", {
+    ...input,
+    name: "Different team",
+  });
+  assert.equal(conflict.status, 409);
+});
+
+test("team invitations enforce verification, binding, expiry, revocation, usage and concurrent acceptance", async () => {
+  const owner = await account();
+  const invited = await account();
+  const other = await account();
+  const team = await createTeam(owner, "Invitation team");
+  const invitedEmail = (await query("SELECT email FROM users WHERE id=$1", [invited.userId])).rows[0].email;
+  const bound = await request(`/teams/${team.id}/invites`, owner.token, "POST", { email: invitedEmail });
+  assert.equal(bound.status, 201, JSON.stringify(bound.body));
+  assert.equal((await request("/teams/invites/accept", invited.token, "POST", { token: bound.body.data.token })).status, 403);
+  await query("UPDATE users SET email_verified_at=NOW() WHERE id=$1", [invited.userId]);
+  assert.equal((await request("/teams/invites/accept", other.token, "POST", { token: bound.body.data.token })).status, 403);
+  const concurrentSameUser = await Promise.all([
+    request("/teams/invites/accept", invited.token, "POST", { token: bound.body.data.token }),
+    request("/teams/invites/accept", invited.token, "POST", { token: bound.body.data.token }),
+  ]);
+  assert.ok(concurrentSameUser.every((response) => response.status === 200));
+  assert.equal((await query("SELECT uses FROM team_invites WHERE id=$1", [bound.body.data.id])).rows[0].uses, 1);
+
+  const expired = await request(`/teams/${team.id}/invites`, owner.token, "POST", { maxUses: 1 });
+  await query("UPDATE team_invites SET expires_at=NOW()-INTERVAL '1 second' WHERE id=$1", [expired.body.data.id]);
+  assert.equal((await request("/teams/invites/accept", other.token, "POST", { token: expired.body.data.token })).status, 404);
+
+  const revoked = await request(`/teams/${team.id}/invites`, owner.token, "POST", { maxUses: 1 });
+  assert.equal((await request(`/teams/${team.id}/invites/${revoked.body.data.id}`, owner.token, "DELETE")).status, 200);
+  assert.equal((await request("/teams/invites/accept", other.token, "POST", { token: revoked.body.data.token })).status, 404);
+
+  const oneUse = await request(`/teams/${team.id}/invites`, owner.token, "POST", { maxUses: 1 });
+  const contenderA = await account();
+  const contenderB = await account();
+  const raced = await Promise.all([
+    request("/teams/invites/accept", contenderA.token, "POST", { token: oneUse.body.data.token }),
+    request("/teams/invites/accept", contenderB.token, "POST", { token: oneUse.body.data.token }),
+  ]);
+  assert.deepEqual(raced.map((response) => response.status).sort(), [200, 404]);
+  assert.equal((await query("SELECT uses FROM team_invites WHERE id=$1", [oneUse.body.data.id])).rows[0].uses, 1);
+});
+
+test("public-room join requests require administrator review and grant only intended rooms", async () => {
+  const owner = await account();
+  const applicant = await account();
+  const rejectedApplicant = await account();
+  const team = await createTeam(owner, "Join request team");
+  const publicRoom = await request(`/teams/${team.id}/rooms`, owner.token, "POST", { name: "Community", type: "public" });
+  const privateRoom = await request(`/teams/${team.id}/rooms`, owner.token, "POST", { name: "Private", type: "group" });
+  assert.equal(publicRoom.status, 201);
+  assert.equal(privateRoom.status, 201);
+  assert.equal((await request(`/teams/${team.id}/rooms/${publicRoom.body.data.id}/discovery`, owner.token, "PATCH", { discoverable: true })).status, 200);
+  assert.equal((await request(`/teams/discovery-requests/${publicRoom.body.data.id}`, applicant.token, "POST")).status, 202);
+  const detail = await request(`/teams/${team.id}`, owner.token);
+  assert.ok(detail.body.data.requests.some((entry) => entry.user_id === applicant.userId));
+  assert.equal((await request(`/teams/${team.id}/requests/${applicant.userId}`, owner.token, "POST", { decision: "approve" })).status, 200);
+  assert.equal((await query("SELECT count(*)::int AS count FROM team_members WHERE team_id=$1 AND user_id=$2", [team.id, applicant.userId])).rows[0].count, 1);
+  const memberships = (await query("SELECT room_id FROM room_members WHERE user_id=$1 AND room_id=ANY($2::uuid[])", [applicant.userId, [team.general_room_id, publicRoom.body.data.id, privateRoom.body.data.id]])).rows.map((row) => row.room_id);
+  assert.ok(memberships.includes(team.general_room_id));
+  assert.ok(memberships.includes(publicRoom.body.data.id));
+  assert.ok(!memberships.includes(privateRoom.body.data.id));
+  assert.equal((await request(`/teams/discovery-requests/${publicRoom.body.data.id}`, rejectedApplicant.token, "POST")).status, 202);
+  assert.equal((await request(`/teams/${team.id}/requests/${rejectedApplicant.userId}`, owner.token, "POST", { decision: "reject" })).status, 200);
+  assert.equal((await query("SELECT count(*)::int AS count FROM team_members WHERE team_id=$1 AND user_id=$2", [team.id, rejectedApplicant.userId])).rows[0].count, 0);
+  assert.equal((await query("SELECT status FROM team_join_requests WHERE team_id=$1 AND user_id=$2", [team.id, rejectedApplicant.userId])).rows[0].status, "rejected");
+});
+
+test("ownership transfer preserves one owner and grants the new owner administration in every team room", async () => {
+  const owner = await account();
+  const successor = await account();
+  const team = await createTeam(owner, "Transfer team");
+  await acceptTeamInvite(owner, team.id, successor);
+  const extraRoom = await request(`/teams/${team.id}/rooms`, owner.token, "POST", { name: "Operations", type: "group" });
+  assert.equal(extraRoom.status, 201);
+  assert.equal((await request(`/teams/${team.id}/transfer-owner`, owner.token, "POST", { userId: successor.userId })).status, 200);
+  const roles = await query("SELECT user_id,role FROM team_members WHERE team_id=$1 ORDER BY user_id", [team.id]);
+  assert.equal(roles.rows.filter((row) => row.role === "owner").length, 1);
+  assert.equal(roles.rows.find((row) => row.user_id === successor.userId).role, "owner");
+  assert.equal(roles.rows.find((row) => row.user_id === owner.userId).role, "member");
+  const grants = await query(`SELECT r.id,rm.role,rm.team_owner_grant FROM rooms r
+    JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$2 WHERE r.team_id=$1`, [team.id, successor.userId]);
+  assert.equal(grants.rowCount, 2);
+  assert.ok(grants.rows.every((row) => row.role === "admin" && row.team_owner_grant));
+  assert.equal((await request(`/teams/${team.id}/leave`, successor.token, "POST")).status, 409);
+});
+
+test("team removal immediately revokes API and socket access on every server", async () => {
+  const owner = await account();
+  const member = await account();
+  const secondSession = await session(member.userId);
+  const team = await createTeam(owner, "Removal team");
+  await acceptTeamInvite(owner, team.id, member);
+  const a = await open(member.token, 0);
+  const b = await open(secondSession.token, 1);
+  for (const socket of [a, b]) assert.equal((await ack(socket, "join-room", { roomId: team.general_room_id })).ok, true);
+  const resyncA = event(a, "room:resync");
+  const resyncB = event(b, "room:resync");
+  const removed = await request(`/teams/${team.id}/members/${member.userId}`, owner.token, "DELETE");
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.equal((await resyncA).roomId, team.general_room_id);
+  assert.equal((await resyncB).roomId, team.general_room_id);
+  assert.equal((await request(`/messages/room/${team.general_room_id}`, member.token)).status, 403);
+  assert.equal((await ack(a, "join-room", { roomId: team.general_room_id })).status, 403);
+  assert.equal((await ack(b, "send-message", { roomId: team.general_room_id, content: "revoked" })).status, 403);
+  for (const server of servers)
+    assert.ok(!(await server.io.in(team.general_room_id).fetchSockets()).some((socket) => socket.data.userId === member.userId));
+});
+
+test("team archive blocks mutations and restoration resumes authorized work", async () => {
+  const owner = await account();
+  const team = await createTeam(owner, "Archive team");
+  const roomResponse = await request(`/teams/${team.id}/rooms`, owner.token, "POST", { name: "Delivery", type: "group" });
+  const roomId = roomResponse.body.data.id;
+  const project = await request(`/teams/${team.id}/projects`, owner.token, "POST", { name: "Release", roomIds: [roomId] });
+  assert.equal(project.status, 201);
+  assert.equal((await request(`/teams/${team.id}/archive`, owner.token, "POST")).status, 200);
+  assert.equal((await request(`/teams/${team.id}`, owner.token)).status, 200);
+  assert.equal((await request(`/teams/${team.id}/rooms`, owner.token, "POST", { name: "Blocked", type: "group" })).status, 409);
+  assert.equal((await request(`/teams/${team.id}/projects`, owner.token, "POST", { name: "Blocked project", roomIds: [roomId] })).status, 409);
+  assert.equal((await request("/messages", owner.token, "POST", { roomId, clientId: randomUUID(), content: "blocked" })).status, 400);
+  assert.equal((await request("/tasks", owner.token, "POST", { roomId, clientId: randomUUID(), title: "Blocked task" })).status, 400);
+  assert.equal((await request("/decisions", owner.token, "POST", { roomId, clientId: randomUUID(), title: "Blocked decision", body: "Must not be recorded", tags: [] })).status, 400);
+  assert.equal((await request(`/work/projects/${project.body.data.id}`, owner.token, "PATCH", { name: "Blocked rename", description: "", status: "active" })).status, 409);
+  assert.equal((await request(`/work/projects/${project.body.data.id}/automations`, owner.token, "POST", { triggerKind: "decision_recorded" })).status, 409);
+  assert.equal((await request(`/work/rooms/${roomId}/brief`, owner.token, "PUT", { body: "Blocked brief", version: null })).status, 409);
+  assert.equal((await request(`/teams/${team.id}/restore`, owner.token, "POST")).status, 200);
+  assert.equal((await request("/messages", owner.token, "POST", { roomId, clientId: randomUUID(), content: "restored" })).status, 201);
+  assert.equal((await request(`/work/projects/${project.body.data.id}`, owner.token, "PATCH", { name: "Restored release", description: "", status: "active" })).status, 200);
+});
+
+test("moderation inbox denies ordinary users and room admins and audits private report review", async () => {
+  const reporter = await account();
+  const target = await account();
+  const outsider = await account();
+  const moderator = await account();
+  await query("UPDATE users SET role_id=(SELECT id FROM roles WHERE name='moderator') WHERE id=$1", [moderator.userId]);
+  const roomId = await room(reporter, target);
+  const sent = await request("/messages", reporter.token, "POST", {
+    roomId,
+    clientId: randomUUID(),
+    content: "Safety report bounded context",
+  });
+  assert.equal(sent.status, 201);
+  const report = await request(`/users/${target.userId}/report`, reporter.token, "POST", {
+    reason: "harassment",
+    details: "Please review this conversation.",
+    roomId,
+  });
+  assert.equal(report.status, 201);
+  assert.equal((await request("/moderation/reports", reporter.token)).status, 403);
+  assert.equal((await request("/moderation/reports", target.token)).status, 403);
+  assert.equal((await request("/moderation/reports", outsider.token)).status, 403);
+  assert.equal((await request("/moderation/storage", outsider.token)).status, 403);
+  const listed = await request("/moderation/reports", moderator.token);
+  assert.equal(listed.status, 200, JSON.stringify(listed.body));
+  const storage = await request("/moderation/storage", moderator.token);
+  assert.equal(storage.status, 200, JSON.stringify(storage.body));
+  assert.equal(Number.isFinite(storage.body.data.usage.total_gb), true);
+  const item = listed.body.data.reports.find((entry) => entry.id === report.body.data.id);
+  assert.ok(item);
+  assert.equal(Object.hasOwn(item, "reporter_id"), false);
+  const detail = await request(`/moderation/reports/${report.body.data.id}`, moderator.token);
+  assert.equal(detail.status, 200);
+  assert.equal(Object.hasOwn(detail.body.data, "reporter_id"), false);
+  assert.ok(detail.body.data.context.some((message) => message.id === sent.body.data.id));
+  assert.ok(detail.body.data.audit.some((entry) => entry.action === "report_viewed"));
+
+  const transitions = await Promise.all([
+    request(`/moderation/reports/${report.body.data.id}`, moderator.token, "PATCH", {
+      expectedStatus: "open", status: "reviewed", reason: "Evidence reviewed by moderator",
+    }),
+    request(`/moderation/reports/${report.body.data.id}`, moderator.token, "PATCH", {
+      expectedStatus: "open", status: "dismissed", reason: "Evidence reviewed by moderator",
+    }),
+  ]);
+  assert.deepEqual(transitions.map((response) => response.status).sort(), [200, 409]);
+  const finalStatus = (await query("SELECT status FROM user_reports WHERE id=$1", [report.body.data.id])).rows[0].status;
+  assert.ok(["reviewed", "dismissed"].includes(finalStatus));
+  assert.equal((await query("SELECT count(*)::int AS count FROM moderation_audit WHERE report_id=$1 AND action='report_transition'", [report.body.data.id])).rows[0].count, 1);
+});
+
+test("beta signup cap and kill switch reject new accounts before creating them", async () => {
+  const env = require("../src/config/env");
+  const prior = { ...env.beta };
+  try {
+    const active = Number((await query("SELECT count(*)::int AS count FROM users WHERE deleted_at IS NULL")).rows[0].count);
+    env.beta.maxActiveAccounts = active;
+    env.beta.signupsEnabled = true;
+    const capped = await request("/auth/register", null, "POST", {
+      displayName: `Capped ${randomUUID()}`,
+      email: `${randomUUID()}@signup.test`,
+      password: "Safe signup passphrase 2026!",
+      website: "",
+    });
+    assert.equal(capped.status, 403);
+    assert.match(capped.body.message, /cohort is currently full/i);
+
+    env.beta.maxActiveAccounts = active + 1;
+    env.beta.signupsEnabled = false;
+    const paused = await request("/auth/register", null, "POST", {
+      displayName: `Paused ${randomUUID()}`,
+      email: `${randomUUID()}@signup.test`,
+      password: "Safe signup passphrase 2026!",
+      website: "",
+    });
+    assert.equal(paused.status, 403);
+    assert.match(paused.body.message, /registration is closed/i);
+  } finally {
+    Object.assign(env.beta, prior);
+  }
+});
+
+test("account suspension revokes all sessions and restoration allows a fresh login", async () => {
+  const moderator = await account();
+  const target = await account();
+  const password = "Moderation lifecycle passphrase 2026!";
+  await query("UPDATE users SET role_id=(SELECT id FROM roles WHERE name='moderator') WHERE id=$1", [moderator.userId]);
+  await query("UPDATE users SET password_hash=$2 WHERE id=$1", [target.userId, await require("bcrypt").hash(password, 4)]);
+  const secondSession = await session(target.userId);
+  const roomId = await room(moderator, target);
+  const firstSocket = await open(target.token, 0);
+  const secondSocket = await open(secondSession.token, 1);
+  for (const socket of [firstSocket, secondSocket])
+    assert.equal((await ack(socket, "join-room", { roomId })).ok, true);
+
+  assert.equal((await request(`/moderation/users/${target.userId}/suspend`, moderator.token, "POST", {
+    reason: "Confirmed repeated abuse reports",
+  })).status, 200);
+  assert.equal((await request("/users/me", target.token)).status, 403);
+  assert.equal((await request("/auth/refresh", null, "POST", { refreshToken: target.refreshToken })).status, 401);
+  assert.equal((await request("/auth/login", null, "POST", {
+    email: `${target.userId}@security.test`, password,
+  })).status, 401);
+  for (const socket of [firstSocket, secondSocket]) {
+    assert.equal(socket.connected, false);
+  }
+  const audit = await query("SELECT action,reason FROM moderation_audit WHERE subject_user_id=$1 AND action='account_suspended'", [target.userId]);
+  assert.equal(audit.rowCount, 1);
+  assert.equal(audit.rows[0].reason, "Confirmed repeated abuse reports");
+
+  assert.equal((await request(`/moderation/users/${target.userId}/restore`, moderator.token, "POST", {
+    reason: "Appeal reviewed; access restored",
+  })).status, 200);
+  const login = await request("/auth/login", null, "POST", { email: `${target.userId}@security.test`, password });
+  assert.equal(login.status, 200, JSON.stringify(login.body));
+  assert.equal((await request("/users/me", login.body.data.accessToken)).status, 200);
+  assert.equal((await query("SELECT suspended_at FROM users WHERE id=$1", [target.userId])).rows[0].suspended_at, null);
 });
 
 test("account mail is queued encrypted, retries provider failure, and clears token-bearing payload after delivery", async () => {
@@ -3215,4 +3515,200 @@ test('indicator budget is shared by sockets reusing one session across servers',
     assert.equal(result.ok, true, JSON.stringify(result));
   }
   assert.equal((await ack(b, 'typing', { roomId: id })).status, 429);
+});
+
+test("project creation requires valid initial rooms and enforces role-based visibility", async () => {
+  const owner = await account();
+  const adminMember = await account();
+  const ordinaryMember = await account();
+  const team = await createTeam(owner, "Project policy team");
+  const otherTeam = await createTeam(owner, "Other project team");
+  await acceptTeamInvite(owner, team.id, adminMember);
+  await acceptTeamInvite(owner, team.id, ordinaryMember);
+  assert.equal((await request(`/teams/${team.id}/members/${adminMember.userId}`, owner.token, "PATCH", { role: "admin" })).status, 200);
+  const restrictedRoom = await request(`/teams/${team.id}/rooms`, owner.token, "POST", { name: "Leadership", type: "group" });
+  assert.equal(restrictedRoom.status, 201);
+
+  assert.equal((await request(`/teams/${team.id}/projects`, owner.token, "POST", {
+    name: "Duplicate selection",
+    roomIds: [restrictedRoom.body.data.id, restrictedRoom.body.data.id],
+  })).status, 400);
+  assert.equal((await request(`/teams/${team.id}/projects`, owner.token, "POST", {
+    name: "Cross team selection",
+    roomIds: [restrictedRoom.body.data.id, otherTeam.general_room_id],
+  })).status, 403);
+  assert.equal((await request(`/teams/${team.id}/projects`, ordinaryMember.token, "POST", {
+    name: "Member project",
+    roomIds: [team.general_room_id],
+  })).status, 403);
+
+  const created = await request(`/teams/${team.id}/projects`, owner.token, "POST", {
+    name: "Private roadmap",
+    description: "Visible by policy",
+    roomIds: [restrictedRoom.body.data.id],
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const projectId = created.body.data.id;
+  assert.equal((await request(`/work/projects/${projectId}/rooms`, owner.token, "POST", {
+    roomId: restrictedRoom.body.data.id,
+  })).status, 409);
+  assert.equal((await request(`/work/projects/${projectId}/rooms`, owner.token, "POST", {
+    roomId: otherTeam.general_room_id,
+  })).status, 409);
+  assert.equal((await request(`/work/projects/${projectId}`, owner.token)).status, 200);
+  assert.equal((await request(`/work/projects/${projectId}`, adminMember.token)).status, 200);
+  assert.equal((await request(`/work/projects/${projectId}`, ordinaryMember.token)).status, 404);
+  const adminList = await request("/work/projects", adminMember.token);
+  const memberList = await request("/work/projects", ordinaryMember.token);
+  assert.ok(adminList.body.data.projects.some((project) => project.id === projectId && project.can_manage));
+  assert.ok(!memberList.body.data.projects.some((project) => project.id === projectId));
+  assert.equal((await request(`/work/projects/${projectId}`, adminMember.token, "PATCH", {
+    name: "Admin managed roadmap",
+    description: "Updated by another administrator",
+    status: "completed",
+  })).status, 200);
+  assert.equal((await request(`/teams/${team.id}/members/${adminMember.userId}`, owner.token, "DELETE")).status, 200);
+  assert.equal((await request(`/work/projects/${projectId}`, adminMember.token)).status, 404);
+  assert.ok(!(await request("/work/projects", adminMember.token)).body.data.projects.some((project) => project.id === projectId));
+});
+
+test("project milestones and dependencies cleanly detach with a removed room", async () => {
+  const owner = await account();
+  const team = await createTeam(owner, "Project cleanup team");
+  const extraRoom = await request(`/teams/${team.id}/rooms`, owner.token, "POST", { name: "Execution", type: "group" });
+  const project = await request(`/teams/${team.id}/projects`, owner.token, "POST", {
+    name: "Delivery plan",
+    roomIds: [team.general_room_id, extraRoom.body.data.id],
+  });
+  assert.equal(project.status, 201, JSON.stringify(project.body));
+  const projectId = project.body.data.id;
+  const milestone = await request(`/work/projects/${projectId}/milestones`, owner.token, "POST", {
+    title: "Beta gate",
+    dueDate: "2026-12-15",
+  });
+  assert.equal(milestone.status, 201);
+  const keptTask = await request("/tasks", owner.token, "POST", {
+    roomId: team.general_room_id,
+    clientId: randomUUID(),
+    title: "Kept task",
+  });
+  const detachedTask = await request("/tasks", owner.token, "POST", {
+    roomId: extraRoom.body.data.id,
+    clientId: randomUUID(),
+    title: "Detached task",
+  });
+  assert.equal(keptTask.status, 201);
+  assert.equal(detachedTask.status, 201);
+  for (const taskId of [keptTask.body.data.id, detachedTask.body.data.id])
+    assert.equal((await request(`/work/tasks/${taskId}/milestone`, owner.token, "PATCH", { milestoneId: milestone.body.data.id })).status, 200);
+  assert.equal((await request(`/work/tasks/${detachedTask.body.data.id}/dependencies`, owner.token, "POST", {
+    dependsOnId: keptTask.body.data.id,
+  })).status, 201);
+  assert.equal((await request(`/work/tasks/${keptTask.body.data.id}/dependencies`, owner.token, "POST", {
+    dependsOnId: detachedTask.body.data.id,
+  })).status, 409);
+  assert.equal((await request(`/work/projects/${projectId}/milestones/${milestone.body.data.id}`, owner.token, "PATCH", {
+    title: "Beta gate",
+    dueDate: "2026-12-15",
+    completed: true,
+  })).status, 200);
+  assert.equal((await request(`/work/projects/${projectId}/rooms/${extraRoom.body.data.id}`, owner.token, "DELETE")).status, 200);
+
+  const detached = (await query("SELECT project_id,milestone_id FROM tasks WHERE id=$1", [detachedTask.body.data.id])).rows[0];
+  const kept = (await query("SELECT project_id,milestone_id FROM tasks WHERE id=$1", [keptTask.body.data.id])).rows[0];
+  assert.equal(detached.project_id, null);
+  assert.equal(detached.milestone_id, null);
+  assert.equal(kept.project_id, projectId);
+  assert.equal(kept.milestone_id, milestone.body.data.id);
+  assert.equal((await query("SELECT count(*)::int AS count FROM task_dependencies WHERE task_id=$1 OR depends_on_id=$1", [detachedTask.body.data.id])).rows[0].count, 0);
+  assert.equal((await query("SELECT count(*)::int AS count FROM project_rooms WHERE project_id=$1", [projectId])).rows[0].count, 1);
+});
+
+test("room brief updates use optimistic concurrency and preserve revisions", async () => {
+  const owner = await account();
+  const team = await createTeam(owner, "Brief concurrency team");
+  const initial = await request(`/work/rooms/${team.general_room_id}/brief`, owner.token, "PUT", {
+    body: "Initial project brief",
+    version: null,
+  });
+  assert.equal(initial.status, 200, JSON.stringify(initial.body));
+  assert.equal(initial.body.data.version, 1);
+  const updates = await Promise.all([
+    request(`/work/rooms/${team.general_room_id}/brief`, owner.token, "PUT", { body: "Editor A", version: 1 }),
+    request(`/work/rooms/${team.general_room_id}/brief`, owner.token, "PUT", { body: "Editor B", version: 1 }),
+  ]);
+  assert.deepEqual(updates.map((response) => response.status).sort(), [200, 409]);
+  const current = await request(`/work/rooms/${team.general_room_id}/brief`, owner.token);
+  assert.equal(current.body.data.brief.version, 2);
+  assert.equal(current.body.data.revisions.length, 2);
+  assert.ok(["Editor A", "Editor B"].includes(current.body.data.brief.body));
+});
+
+test("project automation claims each event once across competing workers", async () => {
+  const owner = await account();
+  const team = await createTeam(owner, "Automation team");
+  const project = await request(`/teams/${team.id}/projects`, owner.token, "POST", {
+    name: "Automated follow-up",
+    roomIds: [team.general_room_id],
+  });
+  const rule = await request(`/work/projects/${project.body.data.id}/automations`, owner.token, "POST", {
+    triggerKind: "decision_recorded",
+    titlePrefix: "Follow up:",
+  });
+  assert.equal(rule.status, 201, JSON.stringify(rule.body));
+  const decision = await request("/decisions", owner.token, "POST", {
+    roomId: team.general_room_id,
+    clientId: randomUUID(),
+    title: "Ship the beta",
+    body: "Proceed with the controlled cohort.",
+    tags: ["beta"],
+  });
+  assert.equal(decision.status, 201);
+  const automation = require("../src/services/projectAutomation.service");
+  await Promise.all([automation.run(servers[0].io), automation.run(servers[1].io)]);
+  const eventKey = `decision:${decision.body.data.id}`;
+  assert.equal((await query("SELECT count(*)::int AS count FROM project_automation_runs WHERE rule_id=$1 AND event_key=$2", [rule.body.data.id, eventKey])).rows[0].count, 1);
+  const generated = await query("SELECT id,project_id,decision_id FROM tasks WHERE decision_id=$1 AND project_id=$2", [decision.body.data.id, project.body.data.id]);
+  assert.equal(generated.rowCount, 1);
+  await automation.run(servers[0].io);
+  assert.equal((await query("SELECT count(*)::int AS count FROM tasks WHERE decision_id=$1 AND project_id=$2", [decision.body.data.id, project.body.data.id])).rows[0].count, 1);
+});
+
+test("work inbox and search immediately follow content and membership changes", async () => {
+  const owner = await account();
+  const member = await account();
+  const team = await createTeam(owner, "Work discovery team");
+  await acceptTeamInvite(owner, team.id, member);
+  const message = await request("/messages", owner.token, "POST", {
+    roomId: team.general_room_id,
+    clientId: randomUUID(),
+    content: "LifecycleNeedle launch context",
+  });
+  const task = await request("/tasks", owner.token, "POST", {
+    roomId: team.general_room_id,
+    clientId: randomUUID(),
+    title: "LifecycleNeedle follow-up",
+    assigneeId: member.userId,
+  });
+  assert.equal(message.status, 201);
+  assert.equal(task.status, 201);
+  const beforeSearch = await request("/work/search?q=LifecycleNeedle", member.token);
+  const beforeInbox = await request("/work/inbox", member.token);
+  assert.ok(beforeSearch.body.data.items.some((item) => item.id === message.body.data.id));
+  assert.ok(beforeSearch.body.data.items.some((item) => item.id === task.body.data.id));
+  assert.ok(beforeInbox.body.data.items.some((item) => item.event_key === `assignment:${task.body.data.id}`));
+
+  assert.equal((await request(`/messages/${message.body.data.id}`, owner.token, "DELETE")).status, 200);
+  assert.equal((await request(`/tasks/${task.body.data.id}/status`, member.token, "PATCH", { status: "done" })).status, 200);
+  const afterContentSearch = await request("/work/search?q=LifecycleNeedle", member.token);
+  const afterContentInbox = await request("/work/inbox", member.token);
+  assert.ok(!afterContentSearch.body.data.items.some((item) => item.id === message.body.data.id));
+  assert.ok(afterContentSearch.body.data.items.some((item) => item.id === task.body.data.id));
+  assert.ok(!afterContentInbox.body.data.items.some((item) => item.id === task.body.data.id));
+
+  assert.equal((await request(`/teams/${team.id}/members/${member.userId}`, owner.token, "DELETE")).status, 200);
+  const afterRemovalSearch = await request("/work/search?q=LifecycleNeedle", member.token);
+  const afterRemovalInbox = await request("/work/inbox", member.token);
+  assert.ok(!afterRemovalSearch.body.data.items.some((item) => item.room_id === team.general_room_id));
+  assert.ok(!afterRemovalInbox.body.data.items.some((item) => item.room_id === team.general_room_id));
 });

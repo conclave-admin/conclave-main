@@ -4,6 +4,11 @@ const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
 const r2 = require("../config/r2");
 const presence = require("../services/presence.service");
+const {
+  MAX_DISPLAY_NAME_LENGTH,
+  validateDisplayName,
+  identityCollisionError,
+} = require("../utils/userIdentity");
 
 const UPDATABLE_FIELDS = ["display_name", "avatar_url", "bio"];
 const PAGE_SIZE = 25;
@@ -55,7 +60,7 @@ const getAvatarUrl = asyncHandler(async (req, res) => {
 // Per-field length ceilings. Without these, updateProfile accepted an
 // arbitrarily long avatar_url or bio (BACKEND_TASKS.md Bug 15).
 const FIELD_LIMITS = {
-  display_name: 100,
+  display_name: MAX_DISPLAY_NAME_LENGTH,
   avatar_url: 2048,
   bio: 1000,
 };
@@ -109,8 +114,20 @@ const updateProfile = asyncHandler(async (req, res) => {
     );
   }
 
-  if ("display_name" in updates && !String(updates.display_name).trim()) {
-    throw new ApiError(400, "display_name cannot be empty");
+  if ("display_name" in updates) {
+    updates.display_name = validateDisplayName(
+      updates.display_name,
+      "display_name",
+    );
+    const collision = await query(
+      `SELECT 1 FROM users
+       WHERE deleted_at IS NULL AND id <> $1
+         AND lower(btrim(display_name)) = lower($2)`,
+      [req.user.id, updates.display_name],
+    );
+    if (collision.rows.length) {
+      throw new ApiError(409, "That display name is already taken");
+    }
   }
 
   for (const [field, value] of Object.entries(updates)) {
@@ -129,17 +146,22 @@ const updateProfile = asyncHandler(async (req, res) => {
   let i = 1;
   for (const [field, value] of Object.entries(updates)) {
     setClauses.push(`${field} = $${i}`);
-    values.push(field === "display_name" ? String(value).trim() : value);
+    values.push(value);
     i += 1;
   }
   values.push(req.user.id);
 
   // 3. Apply the update, return the fresh row
-  const result = await query(
-    `UPDATE users SET ${setClauses.join(", ")} WHERE id = $${i}
-     RETURNING id, email, display_name, avatar_url, bio, created_at`,
-    values,
-  );
+  let result;
+  try {
+    result = await query(
+      `UPDATE users SET ${setClauses.join(", ")} WHERE id = $${i}
+       RETURNING id, email, display_name, avatar_url, bio, created_at`,
+      values,
+    );
+  } catch (error) {
+    throw identityCollisionError(error) || error;
+  }
 
   if (result.rows.length === 0) {
     throw new ApiError(404, "User not found");

@@ -3,6 +3,14 @@ require("dotenv").config();
 module.exports = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: process.env.PORT || 7000,
+  trustProxyHops: Math.max(0, Number.parseInt(process.env.TRUST_PROXY_HOPS || "0", 10) || 0),
+  beta: {
+    signupsEnabled: process.env.BETA_SIGNUPS_ENABLED !== "false",
+    maxActiveAccounts: Math.max(1, Number.parseInt(process.env.BETA_MAX_ACTIVE_ACCOUNTS || "250", 10) || 250),
+    storageAlertGb: Math.max(0, Number.parseFloat(process.env.BETA_STORAGE_ALERT_GB || "50") || 0),
+    storageUsdPerGbMonth: Math.max(0, Number.parseFloat(process.env.BETA_STORAGE_USD_PER_GB_MONTH || "0") || 0),
+    storageMonthlyBudgetUsd: Math.max(0, Number.parseFloat(process.env.BETA_STORAGE_MONTHLY_BUDGET_USD || "0") || 0),
+  },
   clientOrigin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
   databaseUrl: process.env.DATABASE_URL,
   redisUrl: process.env.REDIS_URL,
