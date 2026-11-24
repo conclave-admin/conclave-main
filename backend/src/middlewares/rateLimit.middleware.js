@@ -50,7 +50,7 @@ function rateLimit({
 }
 
 async function consumeShared(id, { windowMs = 60_000, max = 30 } = {}) {
-  if (!redisClient.isReady) {
+  if (!isRedisReady()) {
     if (process.env.NODE_ENV === "production")
       throw new Error("Redis rate-limit store is unavailable");
     return consume(id, { windowMs, max });
@@ -69,7 +69,7 @@ async function consumeShared(id, { windowMs = 60_000, max = 30 } = {}) {
       ),
     undefined,
   );
-  if (count === undefined) return consume(id, { windowMs, max });
+  if (count == null) throw new Error("Redis rate-limit command failed");
   return Number(count) <= max;
 }
 

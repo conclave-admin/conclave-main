@@ -30,7 +30,7 @@ import PopoverMenu from "@/components/ui/PopoverMenu";
  * phase 6 for exactly this). Before that endpoint existed the chip linked to
  * the board, which made a pin a suggestion rather than a destination.
  */
-export default function PinnedDecisionStrip({ roomId }) {
+export default function PinnedDecisionStrip({ roomId, embedded = false }) {
   const [decisions, setDecisions] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [menuFor, setMenuFor] = useState(null);
@@ -162,9 +162,9 @@ export default function PinnedDecisionStrip({ roomId }) {
   };
 
   return (
-    <div className="shrink-0 border-b border-line bg-surface px-4 py-2 md:px-7">
+    <div className={`${embedded ? "pinned-items-content" : "shrink-0 border-b border-line bg-surface"} px-4 py-2 md:px-7`}>
       <div className="flex items-center gap-2">
-        <span className="shrink-0 text-metadata text-muted">Pinned</span>
+        <span className="shrink-0 text-metadata text-muted">{embedded ? `Decisions · ${pinned.length}` : "Pinned"}</span>
         <ul className="scrollbar-none flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
           {pinned.map((decision) => {
             const isRoomPinned = Boolean(decision.pins?.room);

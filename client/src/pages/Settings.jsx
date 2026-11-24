@@ -56,6 +56,14 @@ const TYPES = [
   { value: "decision", label: "Decision changes" },
 ];
 
+const SETTINGS_SECTIONS = [
+  ["appearance", "Appearance"],
+  ["notifications", "Notifications"],
+  ["media", "Media"],
+  ["privacy", "Privacy & security"],
+  ["attention", "Focus"],
+];
+
 /**
  * Settings — appearance and notifications.
  *
@@ -82,6 +90,7 @@ export default function Settings() {
   const [mediaPreferences, setMediaPreferences] = useState(getMediaPreferences);
   const [storageBytes, setStorageBytes] = useState(0);
   const [downloadedFiles, setDownloadedFiles] = useState([]);
+  const [activeSection, setActiveSection] = useState("appearance");
 
   useEffect(() => {
     setRoomHeader("Settings");
@@ -102,6 +111,24 @@ export default function Settings() {
       window.removeEventListener("conclave:preferences-changed", refresh);
     };
   }, []);
+
+  useEffect(() => {
+    if (isLoading) return undefined;
+    const scroller = document.querySelector(".settings-page")?.closest(".app-page");
+    if (!scroller) return undefined;
+    const updateActiveSection = () => {
+      const top = scroller.getBoundingClientRect().top + 96;
+      let current = SETTINGS_SECTIONS[0][0];
+      for (const [id] of SETTINGS_SECTIONS) {
+        const section = document.getElementById(`settings-${id}`);
+        if (section && section.getBoundingClientRect().top <= top) current = id;
+      }
+      setActiveSection(current);
+    };
+    updateActiveSection();
+    scroller.addEventListener("scroll", updateActiveSection, { passive: true });
+    return () => scroller.removeEventListener("scroll", updateActiveSection);
+  }, [isLoading]);
 
   useEffect(() => {
     let active = true;
@@ -178,20 +205,16 @@ export default function Settings() {
 
       <nav
         aria-label="Settings sections"
-        className="settings-navigation mt-5 flex gap-2 overflow-x-auto pb-2"
+        className="settings-navigation mt-5 grid grid-cols-2 gap-2 md:flex md:overflow-x-auto md:pb-2"
       >
-        {[
-          ["appearance", "Appearance"],
-          ["notifications", "Notifications"],
-          ["privacy", "Privacy & security"],
-          ["attention", "Focus"],
-          ["media", "Media"],
-        ].map(([id, label]) => (
+        {SETTINGS_SECTIONS.map(([id, label], index) => (
           <button
             key={id}
             type="button"
-            className="min-h-10 shrink-0 rounded-full border border-line bg-surface px-3 text-label text-ink hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+            aria-current={activeSection === id ? "location" : undefined}
+            className={`min-h-11 rounded-xl border px-3 text-label transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand md:min-h-10 md:shrink-0 md:rounded-full ${index === SETTINGS_SECTIONS.length - 1 ? "col-span-2 md:col-span-1" : ""} ${activeSection === id ? "border-brand bg-brand-soft text-brand" : "border-line bg-surface text-ink hover:bg-canvas"}`}
             onClick={() => {
+              setActiveSection(id);
               const target = document.getElementById(`settings-${id}`);
               target?.scrollIntoView({
                 behavior: window.matchMedia("(prefers-reduced-motion: reduce)")

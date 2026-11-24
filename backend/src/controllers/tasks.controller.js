@@ -161,6 +161,21 @@ const listTasks = asyncHandler(async (req, res) => {
   if (assigneeId) { params.push(assigneeId); where.push(`t.assignee_id=$${params.length}`); }
   if (decisionId) { params.push(decisionId); where.push(`t.decision_id=$${params.length}`); }
   if (projectId) { params.push(projectId); where.push(`t.project_id=$${params.length}`); }
+  // Counts describe the complete selected scope, not the current cursor page.
+  // Keep this query before the cursor condition so page two reports the same
+  // totals as page one and an assignee filter can find work beyond page one.
+  const countParams = [...params];
+  const countWhere = [...where];
+  const totals = await query(
+    `SELECT
+       COUNT(*) FILTER (WHERE t.status='open')::integer AS open,
+       COUNT(*) FILTER (WHERE t.status='in_progress')::integer AS in_progress,
+       COUNT(*) FILTER (WHERE t.status='done')::integer AS done
+     FROM tasks t
+     JOIN room_members rm ON rm.room_id=t.room_id AND rm.user_id=$1
+     ${countWhere.length ? `WHERE ${countWhere.join(" AND ")}` : ""}`,
+    countParams,
+  );
   if (before) {
     let cursor;
     try { cursor = JSON.parse(Buffer.from(before, "base64url").toString("utf8")); }
@@ -184,7 +199,7 @@ const listTasks = asyncHandler(async (req, res) => {
   );
   const tasks = result.rows.slice(0, PAGE_SIZE);
   const last = tasks.at(-1);
-  return ok(res, { tasks, nextCursor: result.rowCount > PAGE_SIZE
+  return ok(res, { tasks, counts: totals.rows[0], nextCursor: result.rowCount > PAGE_SIZE
     ? Buffer.from(JSON.stringify({ due_date: last.due_date, created_at: last.created_at, id: last.id })).toString("base64url") : null });
 });
 

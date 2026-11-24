@@ -57,7 +57,7 @@ function useObjectUrl(blob) {
   return url;
 }
 
-function DownloadState({ download, attachment }) {
+function DownloadState({ download, attachment, compact = false }) {
   const { status, error, start, cancel } = download;
   // Background transfers and completed downloads do not interrupt the conversation.
   if (status === "downloaded" || download.automatic) return null;
@@ -70,34 +70,44 @@ function DownloadState({ download, attachment }) {
   return (
     <div
       data-download-state={status}
-      className="min-w-0 text-metadata text-muted"
+      className={compact ? "media-download-state" : "min-w-0 text-metadata text-muted"}
     >
       {status === "downloading" && (
-        <>
-          <button
-            type="button"
-            onClick={cancel}
-            className="mt-1 text-brand hover:underline"
-            aria-label={`Cancel download ${attachment.filename}`}
-          >
-            Cancel download
-          </button>
-        </>
+        <button
+          type="button"
+          onClick={cancel}
+          className={compact ? "rounded-full bg-black/70 px-2.5 py-1 text-[11px] text-white" : "mt-1 text-brand hover:underline"}
+          aria-label={`Cancel download ${attachment.filename}`}
+        >
+          {compact ? "Cancel" : "Cancel download"}
+        </button>
       )}
       {status === "failed" && (
-        <>
-          <p role="alert" className="break-words text-error">
-            {error}
-          </p>
+        compact ? (
           <button
             type="button"
             onClick={start}
-            className="mt-1 text-brand hover:underline"
+            title={error || "Download failed"}
+            className="rounded-full bg-black/70 px-2.5 py-1 text-[11px] text-white"
             aria-label={`Retry download ${attachment.filename}`}
           >
-            Retry download
+            Retry
           </button>
-        </>
+        ) : (
+          <>
+            <p role="alert" className="break-words text-error">
+              {error}
+            </p>
+            <button
+              type="button"
+              onClick={start}
+              className="mt-1 text-brand hover:underline"
+              aria-label={`Retry download ${attachment.filename}`}
+            >
+              Retry download
+            </button>
+          </>
+        )
       )}
     </div>
   );
@@ -522,9 +532,9 @@ function ImageAttachment({ attachment, tile = false }) {
           type="button"
           onClick={preview.retry}
           aria-label={`Retry preview ${attachment.filename}`}
-          className="py-1 text-metadata text-brand hover:underline"
+          className={tile ? "media-preview-retry rounded-full bg-black/70 px-2.5 py-1 text-[11px] text-white" : "py-1 text-metadata text-brand hover:underline"}
         >
-          Retry preview
+          {tile ? "Retry" : "Retry preview"}
         </button>
       )}
       <DownloadState download={download} attachment={attachment} compact />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useOutletContext, useSearchParams } from "react-router-dom";
 import Page from "@/components/layout/Page";
 import Spinner from "@/components/ui/Spinner";
@@ -134,6 +134,7 @@ export default function Tasks() {
   const { rooms } = useChats();
   const { socket } = useRealtime();
   const [tasks, setTasks] = useState([]);
+  const [counts, setCounts] = useState({ open: 0, in_progress: 0, done: 0 });
   const [next, setNext] = useState(null);
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState(params.get("task"));
@@ -144,11 +145,33 @@ export default function Tasks() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  const requestVersion = useRef(0);
+  const assignedOnly = filter === "mine";
+  const assigneeId = assignedOnly ? user?.id : undefined;
   const refresh = useCallback(async () => {
-    try { const result = await listTasks({ decisionId }); setTasks(result.tasks); setNext(result.nextCursor); setError(""); }
-    catch (err) { setError(err.response?.data?.message || "Could not load tasks"); }
-    finally { setLoading(false); }
-  }, [decisionId]);
+    const version = ++requestVersion.current;
+    setLoading(true);
+    if (assignedOnly && !assigneeId) {
+      setTasks([]);
+      setCounts({ open: 0, in_progress: 0, done: 0 });
+      setNext(null);
+      setLoading(false);
+      return;
+    }
+    try {
+      const result = await listTasks({ decisionId, assigneeId });
+      if (version !== requestVersion.current) return;
+      setTasks(result.tasks);
+      setCounts(result.counts);
+      setNext(result.nextCursor);
+      setError("");
+    } catch (err) {
+      if (version === requestVersion.current)
+        setError(err.response?.data?.message || "Could not load tasks");
+    } finally {
+      if (version === requestVersion.current) setLoading(false);
+    }
+  }, [assignedOnly, assigneeId, decisionId]);
   useEffect(() => { setRoomHeader("Tasks"); return () => setRoomHeader(null); }, [setRoomHeader]);
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => {
@@ -157,25 +180,76 @@ export default function Tasks() {
     window.addEventListener("focus", changed);
     return () => { socket?.off("task:updated", changed); window.removeEventListener("focus", changed); };
   }, [socket, refresh]);
-  const visible = useMemo(() => tasks.filter((task) => filter !== "mine" || task.assignee_id === user?.id), [tasks, filter, user?.id]);
-  const counts = Object.fromEntries(COLUMNS.map((column) => [column.status, visible.filter((task) => task.status === column.status).length]));
   const loadMore = async () => {
     if (!next || loadingMore) return;
+    const version = requestVersion.current;
     setLoadingMore(true);
-    try { const result = await listTasks({ decisionId, before: next }); setTasks((current) => [...current, ...result.tasks.filter((task) => !current.some((item) => item.id === task.id))]); setNext(result.nextCursor); }
-    catch (err) { setError(err.response?.data?.message || "Could not load more tasks"); }
+    try {
+      const result = await listTasks({ decisionId, assigneeId, before: next });
+      if (version !== requestVersion.current) return;
+      setTasks((current) => [...current, ...result.tasks.filter((task) => !current.some((item) => item.id === task.id))]);
+      setCounts(result.counts);
+      setNext(result.nextCursor);
+    } catch (err) {
+      if (version === requestVersion.current)
+        setError(err.response?.data?.message || "Could not load more tasks");
+    }
     finally { setLoadingMore(false); }
   };
   return <Page width="board">
-    <div className="mb-7 rounded-2xl border border-line bg-surface p-5 md:p-7">
-      <div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-label text-brand">CONCLAVE WORK</p><h1 className="mt-2 text-h1 text-ink">Turn conversations into progress.</h1><p className="mt-2 text-body text-muted">Track ownership, deadlines and the updates behind every task.</p></div>
-        <div className="flex flex-wrap items-center gap-3"><Button onClick={() => { setNewTask({ roomId: rooms.find(() => true)?.id || "", title: "", body: "", dueDate: "", clientId: crypto.randomUUID() }); setCreateError(""); setCreating(true); }}>New task</Button><div className="flex rounded-xl bg-canvas p-1" role="group" aria-label="Task filter"><button className={`rounded-lg px-4 py-2 text-label ${filter === "all" ? "bg-brand text-white" : "text-muted"}`} onClick={() => setFilter("all")}>All tasks</button><button className={`rounded-lg px-4 py-2 text-label ${filter === "mine" ? "bg-brand text-white" : "text-muted"}`} onClick={() => setFilter("mine")}>Assigned to me</button></div></div></div>
-      <div className="mt-6 grid grid-cols-3 gap-3">{COLUMNS.map((column) => <div key={column.status} className="rounded-xl border border-line p-3"><div className={`h-1 w-9 rounded-full ${column.bar}`} /><p className="mt-3 text-h2 text-ink">{counts[column.status]}</p><p className="text-metadata text-muted">{column.label}</p></div>)}</div>
-    </div>
+    <header className="mb-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-h1 text-ink">Tasks</h1>
+          <p className="mt-1 text-body text-muted">Ownership, deadlines and progress.</p>
+        </div>
+        <Button
+          onClick={() => {
+            setNewTask({ roomId: rooms.find(() => true)?.id || "", title: "", body: "", dueDate: "", clientId: crypto.randomUUID() });
+            setCreateError("");
+            setCreating(true);
+          }}
+          className="shrink-0"
+        >
+          New task
+        </Button>
+      </div>
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex w-fit rounded-xl bg-canvas p-1" role="group" aria-label="Task filter">
+          <button
+            type="button"
+            aria-pressed={filter === "all"}
+            className={`rounded-lg px-4 py-2 text-label focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 ${filter === "all" ? "bg-brand text-white" : "text-muted hover:text-ink"}`}
+            onClick={() => setFilter("all")}
+          >
+            All tasks
+          </button>
+          <button
+            type="button"
+            aria-pressed={filter === "mine"}
+            className={`rounded-lg px-4 py-2 text-label focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 ${filter === "mine" ? "bg-brand text-white" : "text-muted hover:text-ink"}`}
+            onClick={() => setFilter("mine")}
+          >
+            Assigned to me
+          </button>
+        </div>
+        <dl className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" aria-label="Task status overview">
+          {COLUMNS.map((column) => (
+            <div key={column.status} className="flex shrink-0 items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5">
+              <dt className="flex items-center gap-2 text-metadata text-muted">
+                <span className={`h-2 w-2 rounded-full ${column.bar}`} aria-hidden="true" />
+                {column.label}
+              </dt>
+              <dd className="order-first text-sm font-semibold text-ink">{counts[column.status]}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </header>
     {decisionId && <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand/30 bg-brand/5 p-4 text-body text-ink"><span>Showing tasks linked to one decision</span><button type="button" className="text-label text-brand hover:underline" onClick={() => setParams((current) => { const nextParams = new URLSearchParams(current); nextParams.delete("decision"); return nextParams; })}>Show all tasks</button></div>}
     {error && <p role="alert" className="mb-4 rounded-lg bg-error/10 p-3 text-body text-error">{error}</p>}
-    {loading ? <Spinner label="Loading tasks" /> : visible.length === 0 ? <EmptyState title="No tasks here yet" description="Flag a conversation message as a task to give work an owner and a place to track progress." /> :
-      <div className="grid gap-5 md:grid-cols-3 md:items-start">{COLUMNS.map((column) => <section key={column.status} className="min-w-0 rounded-2xl bg-canvas p-3"><h2 className={`mb-4 flex items-center gap-2 text-h2 ${column.tone}`}><span className={`h-2 w-2 rounded-full ${column.bar}`} />{column.label} <span className="text-metadata text-muted">{counts[column.status]}</span></h2><div className="space-y-3">{visible.filter((task) => task.status === column.status).map((task) => <button type="button" key={task.id} onClick={() => setSelected(task.id)} className="w-full rounded-xl border border-line bg-surface p-4 text-left shadow-sm transition hover:border-brand hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30">
+    {loading ? <Spinner label="Loading tasks" /> : tasks.length === 0 ? <EmptyState title="No tasks here yet" description="Flag a conversation message as a task to give work an owner and a place to track progress." /> :
+      <div className="grid gap-5 md:grid-cols-3 md:items-start">{COLUMNS.map((column) => <section key={column.status} className="min-w-0 rounded-2xl bg-canvas p-3"><h2 className={`mb-4 flex items-center gap-2 text-h2 ${column.tone}`}><span className={`h-2 w-2 rounded-full ${column.bar}`} />{column.label} <span className="text-metadata text-muted">{counts[column.status]}</span></h2><div className="space-y-3">{tasks.filter((task) => task.status === column.status).map((task) => <button type="button" key={task.id} onClick={() => setSelected(task.id)} className="w-full rounded-xl border border-line bg-surface p-4 text-left shadow-sm transition hover:border-brand hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30">
         <span className="text-metadata text-brand">#{task.room_slug || task.room_name}</span>{task.decision_id && <span className="ml-2 text-metadata text-muted">From a decision</span>}<strong className="mt-2 block text-body text-ink [overflow-wrap:anywhere]">{task.title}</strong>{task.body && <span className="mt-1 block line-clamp-2 text-metadata text-muted">{task.body}</span>}
         <span className="mt-4 flex flex-wrap gap-2 text-metadata text-muted"><span>{task.assignee_name || "Unassigned"}</span><span aria-hidden="true">·</span><span className={isOverdue(task) ? "text-error" : ""}>{displayDate(task.due_date)}</span></span>
       </button>)}</div></section>)}</div>}

@@ -192,6 +192,59 @@ test.describe("static-audit suspicions, measured", () => {
     testInfo.skip(!isApp(testInfo.project.name), "needs the bypass-on server");
   });
 
+  test("UI-01 — a populated Decisions page shows a decision in the initial mobile viewport", async ({
+    page,
+  }, testInfo) => {
+    testInfo.skip(
+      testInfo.project.name !== "app-mobile",
+      "mobile viewport regression",
+    );
+
+    await page.goto("/decisions");
+    await settle(page);
+
+    await expect(page.getByRole("heading", { name: "Decisions" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New decision" })).toBeVisible();
+    await expect(page.getByRole("searchbox", { name: "Search" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: /^Conversation/ })).toBeVisible();
+
+    const firstDecision = page.locator("article").first();
+    await expect(firstDecision).toBeVisible();
+    const box = await firstDecision.boundingBox();
+    expect(box, "first decision should participate in layout").not.toBeNull();
+    expect(
+      box.y,
+      "the first decision should begin inside the initial 390×844 viewport",
+    ).toBeLessThan(844);
+  });
+
+  test("UI-02 — a populated Tasks page shows work in the initial mobile viewport", async ({
+    page,
+  }, testInfo) => {
+    testInfo.skip(
+      testInfo.project.name !== "app-mobile",
+      "mobile viewport regression",
+    );
+
+    await page.goto("/tasks");
+    await settle(page);
+
+    await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New task" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Task filter" })).toBeVisible();
+
+    const firstTask = page.getByRole("button", {
+      name: /Confirm production upload limits/,
+    });
+    await expect(firstTask).toBeVisible();
+    const box = await firstTask.boundingBox();
+    expect(box, "first task should participate in layout").not.toBeNull();
+    expect(
+      box.y,
+      "the first task should begin inside the initial 390×844 viewport",
+    ).toBeLessThan(844);
+  });
+
   /*
    * Locating a clipping ancestor by eye is unreliable — an element is clipped
    * by the first ancestor whose computed overflow is not `visible`, which is

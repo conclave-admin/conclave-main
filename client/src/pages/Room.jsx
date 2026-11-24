@@ -21,8 +21,7 @@ import FlagAsTaskDialog from "../components/chat/FlagAsTaskDialog";
 import CreatePollDialog from "../components/chat/CreatePollDialog";
 import MessageComposer from "../components/chat/MessageComposer";
 import MessageTimeline from "../components/chat/MessageTimeline";
-import PinnedDecisionStrip from "../components/chat/PinnedDecisionStrip";
-import PinnedMessagesPanel from "../components/chat/PinnedMessagesPanel";
+import PinnedItemsPanel from "../components/chat/PinnedItemsPanel";
 import PromoteToDecisionDialog from "../components/chat/PromoteToDecisionDialog";
 import RoomHeader from "../components/chat/RoomHeader";
 import Button from "../components/ui/Button";
@@ -537,23 +536,9 @@ export default function Room() {
           </p>
         </div>
       )}
-      {/*
-        Rows are addressed explicitly rather than by source order.
-        PinnedDecisionStrip returns null for any room with no pins, and a null
-        child is not a grid item — so auto-placement renumbered the remaining
-        two, putting the composer in the `1fr` row and the scroller in `auto`.
-        With no messages the scroller then collapsed to the empty state's
-        min-h-48 and the composer stretched over everything below it, floating
-        its own content at the top. Pinning row-start means the layout is the
-        same whether or not there are pins.
-
-        `minmax(0, 1fr)` rather than `1fr`: a bare `1fr` floors at `auto`, so a
-        long transcript can push the row open past the pane. 0 is the same guard
-        as `min-h-0` on the scroller, stated on the track itself.
-      */}
-      {/* Row-start on both, for the reason in the note below: a null child is
-          not a grid item, so auto-placement would renumber the rows when either
-          strip is empty. */}
+      {/* Explicit row placement keeps the timeline and composer stable when the
+          optional pinned area is absent. `minmax(0, 1fr)` also prevents a long
+          transcript from expanding the page beyond the conversation pane. */}
       <div className="row-start-1 min-w-0">
         <ConversationPolicyNotice room={room} />
         {anchorId && (
@@ -570,13 +555,12 @@ export default function Room() {
             </Button>
           </div>
         )}
-        <PinnedMessagesPanel
+        <PinnedItemsPanel
           roomId={roomId}
           isAdmin={myRole === "admin"}
           viewerId={viewerId}
           onJumpToMessage={jumpToMessage}
         />
-        <PinnedDecisionStrip roomId={roomId} />
       </div>
 
       <div
