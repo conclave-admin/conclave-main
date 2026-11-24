@@ -1568,6 +1568,69 @@ dbTest("the room-scoped route delegates to the same handler", async () => {
   );
 });
 
+dbTest("task counts and assignee filtering cover the complete paginated scope", async () => {
+  const run = randomUUID();
+  const owner = await authedAccount(`task-pages-owner-${run}@test.com`);
+  const assignee = await authedAccount(`task-pages-worker-${run}@test.com`);
+  const workroom = await createRoomVia(owner.token, {
+    name: `Task pages ${run}`,
+    memberIds: [assignee.userId],
+  });
+
+  await query(
+    `INSERT INTO tasks (room_id,title,status,due_date,created_by)
+     SELECT $1,
+       'Paged task ' || series,
+       CASE WHEN series <= 51 THEN 'open'
+            WHEN series <= 53 THEN 'in_progress'
+            ELSE 'done' END,
+       DATE '2030-01-01' + series,
+       $2
+     FROM generate_series(1,55) AS series`,
+    [workroom.id, owner.userId],
+  );
+  const assigned = (
+    await query(
+      `INSERT INTO tasks (room_id,title,status,assignee_id,created_by)
+       VALUES ($1,'Assigned after page one','done',$2,$3) RETURNING id`,
+      [workroom.id, assignee.userId, owner.userId],
+    )
+  ).rows[0];
+
+  const first = await fetch(`${baseUrl}/api/tasks/room/${workroom.id}`, {
+    headers: { authorization: `Bearer ${assignee.token}` },
+  });
+  const firstBody = await first.text();
+  assert.equal(first.status, 200, firstBody);
+  const firstPage = JSON.parse(firstBody).data;
+  assert.equal(firstPage.tasks.length, 50);
+  assert.ok(firstPage.nextCursor, "the fixture must span more than one page");
+  assert.deepEqual(firstPage.counts, { open: 51, in_progress: 2, done: 3 });
+  assert.ok(
+    !firstPage.tasks.some((task) => task.id === assigned.id),
+    "the assigned task should be beyond the first unfiltered page",
+  );
+
+  const second = await fetch(
+    `${baseUrl}/api/tasks/room/${workroom.id}?before=${encodeURIComponent(firstPage.nextCursor)}`,
+    { headers: { authorization: `Bearer ${assignee.token}` } },
+  );
+  const secondPage = (await second.json()).data;
+  assert.deepEqual(secondPage.counts, firstPage.counts);
+  assert.ok(secondPage.tasks.some((task) => task.id === assigned.id));
+
+  const mine = await fetch(
+    `${baseUrl}/api/tasks/room/${workroom.id}?assigneeId=${assignee.userId}`,
+    { headers: { authorization: `Bearer ${assignee.token}` } },
+  );
+  const mineBody = await mine.text();
+  assert.equal(mine.status, 200, mineBody);
+  const assignedScope = JSON.parse(mineBody).data;
+  assert.deepEqual(assignedScope.tasks.map((task) => task.id), [assigned.id]);
+  assert.deepEqual(assignedScope.counts, { open: 0, in_progress: 0, done: 1 });
+  assert.equal(assignedScope.nextCursor, null);
+});
+
 dbTest("status can be updated, and updated_at actually moves", async () => {
   // The digest's entire time window is `updated_at > last_seen_at`, and nothing
   // else maintains that column — so a status change that left it at creation
@@ -8114,11 +8177,17 @@ dbTest("decision follow-ups stay in one room and report task progress", async ()
   assert.equal(task.decision_id, decision.id);
   assert.equal(task.decision_title, decision.title);
   const linked = await request(`/tasks?decisionId=${decision.id}`, assignee.token);
-  assert.deepEqual((await linked.json()).data.tasks.map((item) => item.id), [task.id]);
-  assert.equal((await request(`/tasks?decisionId=${decision.id}`, outsider.token).then((res) => res.json())).data.tasks.length, 0);
+  const linkedData = (await linked.json()).data;
+  assert.deepEqual(linkedData.tasks.map((item) => item.id), [task.id]);
+  assert.deepEqual(linkedData.counts, { open: 1, in_progress: 0, done: 0 });
+  const outsiderData = await request(`/tasks?decisionId=${decision.id}`, outsider.token).then((res) => res.json());
+  assert.equal(outsiderData.data.tasks.length, 0);
+  assert.deepEqual(outsiderData.data.counts, { open: 0, in_progress: 0, done: 0 });
   const before = (await (await request(`/decisions/${decision.id}`, author.token)).json()).data;
   assert.deepEqual(before.follow_up, { total: 1, done: 0 });
   assert.equal((await request(`/tasks/${task.id}/status`, assignee.token, "PATCH", { status: "done" })).status, 200);
+  const completedScope = (await (await request(`/tasks?decisionId=${decision.id}`, assignee.token)).json()).data;
+  assert.deepEqual(completedScope.counts, { open: 0, in_progress: 0, done: 1 });
   const after = (await (await request(`/decisions/${decision.id}`, author.token)).json()).data;
   assert.deepEqual(after.follow_up, { total: 1, done: 1 });
   const overview = (await (await request("/decisions/overview", author.token)).json()).data;

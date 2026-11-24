@@ -44,16 +44,17 @@ function when(value) {
 function DigestItem({ item }) {
   const label = ACTION_LABELS[item.type]?.[item.action] || item.type || "Update";
   return (
-    <article className="rounded-xl border border-line bg-surface p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 text-metadata text-muted">
+    <article className="rounded-xl border border-line bg-surface px-4 py-3 transition-colors hover:border-brand/30">
+      <div className="flex min-w-0 items-center gap-2 text-metadata text-muted">
         <span className={`text-label ${TYPE_STYLES[item.type] || "text-muted"}`}>{label}</span>
-        <time dateTime={item.occurred_at || item.created_at}>{when(item.occurred_at || item.created_at)}</time>
+        <span aria-hidden="true">·</span>
+        <time className="truncate" dateTime={item.occurred_at || item.created_at}>{when(item.occurred_at || item.created_at)}</time>
       </div>
-      <Link to={itemTarget(item)} className="mt-3 block line-clamp-3 text-h2 text-ink hover:text-brand focus-visible:rounded focus-visible:outline-2 focus-visible:outline-brand [overflow-wrap:anywhere]">
+      <Link to={itemTarget(item)} className="mt-1.5 block line-clamp-2 text-body font-semibold text-ink hover:text-brand focus-visible:rounded focus-visible:outline-2 focus-visible:outline-brand [overflow-wrap:anywhere]">
         {item.title}
       </Link>
-      {item.preview && <p className="mt-2 line-clamp-2 text-body text-muted [overflow-wrap:anywhere]">{item.preview}</p>}
-      {item.actor_name && <p className="mt-3 text-metadata text-muted">By {item.actor_name} · {item.room_name}</p>}
+      {item.preview && <p className="mt-1 line-clamp-2 text-metadata text-muted [overflow-wrap:anywhere]">{item.preview}</p>}
+      {item.actor_name && <p className="mt-2 text-metadata text-muted">By {item.actor_name}</p>}
     </article>
   );
 }
@@ -193,7 +194,7 @@ export default function CatchUpDigestPage() {
         </div>
       ) : (
         <>
-          <div className="rounded-xl border border-line bg-surface px-5 py-6 md:px-6">
+          <div className="rounded-xl border border-line bg-surface px-5 py-5 md:px-6">
             <h1 className="text-h1 text-ink">{digest.summary.headline}</h1>
             <p className="mt-3 text-body text-muted">{digest.summary.summary}</p>
             <Button variant="secondary" onClick={() => void mark()} disabled={Boolean(marking)} className="mt-5">
@@ -208,10 +209,10 @@ export default function CatchUpDigestPage() {
             </button>)}
           </div>
           {groups.length === 0 && <p className="mt-6 text-body text-muted">No updates in this filter.</p>}
-          <div className="mt-8 space-y-8 pb-8">
+          <div className="mt-6 space-y-6 pb-8">
             {groups.map((group) => (
               <section key={group.roomId} aria-label={group.name}>
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-2">
                   <Link to={`/chats/${group.roomId}`} className="text-h2 text-ink hover:text-brand">{group.name}</Link>
                   <Button variant="secondary" onClick={() => void mark(group.roomId)} disabled={Boolean(marking)}>
                     {marking === group.roomId ? "Marking…" : "Mark room as read"}
@@ -221,7 +222,7 @@ export default function CatchUpDigestPage() {
                   const direct = group.items.filter((item) => item.priority === 0);
                   const others = group.items.filter((item) => item.priority !== 0);
                   const visible = expandedRooms.has(group.roomId) ? others : others.slice(0, 5);
-                  return <div className="space-y-5">
+                  return <div className="space-y-4">
                     {direct.length > 0 && <div>
                       <h3 className="mb-3 text-label text-brand">Needs your attention · {direct.length}</h3>
                       <div className="space-y-3">{direct.map((item) => <DigestItem key={item.event_id} item={item} />)}</div>

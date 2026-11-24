@@ -171,7 +171,7 @@ export default function SharedMediaBrowser({ roomId, userId }) {
                 {items.map((item) => (
                   <li
                     key={item.id}
-                    className={`min-w-0 overflow-hidden ${kind === "media" ? "shared-media-tile relative rounded-lg bg-canvas" : "rounded-xl border border-line p-3"}`}
+                    className={`min-w-0 overflow-hidden ${kind === "media" ? "shared-media-tile relative aspect-square rounded-lg bg-canvas" : "rounded-xl border border-line p-3"}`}
                     data-shared-file-id={item.id}
                   >
                     <AttachmentCard attachment={item} tile={kind === "media"} />
@@ -196,7 +196,7 @@ export default function SharedMediaBrowser({ roomId, userId }) {
                         dateTime={item.created_at}
                         className={
                           kind === "media"
-                            ? "pointer-events-none absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white"
+                            ? "pointer-events-none absolute bottom-1 left-1 z-20 max-w-[calc(100%-3rem)] truncate rounded bg-black/65 px-1.5 py-0.5 text-[10px] text-white"
                             : "mx-2 block text-[11px] text-muted"
                         }
                       >
@@ -208,7 +208,7 @@ export default function SharedMediaBrowser({ roomId, userId }) {
                       aria-label={`Show message for ${item.filename || "shared file"}`}
                       className={
                         kind === "media"
-                          ? "absolute right-1 top-1 grid h-11 w-11 place-items-center rounded-full bg-black/60 text-white hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                          ? "absolute right-1 top-1 z-20 grid h-11 w-11 place-items-center rounded-full bg-black/65 text-white hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
                           : "mx-2 mt-1 inline-flex min-h-10 items-center text-label text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
                       }
                     >

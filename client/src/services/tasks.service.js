@@ -15,18 +15,24 @@ export const TASK_STATUSES = ["open", "in_progress", "done"];
  * requests the client then re-filters.
  *
  * @param {{ roomId?: string, status?: string, assigneeId?: string }} [options]
- * @returns {{ tasks: Array }}
+ * @returns {{ tasks: Array, counts: { open: number, in_progress: number, done: number }, nextCursor: string|null }}
  */
 export async function listTasks({ roomId, status, assigneeId, decisionId, before } = {}) {
   if (isDevAuthBypass) {
+    const scoped = previewTasks.filter(
+      (task) =>
+        (!roomId || task.room_id === roomId) &&
+        (!status || task.status === status) &&
+        (!assigneeId || task.assignee_id === assigneeId) &&
+        (!decisionId || task.decision_id === decisionId),
+    );
     return {
-      tasks: previewTasks.filter(
-        (task) =>
-          (!roomId || task.room_id === roomId) &&
-          (!status || task.status === status) &&
-          (!assigneeId || task.assignee_id === assigneeId) &&
-          (!decisionId || task.decision_id === decisionId),
-      ), nextCursor: null,
+      tasks: scoped,
+      counts: Object.fromEntries(TASK_STATUSES.map((value) => [
+        value,
+        scoped.filter((task) => task.status === value).length,
+      ])),
+      nextCursor: null,
     };
   }
   const { data } = await api.get("/tasks", {

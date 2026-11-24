@@ -39,6 +39,7 @@ export default function PinnedMessagesPanel({
   isAdmin = false,
   viewerId,
   onJumpToMessage,
+  embedded = false,
 }) {
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -155,8 +156,13 @@ export default function PinnedMessagesPanel({
   };
 
   return (
-    <div className="shrink-0 border-b border-line bg-surface">
-      <button
+    <div className={`${embedded ? "pinned-items-content" : "shrink-0 border-b border-line bg-surface"}`}>
+      {embedded && (
+        <p className="border-b border-line bg-canvas px-4 py-2 text-label text-muted md:px-7">
+          Messages · {pinned.length}
+        </p>
+      )}
+      {!embedded && <button
         type="button"
         onClick={() => setIsOpen((value) => !value)}
         aria-expanded={isOpen}
@@ -184,12 +190,12 @@ export default function PinnedMessagesPanel({
           className={`h-4 w-4 shrink-0 text-muted transition-transform ${isOpen ? "rotate-180" : ""}`}
           aria-hidden="true"
         />
-      </button>
+      </button>}
 
-      {isOpen && (
+      {(embedded || isOpen) && (
         <ul
           id="pinned-messages-list"
-          className="max-h-72 overflow-y-auto border-t border-line"
+          className={embedded ? "" : "max-h-72 overflow-y-auto border-t border-line"}
         >
           {pinned.map((message) => (
             <li

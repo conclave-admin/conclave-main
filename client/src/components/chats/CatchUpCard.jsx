@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import IconArrow from "@/assets/icons/arrow-right.svg?react";
+import IconClose from "@/assets/icons/close.svg?react";
 import { getUserDigest } from "@/services/digest.service";
+import { useAuth } from "@/contexts/AuthContext";
 import { useRealtime } from "@/contexts/RealtimeContext";
 
 /**
@@ -17,7 +19,19 @@ import { useRealtime } from "@/contexts/RealtimeContext";
  */
 export default function CatchUpCard() {
   const [counts, setCounts] = useState(null);
+  const [dismissedSignature, setDismissedSignature] = useState("");
+  const { user } = useAuth();
   const { socket } = useRealtime();
+
+  const dismissalKey = user?.id
+    ? `conclave:catch-up-dismissed:${user.id}`
+    : null;
+
+  useEffect(() => {
+    setDismissedSignature(
+      dismissalKey ? window.sessionStorage.getItem(dismissalKey) || "" : "",
+    );
+  }, [dismissalKey]);
 
   useEffect(() => {
     let active = true;
@@ -32,6 +46,7 @@ export default function CatchUpCard() {
             total: items.length,
             headline: summary.headline,
             summary: summary.summary,
+            signature: `${summary.headline}|${summary.summary}|${items.map((item) => item.id || item.event_id).join(",")}`,
           });
         })
         .catch(() => {
@@ -59,19 +74,34 @@ export default function CatchUpCard() {
 
   if (!counts) return null;
   if (counts.total === 0) return null;
+  if (dismissedSignature === counts.signature) return null;
 
   return (
-    <Link
-      to="/digest"
-      className="mx-4 my-2 flex items-center gap-3 rounded-xl bg-brand-soft/50 px-3 py-2 transition-colors hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
-    >
-      <span className="min-w-0 flex-1">
-        <span className="block text-label text-ink">
-          {counts.headline}
+    <div className="mx-4 my-2 flex items-center rounded-xl bg-brand-soft/50 transition-colors hover:bg-brand-soft">
+      <Link
+        to="/digest"
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-l-xl px-3 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/30"
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block text-label text-ink">
+            {counts.headline}
+          </span>
+          <span className="mt-0.5 block truncate text-metadata text-muted">{counts.summary}</span>
         </span>
-        <span className="mt-0.5 block truncate text-metadata text-muted">{counts.summary}</span>
-      </span>
-      <IconArrow className="h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
-    </Link>
+        <IconArrow className="h-4 w-4 shrink-0 text-brand" aria-hidden="true" />
+      </Link>
+      <button
+        type="button"
+        aria-label="Dismiss catch-up summary"
+        onClick={() => {
+          if (dismissalKey)
+            window.sessionStorage.setItem(dismissalKey, counts.signature);
+          setDismissedSignature(counts.signature);
+        }}
+        className="mr-1 grid h-11 w-11 shrink-0 place-items-center rounded-lg text-muted hover:bg-surface/70 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+      >
+        <IconClose className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </div>
   );
 }

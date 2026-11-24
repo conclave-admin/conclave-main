@@ -4,6 +4,9 @@ const { redisClient } = require('../src/config/redis');
 const rateLimit = require('../src/middlewares/rateLimit.middleware');
 const socketHandler = require('../src/utils/socketHandler');
 
+// Model the ready event tracked separately from the client getter.
+test.before(() => redisClient.emit('ready'));
+
 test('separate limiter instances share the same Redis budget and expiry', async (t) => {
   t.mock.getter(redisClient, 'isReady', () => true);
   const counts = new Map();

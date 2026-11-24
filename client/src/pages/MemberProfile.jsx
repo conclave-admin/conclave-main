@@ -6,6 +6,7 @@ import Button from "../components/ui/Button";
 import Spinner from "../components/ui/Spinner";
 import IconMessage from "../assets/icons/message.svg?react";
 import IconGroup from "../assets/icons/group.svg?react";
+import IconArrowLeft from "../assets/icons/arrow-left.svg?react";
 import { useAuth } from "../contexts/AuthContext";
 import { getProfile, getSharedRooms } from "../services/users.service";
 import { createRoom } from "../services/rooms.service";
@@ -44,8 +45,9 @@ export default function MemberProfile() {
     <Page width="form">
       <Link
         to="/chats"
-        className="inline-flex min-h-11 items-center text-label text-brand hover:underline"
+        className="mb-3 inline-flex min-h-11 items-center gap-2 text-label text-brand hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
       >
+        <IconArrowLeft className="h-4 w-4" aria-hidden="true" />
         Back to chats
       </Link>
       {state.error ? (
@@ -63,21 +65,23 @@ export default function MemberProfile() {
         </section>
       ) : (
         <>
-          <section className="profile-identity overflow-hidden rounded-2xl border border-line bg-surface">
-            <div className="h-24 bg-brand/10" aria-hidden="true" />
-            <div className="relative -mt-10 flex flex-col items-center px-6 pb-6 text-center">
-              <div className="rounded-full border-4 border-surface bg-surface">
+          <section className="profile-identity rounded-2xl border border-line bg-surface p-4 md:p-5">
+            <div className="flex min-w-0 items-center gap-4">
+              <div className="shrink-0 rounded-full border-2 border-brand-soft bg-surface">
                 <Avatar
                   size="lg"
                   name={state.person.display_name}
                   src={state.person.avatar_url}
                 />
               </div>
-              <h1 className="mt-3 text-h1 text-ink">
-                {state.person.display_name}
-              </h1>
+              <div className="min-w-0 flex-1">
+                <h1 className="text-h1 text-ink [overflow-wrap:anywhere]">
+                  {state.person.display_name}
+                </h1>
+                <p className="mt-1 text-metadata text-muted">Conclave member</p>
+              </div>
               <Button
-                className="mt-5 gap-2"
+                className="shrink-0 gap-2"
                 disabled={opening}
                 onClick={async () => {
                   setOpening(true);
@@ -100,12 +104,12 @@ export default function MemberProfile() {
                 <IconMessage className="h-5 w-5" aria-hidden="true" />
                 {opening ? "Opening…" : "Message"}
               </Button>
-              {actionError && (
-                <p role="alert" className="mt-3 text-error">
-                  {actionError}
-                </p>
-              )}
             </div>
+            {actionError && (
+              <p role="alert" className="mt-3 text-error">
+                {actionError}
+              </p>
+            )}
           </section>
           {state.person.bio && (
             <section className="mt-5 rounded-2xl border border-line bg-surface p-5">
@@ -129,7 +133,7 @@ export default function MemberProfile() {
                   <li key={room.id}>
                     <Link
                       to={`/chats/${room.id}`}
-                      className="flex min-h-16 items-center gap-3 px-5 py-3 hover:bg-canvas"
+                      className="flex min-h-14 items-center gap-3 px-5 py-2.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/30"
                     >
                       <Avatar
                         name={room.display_name || room.name}

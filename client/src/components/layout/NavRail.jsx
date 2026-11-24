@@ -20,17 +20,23 @@ import IconPublic from "@/assets/icons/public.svg?react";
 import IconChevronRight from "@/assets/icons/chevron-right.svg?react";
 import IconTeams from "@/assets/icons/teams.svg?react";
 
-const primaryNav = [
-  { to: "/chats", label: "Chats", Icon: IconMessage, end: false },
-  { to: "/teams", label: "Teams", Icon: IconTeams, end: false },
-  { to: "/activity", label: "Message activity", Icon: IconRecent },
-  { to: "/tasks", label: "Tasks", Icon: IconTasks },
-  { to: "/decisions", label: "Decisions", Icon: IconDecisions },
-  { to: "/digest", label: "Catch up", Icon: IconDigest },
-  { to: "/work/inbox", label: "My work", Icon: IconInbox },
-  { to: "/work", label: "Projects", Icon: IconProjects, end: true },
-  { to: "/work/search", label: "Search all", Icon: IconSearch },
-  { to: "/discover", label: "Discover rooms", Icon: IconPublic },
+const navGroups = [
+  { label: "Communication", items: [
+    { to: "/chats", label: "Chats", Icon: IconMessage, end: false },
+    { to: "/teams", label: "Teams", Icon: IconTeams, end: false },
+    { to: "/activity", label: "Message activity", Icon: IconRecent },
+    { to: "/digest", label: "Catch up", Icon: IconDigest },
+  ] },
+  { label: "Work", items: [
+    { to: "/work/inbox", label: "My work", Icon: IconInbox },
+    { to: "/tasks", label: "Tasks", Icon: IconTasks },
+    { to: "/decisions", label: "Decisions", Icon: IconDecisions },
+    { to: "/work", label: "Projects", Icon: IconProjects, end: true },
+    { to: "/work/search", label: "Search all", Icon: IconSearch },
+  ] },
+  { label: "Explore", items: [
+    { to: "/discover", label: "Discover rooms", Icon: IconPublic },
+  ] },
 ];
 
 const itemBase =
@@ -119,7 +125,7 @@ export default function NavRail({
         {collapsed ? <Logo withWordmark={false} /> : <Logo />}
       </NavLink>
 
-      <nav aria-label="Workspace" className="flex flex-col gap-1.5">
+      <nav aria-label="Workspace" className="flex flex-col">
         {!collapsed && (
           <div className="mx-3 mb-3">
             <label
@@ -152,14 +158,31 @@ export default function NavRail({
             </select>
           </div>
         )}
-        {primaryNav.map((item) => (
-          <RailItem
-            key={item.to}
-            {...item}
-            badge={item.to === "/chats" ? unreadTotal : 0}
-            collapsed={collapsed}
-            onNavigate={onNavigate}
-          />
+        {navGroups.map((group, groupIndex) => (
+          <section
+            key={group.label}
+            aria-label={group.label}
+            className={groupIndex > 0 ? "mt-3" : ""}
+          >
+            {collapsed ? (
+              groupIndex > 0 && <div className="mx-5 mb-2 border-t border-line" aria-hidden="true" />
+            ) : (
+              <h2 className="mb-1 px-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+                {group.label}
+              </h2>
+            )}
+            <div className="flex flex-col gap-1">
+              {group.items.map((item) => (
+                <RailItem
+                  key={item.to}
+                  {...item}
+                  badge={item.to === "/chats" ? unreadTotal : 0}
+                  collapsed={collapsed}
+                  onNavigate={onNavigate}
+                />
+              ))}
+            </div>
+          </section>
         ))}
       </nav>
 

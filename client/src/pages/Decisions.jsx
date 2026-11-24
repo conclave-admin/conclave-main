@@ -229,17 +229,34 @@ export default function Decisions() {
 
   return (
     <Page width="board">
-      <header className="mb-7 overflow-hidden rounded-2xl border border-line bg-surface p-6 shadow-sm md:p-8">
-        <p className="text-label uppercase tracking-widest text-brand">Conclave decisions</p>
-        <div className="mt-3 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
-          <div><h1 className="max-w-2xl text-h1 text-ink">Know what was decided. See what happens next.</h1>
-            <p className="mt-3 max-w-xl text-body text-muted">A shared record of choices, context, and the work that follows them.</p></div>
-          <Button variant="primary" onClick={() => setCreating(true)} disabled={!eligibleRooms.length} className="h-12 shrink-0">New decision</Button>
+      <header className="mb-5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-h1 text-ink">Decisions</h1>
+            <p className="mt-1 text-body text-muted">Choices, context and follow-up work.</p>
+          </div>
+          <Button
+            variant="primary"
+            onClick={() => setCreating(true)}
+            disabled={!eligibleRooms.length}
+            className="shrink-0"
+          >
+            New decision
+          </Button>
         </div>
-        {overview && <div className="mt-7 grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="Decision overview across all conversations">
-          {[["Active", overview.active], ["Work in progress", overview.with_open_tasks], ["Follow-ups done", overview.follow_ups_done], ["Retracted", overview.retracted]].map(([label, value]) =>
-            <div key={label} className="rounded-xl border border-line bg-canvas p-3.5"><p className="text-h2 text-ink">{value}</p><p className="mt-1 text-metadata text-muted">{label}</p></div>)}
-        </div>}
+        {overview && (
+          <dl
+            className="mt-4 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            aria-label="Decision overview across all conversations"
+          >
+            {[["Active", overview.active], ["In progress", overview.with_open_tasks], ["Follow-ups done", overview.follow_ups_done], ["Retracted", overview.retracted]].map(([label, value]) => (
+              <div key={label} className="flex shrink-0 items-baseline gap-1.5 rounded-full border border-line bg-surface px-3 py-1.5">
+                <dt className="text-metadata text-muted">{label}</dt>
+                <dd className="order-first text-sm font-semibold text-ink">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
       </header>
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <label className="block w-full md:max-w-sm">

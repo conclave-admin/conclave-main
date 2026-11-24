@@ -72,7 +72,7 @@ export default function RoomInfo() {
   const { room, isLoading, error, reload } = useRoom(roomId);
   const { user } = useAuth();
   const { socket } = useRealtime();
-  const { isOnlineIn, labelFor } = usePresence();
+  const { getPresence, isOnlineIn, labelFor } = usePresence();
   const { toast } = useToast();
 
   const [term, setTerm] = useState("");
@@ -324,11 +324,17 @@ export default function RoomInfo() {
 
   return (
     <Page width="content">
+      <Link
+        to={`/chats/${roomId}`}
+        className="mb-3 inline-flex min-h-11 items-center text-label text-brand hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+      >
+        Back to conversation
+      </Link>
       <section
-        className="room-info-overview rounded-2xl border border-line bg-surface p-5 md:p-7"
+        className="room-info-overview rounded-2xl border border-line bg-surface p-4 md:p-5"
         aria-label={isDm ? "Conversation overview" : "Room overview"}
       >
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+        <div className="flex items-start gap-4">
           <div className="flex shrink-0 flex-col items-center gap-2">
             <Avatar
               name={
@@ -341,7 +347,7 @@ export default function RoomInfo() {
                   ? peer?.avatar_url
                   : room?.avatar_url || room?.display_avatar
               }
-              size="lg"
+              size="md"
             />
             {canEditRoom && (
               <>
@@ -367,7 +373,7 @@ export default function RoomInfo() {
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-h1 text-ink">
+              <h1 className="min-w-0 text-h1 text-ink [overflow-wrap:anywhere]">
                 {isDm
                   ? peer?.display_name || room?.display_name || room?.name
                   : room?.display_name || room?.name || "Room"}
@@ -420,11 +426,11 @@ export default function RoomInfo() {
 
       <nav
         aria-label="Conversation shortcuts"
-        className="mt-4 grid grid-cols-2 gap-3"
+        className="mt-3 grid grid-cols-2 gap-2"
       >
         <Link
           to={`/chats/${roomId}`}
-          className="flex min-h-14 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-label text-brand hover:bg-brand/5"
+          className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-label text-brand hover:bg-brand/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
         >
           <IconMessage className="h-5 w-5" aria-hidden="true" />
           Message
@@ -437,7 +443,7 @@ export default function RoomInfo() {
             section?.focus({ preventScroll: true });
             section?.scrollIntoView({ behavior: "instant", block: "start" });
           }}
-          className="flex min-h-14 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-label text-brand hover:bg-brand/5"
+          className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-label text-brand hover:bg-brand/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
         >
           <IconImage className="h-5 w-5" aria-hidden="true" />
           Media and files
@@ -450,10 +456,12 @@ export default function RoomInfo() {
           aria-labelledby="person-details-heading"
         >
           <div className="flex items-start gap-4">
-            <span
-              className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${isOnlineIn(roomId, peer.id) ? "bg-success" : "bg-muted/40"}`}
-              aria-hidden="true"
-            />
+            {getPresence(roomId, peer.id) !== "unknown" && (
+              <span
+                className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${isOnlineIn(roomId, peer.id) ? "bg-success" : "bg-muted/40"}`}
+                aria-hidden="true"
+              />
+            )}
             <div className="min-w-0 flex-1">
               <Link
                 to={`/profile/${peer.id}`}
@@ -464,9 +472,11 @@ export default function RoomInfo() {
               <h2 id="person-details-heading" className="text-h2 text-ink">
                 About
               </h2>
-              <p className="mt-1 text-metadata text-muted">
-                {labelFor(roomId, peer.id)}
-              </p>
+              {getPresence(roomId, peer.id) !== "unknown" && (
+                <p className="mt-1 text-metadata text-muted">
+                  {labelFor(roomId, peer.id)}
+                </p>
+              )}
               <p className="mt-4 whitespace-pre-wrap text-body leading-relaxed text-ink">
                 {peer.bio || "No about information"}
               </p>
@@ -644,9 +654,11 @@ export default function RoomInfo() {
                         </span>
                       )}
                     </div>
-                    <p className="mt-0.5 truncate text-metadata text-muted">
-                      {labelFor(roomId, member.id)}
-                    </p>
+                    {getPresence(roomId, member.id) !== "unknown" && (
+                      <p className="mt-0.5 truncate text-metadata text-muted">
+                        {labelFor(roomId, member.id)}
+                      </p>
+                    )}
                   </div>
 
                   {!isDm && member.role === "admin" && (
