@@ -44,7 +44,7 @@ export default function TypingIndicator({
     <div
       role="status"
       aria-live="polite"
-      className="pointer-events-none absolute bottom-2 left-0 right-0 flex items-center gap-2 px-7 text-metadata text-muted"
+      className="typing-indicator pointer-events-none sticky bottom-0 z-[2] -mt-6 flex h-0 shrink-0 -translate-y-6 items-center gap-2 overflow-visible px-7 text-metadata text-muted"
     >
       <span className="flex items-end gap-0.5" aria-hidden="true">
         <span className="h-1.5 w-1.5 animate-typing-dot rounded-full bg-muted [animation-delay:0ms]" />

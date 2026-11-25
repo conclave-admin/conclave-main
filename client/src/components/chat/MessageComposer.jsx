@@ -35,6 +35,7 @@ import AttachmentPicker from "./AttachmentPicker";
 import AttachmentPreviewDialog from "./AttachmentPreviewDialog";
 import MentionPicker from "./MentionPicker";
 import EmojiPicker from "./EmojiPicker";
+import LinkPreviewCard from "./LinkPreviewCard";
 
 const MAX_LINES = 5;
 
@@ -729,7 +730,10 @@ const MessageComposer = forwardRef(function MessageComposer(
       return;
     }
 
-    if (event.key === "Enter" && !event.shiftKey) {
+    const mobileInput = window.matchMedia?.(
+      "(max-width: 767px), (pointer: coarse)",
+    ).matches;
+    if (event.key === "Enter" && !event.shiftKey && !mobileInput) {
       event.preventDefault();
       submit();
     }
@@ -813,6 +817,8 @@ const MessageComposer = forwardRef(function MessageComposer(
           Connection unavailable. Messages will wait here until you reconnect.
         </p>
       )}
+
+      {content.trim() && <LinkPreviewCard text={content} compact />}
 
       <div className="composer-pill relative flex items-end gap-1 rounded-[26px] border border-line bg-surface p-1.5 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10">
         <div

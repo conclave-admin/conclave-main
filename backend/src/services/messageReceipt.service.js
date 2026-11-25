@@ -113,12 +113,29 @@ async function acknowledge({
       WHERE room_id=$1 AND user_id=$2 RETURNING last_seen_at,last_seen_sequence,last_delivered_sequence`,
       [roomId, userId, read, all],
     );
+    // A notification about a message is no longer unread once that message has
+    // been acknowledged as read. Keep notification badges/lists aligned with
+    // the receipt instead of requiring a separate visit to the notification
+    // center.
+    const notifications = read
+      ? await db.query(
+          `UPDATE notifications n SET seen=TRUE
+           FROM message_recipients r JOIN messages m ON m.id=r.message_id
+           WHERE n.recipient_id=$2 AND n.seen=FALSE
+             AND n.type IN ('mention','new_message','file_uploaded','reminder')
+             AND n.reference_id=m.id AND m.room_id=$1
+             AND r.message_id=m.id AND r.recipient_id=$2 AND r.read
+           RETURNING n.id`,
+          [roomId, userId],
+        )
+      : { rowCount: 0 };
     const receipts = await attachReceiptSummaries(
       ids.map((id) => ({ id })),
       db,
     );
     return {
       ...pointer.rows[0],
+      notificationsUpdated: notifications.rowCount,
       receipts: receipts.map((m) => ({
         messageId: m.id,
         receipt_summary: m.receipt_summary,
@@ -149,6 +166,12 @@ async function acknowledge({
       });
     if (read)
       await require("./notification.service").emitChatUpdated(io, roomId);
+    if (result.notificationsUpdated)
+      require("./notification.service").emitNotificationsSeen(
+        io,
+        userId,
+        result.notificationsUpdated,
+      );
   }
   return result;
 }

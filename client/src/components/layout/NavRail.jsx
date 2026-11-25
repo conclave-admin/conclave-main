@@ -24,7 +24,7 @@ import IconCall from "@/assets/icons/call.svg?react";
 const navGroups = [
   { label: "Communication", items: [
     { to: "/chats", label: "Chats", Icon: IconMessage, end: false },
-    { to: "/teams", label: "Teams", Icon: IconTeams, end: false },
+    { to: "/teams", label: "Communities", Icon: IconTeams, end: false },
     { to: "/activity", label: "Message activity", Icon: IconRecent },
     { to: "/calls", label: "Calls", Icon: IconCall },
     { to: "/digest", label: "Catch up", Icon: IconDigest },

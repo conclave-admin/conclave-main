@@ -107,7 +107,11 @@ router.post('/',rate({max:10}),wrap(async(req,res)=>{
 }));
 router.get('/',wrap(async(req,res)=>{
   const rows=await query(`SELECT t.id,t.name,t.description,t.general_room_id,t.archived_at,tm.role AS my_role,
-    (SELECT count(*)::int FROM team_members x WHERE x.team_id=t.id) AS member_count
+    (SELECT count(*)::int FROM team_members x WHERE x.team_id=t.id) AS member_count,
+    COALESCE((SELECT json_agg(json_build_object('id',visible.id,'name',visible.name,'type',visible.type) ORDER BY visible.name)
+      FROM (SELECT tr.id,tr.name,tr.type FROM rooms tr
+        JOIN room_members trm ON trm.room_id=tr.id AND trm.user_id=$1
+        WHERE tr.team_id=t.id ORDER BY tr.name LIMIT 200) visible),'[]'::json) AS rooms
     FROM teams t JOIN rooms r ON r.id=t.general_room_id JOIN team_members tm ON tm.team_id=t.id AND tm.user_id=$1
     ORDER BY t.archived_at NULLS FIRST,t.created_at DESC LIMIT 100`,[req.user.id]);
   return ok(res,{teams:rows.rows,maxMembers:env.beta.maxTeamMembers});
