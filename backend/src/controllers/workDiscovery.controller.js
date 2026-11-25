@@ -105,6 +105,9 @@ const search = asyncHandler(async (req, res) => {
 
 const inbox = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+  const page = req.query.page == null ? 1 : Number(req.query.page);
+  if (!Number.isInteger(page) || page < 1 || page > 10000) throw new ApiError(400, "Invalid inbox page");
+  const pageSize = 50;
   const rows = await query(
     `WITH candidates AS (
        SELECT ('assignment:'||t.id::text) AS event_key,'assignment' AS type,t.id,
@@ -139,8 +142,9 @@ const inbox = asyncHandler(async (req, res) => {
        to_char(c.due_date,'YYYY-MM-DD') AS due_date,c.priority
        FROM candidates c LEFT JOIN work_inbox_state s ON s.user_id=$1 AND s.event_key=c.event_key
        WHERE s.event_key IS NULL OR (s.state='snoozed' AND s.snoozed_until<=NOW())
-       ORDER BY c.priority,c.occurred_at DESC,c.event_key LIMIT 101`, [userId]);
-  return ok(res, { items: rows.rows.slice(0, 100), hasMore: rows.rowCount > 100 });
+       ORDER BY c.priority,c.occurred_at DESC,c.event_key LIMIT $2::int OFFSET $3::int`,
+    [userId, pageSize + 1, (page - 1) * pageSize]);
+  return ok(res, { items: rows.rows.slice(0, pageSize), hasMore: rows.rowCount > pageSize, page, pageSize });
 });
 
 const setInboxState = asyncHandler(async (req, res) => {

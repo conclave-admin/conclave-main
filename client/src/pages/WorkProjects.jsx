@@ -15,6 +15,33 @@ function useHeader(title) {
 }
 function ErrorLine({ value }) { return value ? <p role="alert" className="rounded-lg bg-error/10 p-3 text-body text-error">{value}</p> : null; }
 
+function ProjectTaskPicker({ projectId, label, value, excludeId, onSelect }) {
+  const [term, setTerm] = useState("");
+  const [matches, setMatches] = useState([]);
+  useEffect(() => {
+    const query = term.trim();
+    if (query.length < 2) { setMatches([]); return undefined; }
+    let active = true;
+    const timer = setTimeout(() => {
+      work.searchProjectTasks(projectId, query)
+        .then((result) => { if (active) setMatches(result.tasks); })
+        .catch(() => { if (active) setMatches([]); });
+    }, 200);
+    return () => { active = false; clearTimeout(timer); };
+  }, [projectId, term]);
+  return <div className="relative min-w-56 flex-1">
+    <input aria-label={label} className={field} value={value?.title || term} placeholder={label}
+      onChange={(event) => { onSelect(null); setTerm(event.target.value); }} />
+    {!value && matches.length > 0 && <div role="listbox" aria-label={`${label} results`} className="absolute z-10 mt-1 max-h-52 w-full overflow-y-auto rounded-lg border border-line bg-surface p-1 shadow-lg">
+      {matches.filter((task) => task.id !== excludeId).map((task) => <button key={task.id} type="button" role="option"
+        aria-selected="false" className="block w-full rounded-md px-3 py-2 text-left text-body hover:bg-canvas"
+        onClick={() => { onSelect(task); setTerm(""); setMatches([]); }}>
+        <span className="block truncate">{task.title}</span><span className="block text-metadata text-muted">{task.room_name}</span>
+      </button>)}
+    </div>}
+  </div>;
+}
+
 export function ProjectsIndex() {
   useHeader("Projects");
   const [projects, setProjects] = useState([]);
@@ -52,16 +79,23 @@ export function ProjectDetail() {
   const [newRoom, setNewRoom] = useState("");
   const [milestoneTitle, setMilestoneTitle] = useState("");
   const [milestoneDue, setMilestoneDue] = useState("");
-  const [dependency, setDependency] = useState({ taskId: "", dependsOnId: "" });
+  const [dependency, setDependency] = useState({ task: null, dependsOn: null });
   const [editingProject, setEditingProject] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [projectDescription, setProjectDescription] = useState("");
+  const [taskPage, setTaskPage] = useState(1);
+  const [decisionPage, setDecisionPage] = useState(1);
   const refresh = useCallback(async () => {
-    try { const [project, automations] = await Promise.all([work.getProject(projectId), work.listAutomations(projectId)]);
+    try { const [project, automations] = await Promise.all([work.getProject(projectId, { taskPage, decisionPage }), work.listAutomations(projectId)]);
       setDetail(project); setRules(automations.rules); setProjectName(project.project.name); setProjectDescription(project.project.description); setError(""); }
     catch (e) { setError(e.response?.data?.message || "Could not load project"); }
-  }, [projectId]);
+  }, [projectId, taskPage, decisionPage]);
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    setTaskPage(1);
+    setDecisionPage(1);
+    setDependency({ task: null, dependsOn: null });
+  }, [projectId]);
   const canManage = Boolean(detail?.project.can_manage);
   const linkedRooms = useMemo(() => new Set(detail?.rooms.map((room) => room.id) || []), [detail]);
   async function action(fn) {
@@ -91,7 +125,7 @@ export function ProjectDetail() {
           ["Tasks", detail.report.total], ["Done", detail.report.done], ["Blocked", detail.report.blocked],
           ["Overdue", detail.report.overdue], ["Unassigned", detail.report.unassigned],
         ].map(([label, count]) => <a key={label} href="#project-tasks" className="rounded-xl border border-line bg-surface p-4 hover:border-brand"><strong className="block text-h1">{count}</strong><span className="text-metadata text-muted">{label}</span></a>)}</div>
-        {detail.truncated && <p className="mt-2 text-metadata text-muted">Counts include all visible tasks; the lists below show the most recent items.</p>}
+        <p className="mt-2 text-metadata text-muted">Counts include all visible tasks. The task and decision lists are paged.</p>
       </section>
       <div className="mt-7 grid gap-6 lg:grid-cols-2">
         <section className="rounded-xl border border-line bg-surface p-5"><h2 className="text-h2">Conversations and briefs</h2>
@@ -128,13 +162,29 @@ export function ProjectDetail() {
           {(detail.dependencies || []).filter((dep) => dep.task_id === task.id).map((dep) => <div key={dep.depends_on_id} className="flex items-center gap-2 text-metadata text-muted">Waiting for {dep.blocker_title}
             {canManage && <button type="button" className="text-brand hover:underline" disabled={busy} onClick={() => void action(() => work.removeDependency(task.id, dep.depends_on_id))}>Remove</button>}</div>)}
         </div>)}</div>
-        {canManage && <form className="mt-4 flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); void action(async () => { await work.addDependency(dependency.taskId, dependency.dependsOnId); setDependency({ taskId: "", dependsOnId: "" }); }); }}>
-          <select aria-label="Blocked task" className={field} required value={dependency.taskId} onChange={(e) => setDependency((d) => ({ ...d, taskId: e.target.value }))}><option value="">Task that is blocked</option>{(canManage ? detail.tasks : []).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>
-          <select aria-label="Blocking task" className={field} required value={dependency.dependsOnId} onChange={(e) => setDependency((d) => ({ ...d, dependsOnId: e.target.value }))}><option value="">Waits for task</option>{detail.tasks.filter((t) => t.id !== dependency.taskId).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>
-          <button className={primary} disabled={busy || !dependency.taskId || !dependency.dependsOnId}>Add blocker</button></form>}
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <button type="button" className={secondary} disabled={busy || taskPage <= 1} onClick={() => setTaskPage((page) => page - 1)}>Previous tasks</button>
+          <span className="text-metadata text-muted">Task page {detail.pagination.tasks.page}</span>
+          <button type="button" className={secondary} disabled={busy || !detail.pagination.tasks.hasMore} onClick={() => setTaskPage((page) => page + 1)}>More tasks</button>
+        </div>
+        {canManage && <form className="mt-4 flex flex-wrap items-start gap-2" onSubmit={(e) => { e.preventDefault(); void action(async () => {
+          await work.addDependency(dependency.task.id, dependency.dependsOn.id); setDependency({ task: null, dependsOn: null });
+        }); }}>
+          <ProjectTaskPicker projectId={projectId} label="Search blocked task" value={dependency.task}
+            excludeId={dependency.dependsOn?.id} onSelect={(task) => setDependency((current) => ({
+              task, dependsOn: task?.id === current.dependsOn?.id ? null : current.dependsOn,
+            }))} />
+          <ProjectTaskPicker projectId={projectId} label="Search blocker task" value={dependency.dependsOn}
+            excludeId={dependency.task?.id} onSelect={(dependsOn) => setDependency((current) => ({ ...current, dependsOn }))} />
+          <button className={primary} disabled={busy || !dependency.task || !dependency.dependsOn}>Add blocker</button></form>}
       </section>
       <section className="mt-6 rounded-xl border border-line bg-surface p-5"><h2 className="text-h2">Decisions</h2><div className="mt-3 space-y-2">{detail.decisions.map((d) =>
-        <Link key={d.id} to={`/decisions/${d.id}`} className="block rounded-lg border border-line p-3 text-body hover:border-brand">{d.title}<span className="ml-2 text-metadata text-muted">{d.room_name} · {d.status}</span></Link>)}</div></section>
+        <Link key={d.id} to={`/decisions/${d.id}`} className="block rounded-lg border border-line p-3 text-body hover:border-brand">{d.title}<span className="ml-2 text-metadata text-muted">{d.room_name} · {d.status}</span></Link>)}</div>
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <button type="button" className={secondary} disabled={busy || decisionPage <= 1} onClick={() => setDecisionPage((page) => page - 1)}>Previous decisions</button>
+          <span className="text-metadata text-muted">Decision page {detail.pagination.decisions.page}</span>
+          <button type="button" className={secondary} disabled={busy || !detail.pagination.decisions.hasMore} onClick={() => setDecisionPage((page) => page + 1)}>More decisions</button>
+        </div></section>
       <section className="mt-6 rounded-xl border border-line bg-surface p-5"><h2 className="text-h2">Automations</h2>
         <p className="mt-1 text-body text-muted">Rules run once per matching event. Activity is recorded below.</p>
         <div className="mt-3 space-y-2">{rules.map((rule) => <div key={rule.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line p-3 text-body">

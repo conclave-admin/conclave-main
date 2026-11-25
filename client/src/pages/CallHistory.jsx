@@ -9,6 +9,7 @@ import { useCalls } from "@/contexts/CallContext";
 import { listCallHistory } from "@/services/calls.service";
 import IconCall from "@/assets/icons/call.svg?react";
 import IconVideo from "@/assets/icons/video.svg?react";
+import { CALLS_ENABLED } from "@/lib/features";
 
 function outcome(call, userId) {
   if (call.status === "missed") return call.caller_id === userId ? "No answer" : "Missed call";
@@ -18,7 +19,30 @@ function outcome(call, userId) {
   return call.caller_id === userId ? "Outgoing call" : "Incoming call";
 }
 
-export default function CallHistory() {
+function CallsComingSoon() {
+  return (
+    <Page width="form" className="py-8 sm:py-12">
+      <section className="overflow-hidden rounded-3xl border border-line bg-surface shadow-sm">
+        <div className="bg-gradient-to-br from-brand-soft via-surface to-canvas px-6 py-10 text-center sm:px-10">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center gap-2 rounded-2xl border border-brand/15 bg-surface text-brand shadow-sm">
+            <IconCall className="h-6 w-6" aria-hidden="true" />
+            <IconVideo className="h-6 w-6" aria-hidden="true" />
+          </div>
+          <p className="mt-6 text-metadata font-semibold uppercase tracking-[0.14em] text-brand">Coming soon</p>
+          <h1 className="mt-2 text-h1 text-ink">Calls are on their way</h1>
+          <p className="mx-auto mt-3 max-w-md text-body leading-6 text-muted">
+            Voice and video calls, along with call history, will be available in a future Conclave release. Your conversations are ready whenever you are.
+          </p>
+          <Link to="/chats" className="mt-7 inline-flex min-h-11 items-center justify-center rounded-xl bg-brand px-5 text-label font-semibold text-white transition-colors hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:ring-offset-2">
+            Back to chats
+          </Link>
+        </div>
+      </section>
+    </Page>
+  );
+}
+
+function CallHistoryEnabled() {
   const [calls, setCalls] = useState([]);
   const [loading, setLoading] = useState(true);
   const { startCall } = useCalls();
@@ -78,4 +102,8 @@ export default function CallHistory() {
       )}
     </Page>
   );
+}
+
+export default function CallHistory() {
+  return CALLS_ENABLED ? <CallHistoryEnabled /> : <CallsComingSoon />;
 }

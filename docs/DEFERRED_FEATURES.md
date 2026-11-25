@@ -1,6 +1,6 @@
 # Deferred feature designs
 
-Decision recorded 24 November 2026: the items below document deferred product
+Decision recorded 25 November 2026: the items below document deferred product
 work and beta boundaries. Sections explicitly mark capabilities now implemented
 in the working tree. Messages and attachments are server-readable.
 
@@ -121,10 +121,12 @@ in the working tree. Messages and attachments are server-readable.
   rooms. Invitations, ringing, accept/decline, participant signaling, hang-up,
   missed-call expiry and recent history are persisted. Group mesh is capped at
   four people, including the caller.
-- Beta boundary: foreground calling and call history are implemented. A generic
-  web push can open the app to answer; the browser must be foregrounded before
-  microphone/camera access is requested. Native/background call acceptance is
-  not available.
+- Beta boundary: foreground calling and call history are implemented but
+  hidden from the beta UI by default (`VITE_CALLS_ENABLED=false`). Room call
+  controls lead to a Coming soon screen, call history is not shown, and
+  incoming-call UI is suppressed. A generic web push can open the app to answer
+  only when calls are deliberately enabled. Native/background call acceptance
+  is not available.
 - Outcome: authorized one-to-one and small-room audio/video calls with clear
   participant and end states.
 - Approach: Socket.IO relays only bounded, transient SDP and ICE signaling;
@@ -144,8 +146,9 @@ in the working tree. Messages and attachments are server-readable.
   remain out of scope.
 - Acceptance: code now handles denied permissions, busy calls, missed rings,
   duplicate answers, participant departure and session/block revocation. The
-  requested no-test pass means these paths have not been run; live TURN, Web
-  Push, NAT traversal and real-device acceptance remain pending.
+  requested no-test pass means these paths have not been run. TURN, Web Push,
+  NAT traversal and real-device acceptance are deferred until the feature is
+  unveiled; they are not beta release gates while the UI flag remains off.
 
 ## Video and group calls
 

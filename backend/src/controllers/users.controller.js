@@ -372,6 +372,13 @@ const deleteMe = asyncHandler(async (req, res) => {
   try {
     await client.query("BEGIN");
 
+    const ownedTeams = await client.query(
+      "SELECT id FROM teams WHERE owner_id=$1 FOR UPDATE",
+      [req.user.id],
+    );
+    if (ownedTeams.rowCount)
+      throw new ApiError(409, "Transfer ownership of every team before deleting your account");
+
     // 1. Anonymize and mark deleted
     await client.query(
       `UPDATE users
@@ -405,6 +412,10 @@ const deleteMe = asyncHandler(async (req, res) => {
     await client.query("DELETE FROM room_members WHERE user_id = $1", [
       req.user.id,
     ]);
+    await client.query("DELETE FROM team_pending_room_grants WHERE user_id=$1", [req.user.id]);
+    await client.query("DELETE FROM team_join_requests WHERE user_id=$1", [req.user.id]);
+    await client.query("UPDATE team_invites SET revoked_at=COALESCE(revoked_at,NOW()) WHERE created_by=$1", [req.user.id]);
+    await client.query("DELETE FROM team_members WHERE user_id=$1", [req.user.id]);
 
     await client.query("COMMIT");
   } catch (err) {

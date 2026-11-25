@@ -27,6 +27,7 @@ const MemberProfile = lazy(() => import("./pages/MemberProfile"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Register = lazy(() => import("./pages/Register"));
 const AccountRecovery = lazy(() => import("./pages/AccountRecovery"));
+const RegistrationVerification = lazy(() => import("./pages/RegistrationVerification"));
 const Room = lazy(() => import("./pages/ConversationRoute"));
 const RoomInfo = lazy(() => import("./pages/RoomInfo"));
 const RoomEvents = lazy(() => import("./pages/RoomEvents"));
@@ -124,6 +125,10 @@ export default function App() {
                         path="/terms"
                         element={<StaticPage title="Terms" />}
                       />
+
+                      <Route element={<ProtectedRoute />}>
+                        <Route path="/verify-email" element={<RegistrationVerification />} />
+                      </Route>
 
                       <Route element={<ProtectedRoute />}>
                         <Route element={<AppShell />}>

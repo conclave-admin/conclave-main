@@ -23,6 +23,37 @@ append-only moderation audit. Keep credentials and the beta URL out of public
 directories; if the signup link is broadly published, treat the cohort as
 untrusted and revisit malware scanning before continuing.
 
+Each team is limited by `BETA_MAX_TEAM_MEMBERS` (default 25). Set the value to
+the agreed small-beta size before opening invitations. The server serializes
+invitation acceptance and approved join requests against the team row; shareable
+invite use is also capped to the spaces available when the link is created.
+Changing the setting later affects future admissions and does not remove
+existing members.
+
+## Team owner recovery
+
+Team names are not unique. Use the stable `TEAM-…` short reference shown in the
+team list and detail page for conversation, and use the full team UUID when
+filing an operator request. Each team should have at least one trusted backup
+administrator before invitations are distributed.
+
+If an owner loses access, first use normal account email/password recovery. If
+that cannot restore access, the beta support operator must verify the request
+through the previously established owner contact and a separate out-of-band
+check, then transfer ownership to an existing active team administrator using:
+
+```sh
+cd backend
+npm run team:recover-owner -- --team <team-uuid> --new-owner <admin-user-uuid> \
+  --operator <operator-name> --reason "<verified support case>" --confirm
+```
+
+The recovery command requires an active team admin as successor and records the
+operator label, reason, previous owner and new owner in append-only
+`team_audit_events`. Do not accept a team code or URL as proof of ownership.
+Name the human support operator and backup contact in `RELEASE_EVIDENCE.md`
+before beta invitations go out.
+
 ## Storage and spend watch
 
 Configure these backend values for the beta environment:

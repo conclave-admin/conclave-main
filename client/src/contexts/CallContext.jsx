@@ -4,6 +4,7 @@ import { useRealtime } from "./RealtimeContext";
 import { useToast } from "./ToastContext";
 import { endCallByApi, getCallIceServers, listPendingCalls } from "@/services/calls.service";
 import CallPanel from "@/components/calls/CallPanel";
+import { CALLS_ENABLED } from "@/lib/features";
 
 const CallContext = createContext(null);
 
@@ -152,6 +153,10 @@ export function CallProvider({ children }) {
   }, [clearCall, createPeerConnection, sendSignal, toast, updateCall]);
 
   const startCall = useCallback(async (roomId, peer, callType = "audio") => {
+    if (!CALLS_ENABLED) {
+      toast({ title: "Calling is coming soon", description: "Voice and video calls are not available yet." });
+      return;
+    }
     if (callRef.current) {
       toast({ title: "A call is already active", tone: "error" });
       return;
@@ -224,7 +229,7 @@ export function CallProvider({ children }) {
   }, [localStream, call?.callType]);
 
   useEffect(() => {
-    if (!socket) return undefined;
+    if (!socket || !CALLS_ENABLED) return undefined;
     const onIncoming = (event) => {
       if (callRef.current?.id === event.callId) return;
       if (callRef.current) {
@@ -323,7 +328,7 @@ export function CallProvider({ children }) {
   return (
     <CallContext.Provider value={value}>
       {children}
-      <CallPanel call={call} muted={muted} cameraOff={cameraOff} duration={duration} remoteStreams={remoteStreams} localStream={localStream} localVideoRef={localVideoRef} onAccept={acceptCall} onDecline={declineCall} onEnd={endCall} onToggleMute={toggleMute} onToggleCamera={toggleCamera} />
+      {CALLS_ENABLED && <CallPanel call={call} muted={muted} cameraOff={cameraOff} duration={duration} remoteStreams={remoteStreams} localStream={localStream} localVideoRef={localVideoRef} onAccept={acceptCall} onDecline={declineCall} onEnd={endCall} onToggleMute={toggleMute} onToggleCamera={toggleCamera} />}
     </CallContext.Provider>
   );
 }

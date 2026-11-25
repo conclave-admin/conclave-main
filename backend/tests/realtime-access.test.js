@@ -20,6 +20,7 @@ databaseUrl.pathname = `/${database}`;
 process.env.DATABASE_URL = databaseUrl.toString();
 process.env.REDIS_URL ||= "redis://127.0.0.1:6379";
 process.env.SOCKET_REDIS_ADAPTER = "true";
+process.env.BETA_MAX_TEAM_MEMBERS = "25";
 process.env.JWT_ACCESS_SECRET ||= "security-test-access";
 process.env.JWT_REFRESH_SECRET ||= "security-test-refresh";
 const { pool, query } = require("../src/config/db");
@@ -2181,6 +2182,10 @@ test("ownership transfer preserves one owner and grants the new owner administra
   await acceptTeamInvite(owner, team.id, successor);
   const extraRoom = await request(`/teams/${team.id}/rooms`, owner.token, "POST", { name: "Operations", type: "group" });
   assert.equal(extraRoom.status, 201);
+  assert.equal((await request("/messages",owner.token,"POST",{
+    roomId:extraRoom.body.data.id,clientId:randomUUID(),content:"Before ownership transfer",
+  })).status,201);
+  const historyBoundary=(await query("SELECT message_sequence FROM rooms WHERE id=$1",[extraRoom.body.data.id])).rows[0].message_sequence;
   assert.equal((await request(`/teams/${team.id}/transfer-owner`, owner.token, "POST", { userId: successor.userId })).status, 200);
   const roles = await query("SELECT user_id,role FROM team_members WHERE team_id=$1 ORDER BY user_id", [team.id]);
   assert.equal(roles.rows.filter((row) => row.role === "owner").length, 1);
@@ -2190,7 +2195,81 @@ test("ownership transfer preserves one owner and grants the new owner administra
     JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$2 WHERE r.team_id=$1`, [team.id, successor.userId]);
   assert.equal(grants.rowCount, 2);
   assert.ok(grants.rows.every((row) => row.role === "admin" && row.team_owner_grant));
+  assert.equal((await query("SELECT owner_id FROM teams WHERE id=$1", [team.id])).rows[0].owner_id, successor.userId);
+  const previousOwner = await query(`SELECT role,team_owner_grant FROM room_members
+    WHERE room_id=$1 AND user_id=$2`, [team.general_room_id, owner.userId]);
+  assert.deepEqual(previousOwner.rows[0], { role: "member", team_owner_grant: false });
+  assert.equal((await query("SELECT history_start_sequence FROM room_members WHERE room_id=$1 AND user_id=$2",[extraRoom.body.data.id,successor.userId])).rows[0].history_start_sequence,historyBoundary);
+  assert.equal((await query("SELECT count(*)::int AS count FROM team_audit_events WHERE team_id=$1 AND action='owner_transferred'", [team.id])).rows[0].count, 1);
   assert.equal((await request(`/teams/${team.id}/leave`, successor.token, "POST")).status, 409);
+});
+
+test("team database invariant rejects a missing or mismatched owner", async () => {
+  const owner = await account();
+  const nextMember = await account();
+  const team = await createTeam(owner, "Owner invariant team");
+  await acceptTeamInvite(owner, team.id, nextMember);
+  assert.equal((await request("/users/me",owner.token,"DELETE")).status,409);
+  const db = await pool.connect();
+  try {
+    await db.query("BEGIN");
+    await db.query("UPDATE team_members SET role='member' WHERE team_id=$1 AND user_id=$2", [team.id, owner.userId]);
+    await assert.rejects(db.query("COMMIT"), (error) => error.code === "23514");
+    await db.query("ROLLBACK");
+
+    await db.query("BEGIN");
+    await db.query("UPDATE teams SET owner_id=$2 WHERE id=$1", [team.id, nextMember.userId]);
+    await assert.rejects(db.query("COMMIT"), (error) => error.code === "23514");
+    await db.query("ROLLBACK");
+  } finally {
+    db.release();
+  }
+  const ownerRow = await query("SELECT owner_id FROM teams WHERE id=$1", [team.id]);
+  assert.equal(ownerRow.rows[0].owner_id, owner.userId);
+});
+
+test("concurrent ownership transfers leave exactly one matching team owner", async () => {
+  const owner = await account();
+  const first = await account();
+  const second = await account();
+  const team = await createTeam(owner, "Transfer race team");
+  await acceptTeamInvite(owner, team.id, first);
+  await acceptTeamInvite(owner, team.id, second);
+  const outcomes = await Promise.all([
+    request(`/teams/${team.id}/transfer-owner`, owner.token, "POST", { userId: first.userId }),
+    request(`/teams/${team.id}/transfer-owner`, owner.token, "POST", { userId: second.userId }),
+  ]);
+  assert.equal(outcomes.filter((result) => result.status === 200).length, 1);
+  assert.equal(outcomes.filter((result) => [403,404].includes(result.status)).length, 1);
+  const actual = await query(`SELECT t.owner_id,count(tm.user_id) FILTER(WHERE tm.role='owner')::int AS owners,
+      count(tm.user_id) FILTER(WHERE tm.role='owner' AND tm.user_id=t.owner_id)::int AS matching
+    FROM teams t JOIN team_members tm ON tm.team_id=t.id WHERE t.id=$1 GROUP BY t.id`, [team.id]);
+  assert.equal(actual.rows[0].owners, 1);
+  assert.equal(actual.rows[0].matching, 1);
+  assert.ok([first.userId, second.userId].includes(actual.rows[0].owner_id));
+});
+
+test("operator owner recovery requires an active team admin and leaves an audit record", async () => {
+  const owner=await account();
+  const successor=await account();
+  const team=await createTeam(owner,"Owner support team");
+  await acceptTeamInvite(owner,team.id,successor);
+  assert.equal((await request(`/teams/${team.id}/members/${successor.userId}`,owner.token,"PATCH",{role:"admin"})).status,200);
+  const {execFileSync}=require("node:child_process");
+  execFileSync(process.execPath,["scripts/recover-team-owner.js",
+    "--team",team.id,"--new-owner",successor.userId,"--operator","beta-support@example.test",
+    "--reason","Verified owner account recovery request","--confirm"],{
+    cwd:require("node:path").join(__dirname,".."),
+    env:process.env,
+    stdio:"pipe",
+  });
+  assert.equal((await query("SELECT owner_id FROM teams WHERE id=$1",[team.id])).rows[0].owner_id,successor.userId);
+  const audit=await query("SELECT actor_label,action,previous_owner_id,new_owner_id,reason FROM team_audit_events WHERE team_id=$1",[team.id]);
+  assert.deepEqual(audit.rows[0],{
+    actor_label:"beta-support@example.test",action:"owner_recovered",
+    previous_owner_id:owner.userId,new_owner_id:successor.userId,
+    reason:"Verified owner account recovery request",
+  });
 });
 
 test("team removal immediately revokes API and socket access on every server", async () => {
@@ -2199,6 +2278,17 @@ test("team removal immediately revokes API and socket access on every server", a
   const secondSession = await session(member.userId);
   const team = await createTeam(owner, "Removal team");
   await acceptTeamInvite(owner, team.id, member);
+  assert.equal((await request(`/teams/${team.id}/members/${member.userId}`, owner.token, "PATCH", { role: "admin" })).status, 200);
+  const memberInvite = await request(`/teams/${team.id}/invites`, member.token, "POST", { maxUses: 1 });
+  assert.equal(memberInvite.status, 201);
+  const assignedTask = await request("/tasks", owner.token, "POST", {
+    roomId: team.general_room_id,
+    clientId: randomUUID(),
+    title: "Reassign after member removal",
+    assigneeId: member.userId,
+  });
+  assert.equal(assignedTask.status, 201);
+  await query("INSERT INTO team_pending_room_grants(team_id,user_id,room_id) VALUES($1,$2,$3)", [team.id, member.userId, team.general_room_id]);
   const a = await open(member.token, 0);
   const b = await open(secondSession.token, 1);
   for (const socket of [a, b]) assert.equal((await ack(socket, "join-room", { roomId: team.general_room_id })).ok, true);
@@ -2213,6 +2303,57 @@ test("team removal immediately revokes API and socket access on every server", a
   assert.equal((await ack(b, "send-message", { roomId: team.general_room_id, content: "revoked" })).status, 403);
   for (const server of servers)
     assert.ok(!(await server.io.in(team.general_room_id).fetchSockets()).some((socket) => socket.data.userId === member.userId));
+  assert.equal((await query("SELECT assignee_id FROM tasks WHERE id=$1", [assignedTask.body.data.id])).rows[0].assignee_id, null);
+  assert.equal((await query("SELECT revoked_at FROM team_invites WHERE id=$1", [memberInvite.body.data.id])).rows[0].revoked_at === null, false);
+  assert.equal((await query("SELECT 1 FROM team_pending_room_grants WHERE team_id=$1 AND user_id=$2", [team.id, member.userId])).rowCount, 0);
+});
+
+test("self-leave clears membership, assignments and invitation capabilities and revokes every session", async () => {
+  const owner = await account();
+  const member = await account();
+  const secondSession = await session(member.userId);
+  const team = await createTeam(owner, "Self leave team");
+  await acceptTeamInvite(owner, team.id, member);
+  assert.equal((await request(`/teams/${team.id}/members/${member.userId}`, owner.token, "PATCH", { role: "admin" })).status, 200);
+  const invite = await request(`/teams/${team.id}/invites`, member.token, "POST", { maxUses: 1 });
+  assert.equal(invite.status, 201);
+  const task = await request("/tasks", owner.token, "POST", {
+    roomId: team.general_room_id,
+    clientId: randomUUID(),
+    title: "Clear departing assignee",
+    assigneeId: member.userId,
+  });
+  assert.equal(task.status, 201);
+  await query("INSERT INTO team_pending_room_grants(team_id,user_id,room_id) VALUES($1,$2,$3)", [team.id, member.userId, team.general_room_id]);
+  const a = await open(member.token, 0);
+  const b = await open(secondSession.token, 1);
+  for (const socket of [a,b]) assert.equal((await ack(socket,"join-room",{roomId:team.general_room_id})).ok,true);
+  const removedA=event(a,"room:resync"),removedB=event(b,"room:resync");
+  const left=await request(`/teams/${team.id}/leave`,member.token,"POST");
+  assert.equal(left.status,200,JSON.stringify(left.body));
+  assert.equal((await removedA).roomId,team.general_room_id);
+  assert.equal((await removedB).roomId,team.general_room_id);
+  assert.equal((await query("SELECT 1 FROM team_members WHERE team_id=$1 AND user_id=$2",[team.id,member.userId])).rowCount,0);
+  assert.equal((await request(`/messages/room/${team.general_room_id}`,member.token)).status,403);
+  assert.equal((await ack(a,"join-room",{roomId:team.general_room_id})).status,403);
+  assert.equal((await query("SELECT assignee_id FROM tasks WHERE id=$1",[task.body.data.id])).rows[0].assignee_id,null);
+  assert.equal((await query("SELECT revoked_at FROM team_invites WHERE id=$1",[invite.body.data.id])).rows[0].revoked_at===null,false);
+  assert.equal((await query("SELECT 1 FROM team_pending_room_grants WHERE team_id=$1 AND user_id=$2",[team.id,member.userId])).rowCount,0);
+  for(const server of servers) assert.ok(!(await server.io.in(team.general_room_id).fetchSockets()).some((socket)=>socket.data.userId===member.userId));
+});
+
+test("team invite capacity respects the beta member cap", async () => {
+  const owner=await account();
+  const team=await createTeam(owner,"Capped team");
+  const invite=await request(`/teams/${team.id}/invites`,owner.token,"POST",{maxUses:100});
+  assert.equal(invite.status,201);
+  assert.equal(invite.body.data.max_uses,24);
+  const fillers=[];
+  for(let index=0;index<24;index++) fillers.push(await account());
+  for(const filler of fillers) await query("INSERT INTO team_members(team_id,user_id,role) VALUES($1,$2,'member')",[team.id,filler.userId]);
+  const newcomer=await account();
+  assert.equal((await request("/teams/invites/accept",newcomer.token,"POST",{token:invite.body.data.token})).status,409);
+  assert.equal((await query("SELECT uses FROM team_invites WHERE id=$1",[invite.body.data.id])).rows[0].uses,0);
 });
 
 test("team archive blocks mutations and restoration resumes authorized work", async () => {
@@ -3613,6 +3754,7 @@ test("project creation requires valid initial rooms and enforces role-based visi
   const memberList = await request("/work/projects", ordinaryMember.token);
   assert.ok(adminList.body.data.projects.some((project) => project.id === projectId && project.can_manage));
   assert.ok(!memberList.body.data.projects.some((project) => project.id === projectId));
+  assert.equal((await request(`/work/projects/${projectId}/task-search?q=secret`, ordinaryMember.token)).status, 404);
   assert.equal((await request(`/work/projects/${projectId}`, adminMember.token, "PATCH", {
     name: "Admin managed roadmap",
     description: "Updated by another administrator",
@@ -3725,6 +3867,63 @@ test("project automation claims each event once across competing workers", async
   assert.equal((await query("SELECT count(*)::int AS count FROM tasks WHERE decision_id=$1 AND project_id=$2", [decision.body.data.id, project.body.data.id])).rows[0].count, 1);
 });
 
+test("project automation rolls back a failed event claim so the next scan can retry", async () => {
+  const owner = await account();
+  const team = await createTeam(owner, "Automation retry team");
+  const project = await request(`/teams/${team.id}/projects`, owner.token, "POST", {
+    name: "Retryable automation",
+    roomIds: [team.general_room_id],
+  });
+  const rule = await request(`/work/projects/${project.body.data.id}/automations`, owner.token, "POST", {
+    triggerKind: "decision_recorded",
+    titlePrefix: "Retry:",
+  });
+  const decision = await request("/decisions", owner.token, "POST", {
+    roomId: team.general_room_id,
+    clientId: randomUUID(),
+    title: "Retry this event",
+    body: "A temporary worker failure must not lose this action.",
+    tags: [],
+  });
+  assert.equal(decision.status, 201, JSON.stringify(decision.body));
+  const automation = require("../src/services/projectAutomation.service");
+  const originalConnect = pool.connect.bind(pool);
+  let failTaskInsert = true;
+  pool.connect = async (...args) => {
+    const client = await originalConnect(...args);
+    return new Proxy(client, {
+      get(target, property) {
+        if (property === "query") return (...args) => {
+          const [sql] = args;
+          if (failTaskInsert && typeof sql === "string" &&
+              sql.includes("INSERT INTO tasks(room_id,title,initial_title,created_by,decision_id,project_id)")) {
+            failTaskInsert = false;
+            const error = new Error("simulated transient task write failure");
+            error.code = "XX000";
+            throw error;
+          }
+          return target.query(...args);
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  };
+  try {
+    await automation.run(servers[0].io);
+    const eventKey = `decision:${decision.body.data.id}`;
+    assert.equal((await query("SELECT count(*)::int AS count FROM project_automation_runs WHERE rule_id=$1 AND event_key=$2",
+      [rule.body.data.id, eventKey])).rows[0].count, 0);
+    assert.equal((await query("SELECT count(*)::int AS count FROM tasks WHERE decision_id=$1", [decision.body.data.id])).rows[0].count, 0);
+    await automation.run(servers[0].io);
+    assert.equal((await query("SELECT count(*)::int AS count FROM project_automation_runs WHERE rule_id=$1 AND event_key=$2",
+      [rule.body.data.id, eventKey])).rows[0].count, 1);
+    assert.equal((await query("SELECT count(*)::int AS count FROM tasks WHERE decision_id=$1", [decision.body.data.id])).rows[0].count, 1);
+  } finally {
+    pool.connect = originalConnect;
+  }
+});
+
 test("work inbox and search immediately follow content and membership changes", async () => {
   const owner = await account();
   const member = await account();
@@ -3762,4 +3961,89 @@ test("work inbox and search immediately follow content and membership changes", 
   const afterRemovalInbox = await request("/work/inbox", member.token);
   assert.ok(!afterRemovalSearch.body.data.items.some((item) => item.room_id === team.general_room_id));
   assert.ok(!afterRemovalInbox.body.data.items.some((item) => item.room_id === team.general_room_id));
+});
+
+test("project lists and work inbox paginate beyond their former fixed result limits", async () => {
+  const owner = await account();
+  const team = await createTeam(owner, "Paged work team");
+  const project = await request(`/teams/${team.id}/projects`, owner.token, "POST", {
+    name: "Paged work project",
+    roomIds: [team.general_room_id],
+  });
+  assert.equal(project.status, 201, JSON.stringify(project.body));
+  await query(
+    `INSERT INTO tasks(room_id,title,initial_title,created_by,project_id,assignee_id,created_at,updated_at)
+     SELECT $1,'Paged task '||g,'Paged task '||g,$2,$3,$2,NOW()+g*INTERVAL '1 second',NOW()
+     FROM generate_series(1,55) g`,
+    [team.general_room_id, owner.userId, project.body.data.id],
+  );
+  await query(
+    `INSERT INTO decisions(room_id,title,body,tags,created_by,created_at,updated_at)
+     SELECT $1,'Paged decision '||g,'Page coverage',ARRAY[]::text[],$2,NOW()+g*INTERVAL '1 second',NOW()+g*INTERVAL '1 second'
+     FROM generate_series(1,55) g`,
+    [team.general_room_id, owner.userId],
+  );
+  const first = await request(`/work/projects/${project.body.data.id}?taskPage=1&decisionPage=1`, owner.token);
+  const second = await request(`/work/projects/${project.body.data.id}?taskPage=2&decisionPage=2`, owner.token);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.data.tasks.length, 50);
+  assert.equal(first.body.data.decisions.length, 50);
+  assert.equal(first.body.data.pagination.tasks.hasMore, true);
+  assert.equal(first.body.data.pagination.decisions.hasMore, true);
+  assert.equal(second.body.data.tasks.length, 5);
+  assert.equal(second.body.data.decisions.length, 5);
+  assert.equal(second.body.data.pagination.tasks.hasMore, false);
+  assert.equal(second.body.data.pagination.decisions.hasMore, false);
+  assert.equal(first.body.data.report.total, 55);
+  const taskPicker = await request(`/work/projects/${project.body.data.id}/task-search?q=Paged%20task%2055`, owner.token);
+  assert.ok(taskPicker.body.data.tasks.some((task) => task.title === "Paged task 55"));
+
+  const inboxFirst = await request("/work/inbox?page=1", owner.token);
+  const inboxSecond = await request("/work/inbox?page=2", owner.token);
+  assert.equal(inboxFirst.body.data.items.length, 50);
+  assert.equal(inboxFirst.body.data.hasMore, true);
+  assert.equal(inboxSecond.body.data.items.length, 5);
+  assert.equal(inboxSecond.body.data.hasMore, false);
+});
+
+test("history clearing and leaving a room immediately filter work search, inbox, and brief sources", async () => {
+  const owner = await account();
+  const member = await account();
+  const team = await createTeam(owner, "Work visibility team");
+  await acceptTeamInvite(owner, team.id, member);
+  const message = await request("/messages", owner.token, "POST", {
+    roomId: team.general_room_id,
+    clientId: randomUUID(),
+    content: "PrivateHistoryMarker retained only for the author",
+  });
+  assert.equal(message.status, 201, JSON.stringify(message.body));
+  const task = await request("/tasks", owner.token, "POST", {
+    roomId: team.general_room_id,
+    clientId: randomUUID(),
+    title: "Room leave assignment marker",
+    assigneeId: member.userId,
+  });
+  assert.equal(task.status, 201, JSON.stringify(task.body));
+  const brief = await request(`/work/rooms/${team.general_room_id}/brief`, owner.token, "PUT", {
+    body: "Context linked to a message",
+    sourceMessageId: message.body.data.id,
+    version: null,
+  });
+  assert.equal(brief.status, 200, JSON.stringify(brief.body));
+  assert.equal((await request(`/work/rooms/${team.general_room_id}/brief`, member.token)).body.data.brief.source_message_id,
+    message.body.data.id);
+
+  assert.equal((await request(`/rooms/${team.general_room_id}/clear`, member.token, "POST")).status, 200);
+  const afterClearSearch = await request("/work/search?q=PrivateHistoryMarker", member.token);
+  const afterClearBrief = await request(`/work/rooms/${team.general_room_id}/brief`, member.token);
+  const afterClearInbox = await request("/work/inbox", member.token);
+  assert.ok(!afterClearSearch.body.data.items.some((item) => item.id === message.body.data.id));
+  assert.equal(afterClearBrief.body.data.brief.source_message_id, null);
+  assert.ok(afterClearInbox.body.data.items.some((item) => item.event_key === `assignment:${task.body.data.id}`));
+
+  assert.equal((await request(`/rooms/${team.general_room_id}/members/${member.userId}`, member.token, "DELETE")).status, 200);
+  const afterLeaveSearch = await request("/work/search?q=Room%20leave", member.token);
+  const afterLeaveInbox = await request("/work/inbox", member.token);
+  assert.ok(!afterLeaveSearch.body.data.items.some((item) => item.room_id === team.general_room_id));
+  assert.ok(!afterLeaveInbox.body.data.items.some((item) => item.room_id === team.general_room_id));
 });

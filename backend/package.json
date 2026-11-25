@@ -15,7 +15,8 @@
     "test:integration": "npm run test:db",
     "media:cleanup": "node scripts/media-cleanup.js",
     "storage:report": "node scripts/storage-usage-report.js",
-    "storage:configure": "node scripts/storage-configure.js"
+    "storage:configure": "node scripts/storage-configure.js",
+    "team:recover-owner": "node scripts/recover-team-owner.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1152.0",

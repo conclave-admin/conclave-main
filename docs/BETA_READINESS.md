@@ -1,6 +1,6 @@
 # Controlled beta readiness
 
-Assessment date: **24 November 2026 (Africa/Lagos)**.
+Assessment date: **25 November 2026 (Africa/Lagos)**.
 
 This checklist defines the minimum gate for Conclave's small controlled beta.
 Registration remains open because Conclave supports direct messages and personal
@@ -123,6 +123,11 @@ These are implementation strengths, not substitutes for final candidate tests.
   provider availability a registration dependency. Email-bound team invites
   expose resend, block acceptance while unverified, refresh on tab focus, and
   return to the pending invitation after verification.
+- Registration now lands on a verification screen that names the account email,
+  offers resend and status refresh, and lets a user continue while pending.
+  Email-bound team invitations continue to require verification; this change
+  does not add a global account lock. The user confirmed that Resend delivers
+  verification mail, but expiry, single-use and recovery acceptance remain open.
 - Local evidence: backend unit/HTTP suite **52/52**, client unit suite **22/22**,
   client production build passed, and focused migration tests **2/2**. The full
   database invocation reached **267/271**: identity tests passed; two existing
@@ -146,7 +151,7 @@ These are implementation strengths, not substitutes for final candidate tests.
   roles, rooms, projects, discovery, archive and transfers in
   `TEAM_PROJECT_PERMISSIONS.md`.
 - [ ] Preserve the single-owner database invariant and require ownership
-  transfer before the owner can leave or be removed.
+  transfer before the owner can leave, be removed or delete their account.
 
 ### Required lifecycle evidence
 
@@ -157,15 +162,24 @@ These are implementation strengths, not substitutes for final candidate tests.
   concurrent acceptance. Repeated acceptance must not consume another use.
 - [x] Cover shareable invitations and join-request decisions without widening
   access to unrelated rooms.
-- [ ] Cover ownership transfer: old-owner demotion, new-owner administration in
-  every team room, history boundary and the single-owner invariant under races.
-- [ ] Cover member removal and self-leave, including HTTP/socket revocation,
-  pending-task cleanup, invite cleanup and loss of project access.
+- [x] Add deferred database constraints that require exactly one `owner` team
+  member matching `teams.owner_id`; reconcile prior owner/grant state safely.
+- [x] Cover ownership transfer: old-owner demotion, new-owner administration
+  in every team room, the history boundary and concurrent transfer races. The
+  tests are authored but were not run in this pass.
+- [x] Cover member removal and self-leave, including HTTP/socket revocation,
+  pending-task cleanup, invite cleanup, pending-grant cleanup and loss of room
+  access. The tests are authored but were not run in this pass.
 - [x] Cover archive/restore as read-only behavior across messages, tasks,
   decisions, projects, briefs and automations.
-- [ ] Keep team names non-unique and document that IDs identify teams. Add a
-  stable slug or visible disambiguator before duplicate names cause confusion.
-- [ ] Set a beta cohort cap per team and document owner recovery/support.
+- [x] Keep team names non-unique; show a stable short team-ID reference in the
+  team list and detail view. The full UUID remains the authoritative identifier.
+- [x] Set a configurable per-team beta cap (default 25), limit invitation uses
+  to available spaces and reject acceptance/join when full.
+- [x] Define owner support: recover the account first; if that fails, an
+  operator verifies the request and may transfer ownership to an active team
+  admin using the audited recovery script. Each beta team should have a backup
+  admin before invitations are distributed.
 
 ### Team lifecycle test implementation — 24 November 2026
 
@@ -184,9 +198,33 @@ These are implementation strengths, not substitutes for final candidate tests.
 - Archive coverage asserts read-only behavior for rooms, messages, tasks,
   decisions, projects, briefs and automations, followed by successful writes
   after restoration. Brief writes now apply the archived-team guard.
-- The broader unchecked ownership/removal bullets still require race coverage,
-  self-leave, pending-task/invite cleanup and explicit history-boundary checks.
-  No lifecycle test was executed in this implementation pass.
+- The previously open race, self-leave, cleanup and history-boundary cases are
+  now authored in `realtime-access.test.js`, together with
+  owner invariant, concurrent transfer and cohort-cap regressions. No lifecycle
+  test was executed in this implementation pass.
+
+### Team lifecycle guardrails — 25 November 2026
+
+- Migration `075_team_owner_invariant.sql` repairs owner-role/grant mismatches,
+  removes stale deleted-member rows, creates immutable owner-transfer audit
+  records, and defers database checks until every team transaction has exactly
+  one owner row matching `teams.owner_id`. Team creation and ownership transfer
+  remain atomic; owner account deletion is rejected until ownership transfers.
+  The migration stops with an actionable error if a soft-deleted account still
+  owns a team; an operator must recover/transfer that team before retrying.
+  It is authored but has not been applied to the local or staging database;
+  the database invariant becomes active only after the migration is applied.
+- The default beta team cap is 25 members, configurable with
+  `BETA_MAX_TEAM_MEMBERS`. Shareable invitation use is capped at currently
+  available spaces; invite acceptance and approved join requests serialize on
+  the team row and reject new members at capacity.
+- Team names remain non-unique. The UI displays a stable 12-character team ID
+  reference while the full UUID remains the authoritative support identifier.
+- `backend/scripts/recover-team-owner.js` supports an operator-approved
+  transfer to an existing active team admin and records the operator, reason,
+  previous owner and successor in append-only `team_audit_events`.
+- Regression coverage is authored but was not run. Operators and named support
+  contacts still need to be assigned in the release evidence.
 
 ## P0 — projects and connected work fit for beta
 
@@ -233,18 +271,18 @@ These are implementation strengths, not substitutes for final candidate tests.
   rejection, duplicate room assignment, archived-team rejection and status.
 - [x] Cover visibility: non-members see nothing; eligible members see only
   projects and linked rooms allowed by policy; removal immediately removes access.
-- [ ] Cover milestones, task assignment, dependency cycle prevention, dependency
+- [x] Cover milestones, task assignment, dependency cycle prevention, dependency
   cleanup on room removal and decision/task summaries.
-- [ ] Cover brief optimistic concurrency and source-message visibility.
-- [ ] Cover automation idempotency across competing workers and failure/retry.
-- [ ] Surface API truncation at 200 tasks or 50 decisions; add pagination before
-  the beta cohort can realistically reach those limits.
-- [ ] Cover work inbox and search after history clearing, deletion, room leave
+- [x] Cover brief optimistic concurrency and source-message visibility.
+- [x] Cover automation idempotency across competing workers and failure/retry.
+- [x] Replace project task/decision fixed result ceilings with API pagination;
+  paginate the work inbox as well.
+- [x] Cover work inbox and search after history clearing, deletion, room leave
   and team removal.
 - [ ] Leave `teams.avatar_url` unwired only if no team-avatar control is shown.
   Track avatar upload as polish rather than implying it works.
 
-### Project lifecycle test implementation — 24 November 2026
+### Project lifecycle implementation — 25 November 2026
 
 - Creation coverage requires initial rooms and rejects duplicate selections,
   duplicate attachment, cross-team attachment and member creation. Visibility
@@ -254,16 +292,25 @@ These are implementation strengths, not substitutes for final candidate tests.
   coverage creates a blocker, rejects a cycle, and verifies that removing a
   room clears its project and milestone links plus every related dependency.
 - Brief coverage races two writers at the same version and verifies one commit,
-  one `409`, the winning body and the revision history.
+  one `409`, the winning body and the revision history. Brief source-message IDs
+  are now hidden when that message is deleted or outside the viewer's retained
+  history.
 - Automation coverage runs competing workers for one decision event and verifies
-  one durable claim and one generated task across repeated scans.
+  one durable claim and one generated task across repeated scans. A transient
+  task-write failure rolls back the event claim so a later scan can retry.
 - Work discovery coverage verifies assignment inbox and cross-room search,
-  message deletion, task completion, and immediate disappearance after team
-  membership removal.
-- The broader unchecked bullets still require source-message brief checks,
-  automation failure/retry, history clearing, explicit room leave, and complete
-  decision/task summary coverage. No lifecycle test was executed in this
-  implementation pass.
+  message deletion, task completion, history clearing, explicit room leave,
+  and immediate disappearance after team membership removal.
+- Project task and decision lists return 50 items per page with independent
+  `taskPage` and `decisionPage` page parameters and `hasMore` metadata. Project
+  health totals still aggregate every task visible to the viewer. The task
+  dependency picker searches across all project pages. The work inbox now
+  returns 50 items per page and the UI can load more.
+- Added regression cases for pagination beyond 50 results, complete project
+  summary counts, source-message visibility after history clearing, room-leave
+  visibility revocation, and automation retry after a failed write.
+- **Tests were authored but not run**, honoring the request to defer all test
+  execution. Backend static syntax checks and the client production build passed.
 
 ## P0 — moderation and enforcement
 
@@ -335,11 +382,13 @@ public self-registration path that assigns platform roles.
 - [ ] Run with Node 22 as declared by the repository and CI.
 - [ ] Run `npm run check`, fresh/rerun migrations, the complete database suite,
   browser/security suites and media suites against the final candidate.
-- [ ] Apply migrations through 074 twice in staging and verify the constraints.
+- [ ] Apply migrations through 075 twice in staging and verify the constraints.
   No production migration is included without a separate deployment decision.
 - [ ] Complete live R2, push and Resend acceptance with beta credentials.
-- [ ] Configure and verify TURN credentials, Web Push call invitations, and
-  audio/video calls across restrictive networks on supported real devices.
+- Calls, video calling and call history are hidden behind the default-off
+  `VITE_CALLS_ENABLED` client flag and are not part of this beta release. Keep
+  the implementation; do not configure TURN or count call acceptance as a beta
+  gate until the feature is intentionally unveiled.
 - [ ] Smoke-test supported desktop/mobile browsers and at least one Android and
   iOS device for signup, verification, invitations, rooms/projects, messaging,
   uploads, voice notes, reconnect and accessibility-critical flows.
@@ -371,6 +420,9 @@ The following capabilities remain outside the controlled beta scope. Their
 absence is an accepted boundary, not a release blocker, provided the implemented
 baseline behavior and authorization safeguards remain in place.
 
+- **Voice/video calls and call history:** implemented in the codebase but
+  hidden behind `VITE_CALLS_ENABLED=false`. They are not available in the beta
+  UI; TURN, call push and real-device call acceptance are deferred until launch.
 - **Room events:** recurring and all-day events remain deferred. One-time event
   scheduling, editing, RSVP, cancellation notices and reminders are implemented.
 - **Global search:** ranking, type/room/author/date filters and paging are
@@ -381,8 +433,8 @@ baseline behavior and authorization safeguards remain in place.
   platform-wide content removal remain deferred.
 
 These scope decisions do not waive the beta requirements for working existing
-notifications, manual DND and recurring quiet hours, calls and call history,
-voice notes, room messaging, access-scoped search,
+notifications, manual DND and recurring quiet hours, voice notes, room
+messaging, access-scoped search,
 or the implemented moderation baseline. The detailed designs and acceptance
 criteria for later work remain in `DEFERRED_FEATURES.md`.
 
@@ -396,12 +448,11 @@ Recurring quiet hours are available in notification settings. A weekly
 schedule uses the account's selected time zone and suppresses push and in-app
 message alerts while leaving notification history and unread state intact.
 
-Direct and small-group WebRTC calls support audio and video with a four-person
-mesh limit, call controls and recent history. Incoming Web Push opens the app
-to answer; microphone/camera access still requires a foreground action. Live
-TURN and push-provider acceptance are outstanding; configure TURN using
-`RTC_TURN_URLS` and `RTC_TURN_SHARED_SECRET` before relying on calls across
-restrictive networks.
+The call implementation remains in the repository, including direct and
+small-group WebRTC audio/video, call controls and recent history. The beta client
+keeps `VITE_CALLS_ENABLED=false`: call actions lead to a Coming soon screen,
+call history is not shown, and incoming call UI is suppressed. TURN and live
+call-push acceptance are intentionally deferred until calls are unveiled.
 
 The following deferred items require an explicit beta control:
 

@@ -7,6 +7,7 @@ module.exports = {
   beta: {
     signupsEnabled: process.env.BETA_SIGNUPS_ENABLED !== "false",
     maxActiveAccounts: Math.max(1, Number.parseInt(process.env.BETA_MAX_ACTIVE_ACCOUNTS || "250", 10) || 250),
+    maxTeamMembers: Math.max(1, Number.parseInt(process.env.BETA_MAX_TEAM_MEMBERS || "25", 10) || 25),
     storageAlertGb: Math.max(0, Number.parseFloat(process.env.BETA_STORAGE_ALERT_GB || "50") || 0),
     storageUsdPerGbMonth: Math.max(0, Number.parseFloat(process.env.BETA_STORAGE_USD_PER_GB_MONTH || "0") || 0),
     storageMonthlyBudgetUsd: Math.max(0, Number.parseFloat(process.env.BETA_STORAGE_MONTHLY_BUDGET_USD || "0") || 0),

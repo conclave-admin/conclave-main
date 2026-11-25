@@ -4,6 +4,7 @@ import AuthLayout from "@/components/layout/AuthLayout";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import { useAuth } from "@/contexts/AuthContext";
+import { isDevAuthBypass } from "@/config/devPreview";
 
 /**
  * Create an account.
@@ -29,8 +30,15 @@ export default function Register() {
     setSubmitting(true);
     setError("");
     try {
-      await register(form);
-      navigate(sessionStorage.getItem("conclave:pending-team-invitation") ? "/join-team" : sessionStorage.getItem("conclave:pending-invitation") ? "/join" : "/chats", { replace: true });
+      const result = await register(form);
+      if (isDevAuthBypass) {
+        navigate("/chats", { replace: true });
+        return;
+      }
+      navigate("/verify-email", {
+        replace: true,
+        state: { verificationEmailQueued: result?.verificationEmailQueued },
+      });
     } catch (err) {
       setError(err.response?.data?.message || "Could not create your account.");
     } finally {
