@@ -14,7 +14,7 @@ export const addDependency = (taskId, dependsOnId) => data(api.post(`/work/tasks
 export const removeDependency = (taskId, dependsOnId) => data(api.delete(`/work/tasks/${taskId}/dependencies/${dependsOnId}`));
 export const getRoomBrief = (roomId) => data(api.get(`/work/rooms/${roomId}/brief`));
 export const saveRoomBrief = (roomId, payload) => data(api.put(`/work/rooms/${roomId}/brief`, payload));
-export const searchWork = (q) => data(api.get("/work/search", { params: { q } }));
+export const searchWork = (q, filters = {}) => data(api.get("/work/search", { params: { q, ...filters } }));
 export const getWorkInbox = () => data(api.get("/work/inbox"));
 export const setWorkInboxState = (payload) => data(api.patch("/work/inbox/state", payload));
 export const listAutomations = (id) => data(api.get(`/work/projects/${id}/automations`));

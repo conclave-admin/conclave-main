@@ -17,6 +17,7 @@ const socketHandler = require("../utils/socketHandler");
 const rateLimit = require("../middlewares/rateLimit.middleware");
 const ApiError = require("../utils/ApiError");
 const { requireSession, sessionRoom } = require("../services/session.service");
+const callService = require("../services/call.service");
 const {
   registerAccessControl,
   withRoomMembership,
@@ -177,6 +178,9 @@ function registerSocketHandlers(io) {
           if (event !== "disconnect") {
             if (!initialized || !socket.connected) return;
             if (Date.now() >= socket.sessionExpiresAt) {
+              if (socket.data.activeCallId)
+                await callService.finishCall(io, socket, userId, socket.data.activeCallId, "end").catch(() => {});
+              socket.data.activeCallId = null;
               socket.emit("session:expired", {
                 sessionId: socket.data.sessionId,
               });
@@ -267,8 +271,11 @@ function registerSocketHandlers(io) {
     let expiryTimer;
     const scheduleExpiry = () => {
       expiryTimer = setTimeout(
-        () => {
+        async () => {
           if (Date.now() < socket.sessionExpiresAt) return scheduleExpiry();
+          if (socket.data.activeCallId)
+            await callService.finishCall(io, socket, userId, socket.data.activeCallId, "end").catch((error) => console.warn("Could not end call on session expiry", error.message));
+          socket.data.activeCallId = null;
           socket.emit("session:expired", { sessionId: socket.data.sessionId });
           socket.disconnect(true);
         },
@@ -300,6 +307,55 @@ function registerSocketHandlers(io) {
       await conversationActivity.clearDevice(roomId, userId, socket.id, order);
       await presence.publishRoomPresence(io, roomId, undefined, userId);
       return { roomId, left: true };
+    });
+
+    onEvent("call:start", async ({ roomId, callType }) => {
+      if (typeof roomId !== "string" || !/^[0-9a-f-]{36}$/i.test(roomId))
+        throw new ApiError(400, "A valid direct conversation is required");
+      await rateLimit.requireShared(`call:start:${userId}`, {
+        windowMs: 5 * 60_000,
+        max: 6,
+      }, "Too many call attempts. Try again later.");
+      const result = await callService.startCall(io, socket, userId, roomId, callType || "audio");
+      socket.data.activeCallId = result.call.id;
+      return result;
+    });
+
+    onEvent("call:accept", async ({ callId }) => {
+      if (typeof callId !== "string" || !/^[0-9a-f-]{36}$/i.test(callId))
+        throw new ApiError(400, "A valid call is required");
+      await rateLimit.requireShared(`call:control:${userId}`, { windowMs: 60_000, max: 30 }, "Too many call updates. Please try again.");
+      const result = await callService.acceptCall(io, socket, userId, callId);
+      socket.data.activeCallId = callId;
+      return result;
+    });
+
+    onEvent("call:decline", async ({ callId }) => {
+      if (typeof callId !== "string" || !/^[0-9a-f-]{36}$/i.test(callId))
+        throw new ApiError(400, "A valid call is required");
+      await rateLimit.requireShared(`call:control:${userId}`, { windowMs: 60_000, max: 30 }, "Too many call updates. Please try again.");
+      const result = await callService.finishCall(io, socket, userId, callId, "decline");
+      if (socket.data.activeCallId === callId) socket.data.activeCallId = null;
+      return result;
+    });
+
+    onEvent("call:end", async ({ callId }) => {
+      if (typeof callId !== "string" || !/^[0-9a-f-]{36}$/i.test(callId))
+        throw new ApiError(400, "A valid call is required");
+      await rateLimit.requireShared(`call:control:${userId}`, { windowMs: 60_000, max: 30 }, "Too many call updates. Please try again.");
+      const result = await callService.finishCall(io, socket, userId, callId, "end");
+      if (socket.data.activeCallId === callId) socket.data.activeCallId = null;
+      return result;
+    });
+
+    onEvent("call:signal", async ({ callId, toUserId, signal }) => {
+      if (typeof callId !== "string" || !/^[0-9a-f-]{36}$/i.test(callId))
+        throw new ApiError(400, "A valid call is required");
+      await rateLimit.requireShared(`call:signal:${userId}`, {
+        windowMs: 60_000,
+        max: 120,
+      }, "Too many call updates. Please try again.");
+      return callService.relaySignal(io, userId, callId, toUserId, signal);
     });
 
     // --- send-message: persist to DB, then broadcast the saved row ---

@@ -12,6 +12,12 @@ async function revokeLocal(io, request) {
       request.kind === "session" &&
       socket.data.sessionId === request.sessionId
     ) {
+      if (socket.data.activeCallId) {
+        await require("./call.service")
+          .finishCall(io, socket, socket.data.userId, socket.data.activeCallId, "end")
+          .catch((error) => console.error("Could not end call on session revocation", error.message));
+        socket.data.activeCallId = null;
+      }
       socket.emit("session:revoked", { sessionId: request.sessionId });
       socket.disconnect(true);
     }

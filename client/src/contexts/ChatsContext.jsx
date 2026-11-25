@@ -94,6 +94,8 @@ export function ChatsProvider({ children }) {
             activityLevel: preferences?.activity_level ?? "all",
             muted: preferences?.muted ?? {},
             inAppAlerts: preferences?.in_app_alerts_enabled !== false,
+            quietHours: preferences?.quiet_hours ?? [],
+            quietHoursTimezone: preferences?.quiet_hours_timezone ?? "UTC",
           };
         })
         .catch(() => {});

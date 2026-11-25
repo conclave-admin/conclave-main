@@ -5,9 +5,13 @@ import { useRealtime } from "../../contexts/RealtimeContext";
 import { Link } from "react-router-dom";
 import IconArrowLeft from "@/assets/icons/arrow-left.svg?react";
 import IconInfo from "@/assets/icons/info.svg?react";
+import IconCall from "@/assets/icons/call.svg?react";
+import IconVideo from "@/assets/icons/video.svg?react";
+import IconCalendar from "@/assets/icons/calendar.svg?react";
 import Avatar from "@/components/ui/Avatar";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePresence } from "@/contexts/PresenceContext";
+import { useCalls } from "@/contexts/CallContext";
 
 /**
  * The header shown while a room is open.
@@ -35,14 +39,24 @@ export default function RoomHeader({ room, isConnected }) {
     (room.type === "dm" ? "Deleted user" : room.name || "Conversation");
   const { user } = useAuth();
   const { isOnlineIn, getPresence, labelFor } = usePresence();
+  const { startCall, call } = useCalls();
   const isDm = room.type === "dm";
   const peer = isDm
     ? room.members?.find((member) => member.id !== user?.id)
     : null;
+  const canCall = (isDm && peer && !peer.suspended_at) || room.type === "group";
   const peerActive = Boolean(peer && isOnlineIn(room.id, peer.id));
 
   return (
     <div className="flex min-w-0 items-center gap-2">
+      <Link
+        to={`/chats/${room.id}/events`}
+        aria-label="Room events"
+        title="Room events"
+        className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-muted hover:bg-canvas"
+      >
+        <IconCalendar className="h-5 w-5" aria-hidden="true" />
+      </Link>
       <Link
         to="/chats"
         aria-label="Back to chats"
@@ -87,6 +101,31 @@ export default function RoomHeader({ room, isConnected }) {
           </span>
         </p>
       </div>
+
+      {canCall && (
+        <button
+          type="button"
+          aria-label={isDm ? `Call ${peer.display_name || title}` : `Start voice call in ${title}`}
+          title="Start voice call"
+          disabled={Boolean(call)}
+          onClick={() => startCall(room.id, peer, "audio")}
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-muted hover:bg-canvas disabled:opacity-50"
+        >
+          <IconCall className="h-5 w-5" aria-hidden="true" />
+        </button>
+      )}
+      {canCall && (
+        <button
+          type="button"
+          aria-label={isDm ? `Video call ${peer.display_name || title}` : `Start video call in ${title}`}
+          title="Start video call"
+          disabled={Boolean(call)}
+          onClick={() => startCall(room.id, peer, "video")}
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-muted hover:bg-canvas disabled:opacity-50"
+        >
+          <IconVideo className="h-5 w-5" aria-hidden="true" />
+        </button>
+      )}
 
       <button
         type="button"

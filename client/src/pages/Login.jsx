@@ -87,6 +87,9 @@ export default function Login() {
         >
           Forgot password?
         </Link>
+        <Link className="block text-label text-brand hover:underline" to="/appeal">
+          Appeal an account action
+        </Link>
         <Link
           className="inline-block text-label text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
           to="/register"

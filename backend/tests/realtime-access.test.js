@@ -1601,6 +1601,7 @@ test("push delivery retries transient failure, previews by default, groups by ro
       assert.ok(payload.includes(message.content));
       assert.equal(data.tag, `conclave:room:${f.id}`);
       assert.equal(data.url, "/notifications");
+      assert.match(data.actionToken, /^[A-Za-z0-9_-]{43}$/);
       calls++;
     });
     assert.equal(calls, 2);
@@ -1628,6 +1629,7 @@ test("push delivery retries transient failure, previews by default, groups by ro
       // Grouping still holds with previews off: the conversation-kind tag is
       // what collapses the stack, independent of what the body says.
       assert.equal(data.tag, `conclave:room:${f.id}:new_message`);
+      assert.match(data.actionToken, /^[A-Za-z0-9_-]{43}$/);
       calls++;
     });
     assert.equal(calls, 3);
@@ -2315,6 +2317,55 @@ test("beta signup cap and kill switch reject new accounts before creating them",
   } finally {
     Object.assign(env.beta, prior);
   }
+});
+
+test("push mark-read action acknowledges only its visible message boundary and is single-use", async () => {
+  const sender = await account();
+  const recipient = await account();
+  const roomId = await room(sender, recipient);
+  const earlier = await request("/messages", sender.token, "POST", {
+    roomId,
+    clientId: randomUUID(),
+    content: "Earlier unread message",
+  });
+  assert.equal(earlier.status, 201, JSON.stringify(earlier.body));
+  const sent = await request("/messages", sender.token, "POST", {
+    roomId,
+    clientId: randomUUID(),
+    content: "Read this from the notification action",
+  });
+  assert.equal(sent.status, 201, JSON.stringify(sent.body));
+  const messageId = sent.body.data.id;
+  const notificationId = randomUUID();
+  const subscriptionId = randomUUID();
+  const bindingId = randomUUID();
+  const token = randomBytes(32).toString("base64url");
+  await query(
+    `INSERT INTO push_subscriptions(id,user_id,session_id,endpoint,subscription,binding_id,renewal_hash)
+     VALUES($1,$2,$3,$4,$5::jsonb,$6,'test-renewal-hash')`,
+    [subscriptionId, recipient.userId, recipient.sessionId,
+      `https://fcm.googleapis.com/action-${subscriptionId}`,
+      JSON.stringify({ endpoint: `https://fcm.googleapis.com/action-${subscriptionId}`, keys: { p256dh: "test", auth: "test" } }), bindingId],
+  );
+  await query(
+    `INSERT INTO notifications(id,recipient_id,type,reference_id,actor_id)
+     VALUES($1,$2,'new_message',$3,$4)`,
+    [notificationId, recipient.userId, messageId, sender.userId],
+  );
+  await query(
+    `INSERT INTO notification_action_tokens(token_hash,notification_id,message_id,user_id,session_id,subscription_id,binding_id,action,expires_at)
+     VALUES($1,$2,$3,$4,$5,$6,$7,'mark_read',NOW()+INTERVAL '10 minutes')`,
+    [createHash("sha256").update(token).digest("hex"), notificationId, messageId,
+      recipient.userId, recipient.sessionId, subscriptionId, bindingId],
+  );
+
+  const action = await request("/push/actions/mark-read", null, "POST", { token });
+  assert.equal(action.status, 200, JSON.stringify(action.body));
+  assert.equal(action.body.data.markedRead, true);
+  assert.equal((await query("SELECT seen FROM notifications WHERE id=$1", [notificationId])).rows[0].seen, true);
+  assert.equal((await query("SELECT read FROM message_recipients WHERE message_id=$1 AND recipient_id=$2", [messageId, recipient.userId])).rows[0].read, true);
+  assert.equal((await query("SELECT read FROM message_recipients WHERE message_id=$1 AND recipient_id=$2", [earlier.body.data.id, recipient.userId])).rows[0].read, true);
+  assert.equal((await request("/push/actions/mark-read", null, "POST", { token })).status, 404);
 });
 
 test("account suspension revokes all sessions and restoration allows a fresh login", async () => {

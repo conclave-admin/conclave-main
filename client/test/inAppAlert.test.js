@@ -119,6 +119,16 @@ test("do-not-disturb suppresses only while the window is current", () => {
   assert.equal(shouldAlert({ notification: message(), now }), true);
 });
 
+test("recurring quiet hours suppress in-app alerts in the selected timezone", () => {
+  const notification = message();
+  const policy = {
+    quietHours: [{ days: [1], start: "08:00", end: "09:00" }],
+    quietHoursTimezone: "America/New_York",
+  };
+  assert.equal(shouldAlert({ notification, policy, now: new Date("2026-06-01T12:30:00Z") }), false);
+  assert.equal(shouldAlert({ notification, policy, now: new Date("2026-06-01T14:30:00Z") }), true);
+});
+
 test("a notification without a resolvable room cannot be opened, so it cannot alert", () => {
   assert.equal(shouldAlert({ notification: { type: "new_message" } }), false);
   assert.equal(

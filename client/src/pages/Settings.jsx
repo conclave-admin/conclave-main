@@ -54,6 +54,8 @@ const TYPES = [
   { value: "member_joined", label: "New room members" },
   { value: "task", label: "Task assignments" },
   { value: "decision", label: "Decision changes" },
+  { value: "event_reminder", label: "Event reminders" },
+  { value: "event_cancelled", label: "Event cancellations" },
 ];
 
 const SETTINGS_SECTIONS = [
@@ -62,6 +64,9 @@ const SETTINGS_SECTIONS = [
   ["media", "Media"],
   ["privacy", "Privacy & security"],
   ["attention", "Focus"],
+];
+const QUIET_DAYS = [
+  [1, "Mon"], [2, "Tue"], [3, "Wed"], [4, "Thu"], [5, "Fri"], [6, "Sat"], [0, "Sun"],
 ];
 
 /**
@@ -195,6 +200,21 @@ export default function Settings() {
   const level = preferences?.activity_level ?? "all";
   const muted = preferences?.muted ?? {};
   const silenced = level === "none";
+  const quietWindow = preferences?.quiet_hours?.[0] || {
+    days: [],
+    start: "22:00",
+    end: "08:00",
+  };
+  const quietTimezone = preferences?.quiet_hours_timezone || "UTC";
+  const timezoneOptions = typeof Intl.supportedValuesOf === "function"
+    ? [...new Set([quietTimezone, "UTC", ...Intl.supportedValuesOf("timeZone")])]
+    : [...new Set([quietTimezone, "UTC", "Africa/Lagos", "Europe/London", "America/New_York", "America/Los_Angeles", "Asia/Tokyo", "Australia/Sydney"])];
+
+  function saveQuietWindow(window, timezone = quietTimezone) {
+    const days = [...new Set(window.days)].sort((a, b) => a - b);
+    const windows = days.length ? [{ days, start: window.start, end: window.end }] : [];
+    save({ quiet_hours: windows, quiet_hours_timezone: timezone }, "quietHours");
+  }
 
   return (
     <Page width="form" className="settings-page">
@@ -366,6 +386,59 @@ export default function Settings() {
               : "No sound or banner while the app is open — unread counts on the chat list still update."}{" "}
             Never applies to the conversation on screen, and always respects
             do-not-disturb, muted conversations and your notify settings below.
+          </p>
+        </div>
+
+        <div className="mt-4 space-y-4 rounded-lg border border-line p-4">
+          <div>
+            <h3 className="text-label font-semibold text-ink">Quiet hours</h3>
+            <p className="mt-1 text-metadata text-muted">
+              Pause push, sound and in-app message alerts on a weekly schedule. Messages and unread counts are still saved.
+            </p>
+          </div>
+          <fieldset>
+            <legend className="text-label text-ink">Repeat on</legend>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {QUIET_DAYS.map(([day, label]) => {
+                const selected = quietWindow.days.includes(day);
+                return (
+                  <label key={day} className={`flex min-h-10 cursor-pointer items-center gap-2 rounded-full border px-3 text-label ${selected ? "border-brand bg-brand-soft text-brand" : "border-line text-ink"}`}>
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      disabled={savingKey === "quietHours"}
+                      onChange={() => saveQuietWindow({
+                        ...quietWindow,
+                        days: selected ? quietWindow.days.filter((value) => value !== day) : [...quietWindow.days, day],
+                      }, !preferences?.quiet_hours?.length && quietTimezone === "UTC" && typeof Intl !== "undefined"
+                        ? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+                        : quietTimezone)}
+                      className="h-4 w-4 rounded border-line text-brand"
+                    />
+                    {label}
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
+          <div className="grid grid-cols-2 gap-3 sm:max-w-sm">
+            <label className="space-y-1 text-label text-ink">
+              Starts
+              <input type="time" value={quietWindow.start} disabled={!quietWindow.days.length || savingKey === "quietHours"} onChange={(event) => saveQuietWindow({ ...quietWindow, start: event.target.value })} className="block min-h-11 w-full rounded-lg border border-line bg-surface px-3 text-body" />
+            </label>
+            <label className="space-y-1 text-label text-ink">
+              Ends
+              <input type="time" value={quietWindow.end} disabled={!quietWindow.days.length || savingKey === "quietHours"} onChange={(event) => saveQuietWindow({ ...quietWindow, end: event.target.value })} className="block min-h-11 w-full rounded-lg border border-line bg-surface px-3 text-body" />
+            </label>
+          </div>
+          <label className="block max-w-sm space-y-1 text-label text-ink">
+            Time zone
+            <select value={quietTimezone} disabled={savingKey === "quietHours"} onChange={(event) => saveQuietWindow(quietWindow, event.target.value)} className="block min-h-11 w-full rounded-lg border border-line bg-surface px-3 text-body">
+              {timezoneOptions.map((zone) => <option key={zone} value={zone}>{zone.replaceAll("_", " ")}</option>)}
+            </select>
+          </label>
+          <p className="text-metadata text-muted" role="status">
+            {quietWindow.days.length ? `Quiet ${quietWindow.start}–${quietWindow.end} · ${quietTimezone}` : "Quiet hours are off."}
           </p>
         </div>
 

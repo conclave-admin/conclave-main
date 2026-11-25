@@ -1,3 +1,5 @@
+import { isQuietNow } from "./quietHours.js";
+
 // Should an incoming notification interrupt the user inside the app?
 //
 // Extracted from ChatsContext so the rule can be unit-tested: it is the one
@@ -24,7 +26,8 @@ export const ALERTABLE_TYPES = [
  * @param {{type: string, context?: {room_id?: string}}} input.notification
  * @param {string|null} [input.activeRoomId] - conversation open in this tab
  * @param {{activityLevel?: string, muted?: Record<string, boolean>,
- *          dndUntil?: string|null, inAppAlerts?: boolean}} [input.policy]
+ *          dndUntil?: string|null, inAppAlerts?: boolean,
+ *          quietHours?: Array, quietHoursTimezone?: string}} [input.policy]
  * @param {string[]} [input.mutedRooms]
  * @param {string[]} [input.archivedRooms]
  * @param {string} [input.visibilityState] - only visible documents interrupt
@@ -69,6 +72,7 @@ export function shouldAlert({
 
   // An active do-not-disturb window. Missing or past means off.
   if (policy.dndUntil && new Date(policy.dndUntil) > now) return false;
+  if (isQuietNow(policy.quietHours, policy.quietHoursTimezone, now)) return false;
 
   return true;
 }

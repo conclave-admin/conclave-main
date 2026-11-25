@@ -38,6 +38,17 @@ module.exports = {
       .map((value) => value.trim())
       .filter(Boolean),
   },
+  calls: {
+    stunUrls: (process.env.RTC_STUN_URLS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+    turnUrls: (process.env.RTC_TURN_URLS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+    turnSharedSecret: process.env.RTC_TURN_SHARED_SECRET,
+  },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME,
     apiKey: process.env.CLOUDINARY_API_KEY,

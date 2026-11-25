@@ -185,14 +185,30 @@ self.addEventListener("push", (event) =>
       // a separate OS notification per message (renotify: true). Falling
       // back to a per-notification tag keeps older/malformed payloads and
       // non-message types from colliding with each other.
-      const tag = typeof data.tag === "string" ? data.tag : `conclave:${data.id}`;
+      const tag = typeof data.tag === "string" ? data.tag : `conclave:${data.kind === "call" ? `call:${data.id}` : data.id}`;
       await self.registration.showNotification(data.title || "Conclave", {
         body: data.body || "You have new activity in Conclave",
         tag,
         renotify: true,
         icon: "/apple-touch-icon.png",
         badge: "/favicon-32.png",
-        data: { id: data.id, bindingId: data.bindingId, url: "/notifications" },
+        actions: data.actionToken
+          ? [
+              { action: "mark-read", title: "Mark as read" },
+              { action: "open-chat", title: "Open chat" },
+            ]
+          : data.kind === "call"
+            ? [{ action: "open-call", title: "Open to answer" }]
+            : [],
+        data: {
+          id: data.id,
+          bindingId: data.bindingId,
+          actionToken: data.actionToken || null,
+          roomId: data.roomId || null,
+          url: "/notifications",
+          kind: data.kind || null,
+          callId: data.callId || null,
+        },
       });
       for (const client of await self.clients.matchAll({ type: "window" }))
         client.postMessage({ type: "SYNC_REQUEST" });
@@ -206,7 +222,36 @@ self.addEventListener("notificationclick", (event) => {
       const binding = await pushState();
       if (!binding || binding.bindingId !== event.notification.data?.bindingId)
         return;
-      const target = new URL("/notifications", self.location.origin).href;
+      if (
+        event.action === "mark-read" &&
+        typeof event.notification.data?.actionToken === "string"
+      ) {
+        try {
+          const response = await fetch(`${binding.apiBase}/push/actions/mark-read`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ token: event.notification.data.actionToken }),
+          });
+          if (response.ok) {
+            for (const client of await self.clients.matchAll({ type: "window" }))
+              client.postMessage({ type: "SYNC_REQUEST" });
+            return;
+          }
+        } catch {
+          // If the one-tap action cannot reach the server, open the conversation
+          // so the user can read it normally after the app restores their session.
+        }
+      }
+      const roomId = event.notification.data?.roomId;
+      const openConversation = event.action === "open-chat" || event.action === "mark-read";
+      const callId = event.notification.data?.callId;
+      const validUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value || "");
+      const targetPath = event.notification.data?.kind === "call" && validUuid(callId)
+        ? `/calls?incoming=${callId}`
+        : openConversation && validUuid(roomId)
+          ? `/chats/${roomId}`
+          : "/notifications";
+      const target = new URL(targetPath, self.location.origin).href;
       const clients = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true,

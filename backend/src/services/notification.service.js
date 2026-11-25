@@ -37,12 +37,14 @@ const ROOM_TARGET_TYPES = ["room_invite", "member_joined"];
 // no way to learn about it short of opening the board.
 const TASK_TARGET_TYPES = ["task"];
 const DECISION_TARGET_TYPES = ["decision"];
+const EVENT_TARGET_TYPES = ["event_reminder", "event_cancelled"];
 
 const NOTIFICATION_TYPES = [
   ...MESSAGE_TARGET_TYPES,
   ...ROOM_TARGET_TYPES,
   ...TASK_TARGET_TYPES,
   ...DECISION_TARGET_TYPES,
+  ...EVENT_TARGET_TYPES,
 ];
 
 const TARGET_OF = {
@@ -54,6 +56,8 @@ const TARGET_OF = {
   member_joined: "room",
   task: "task",
   decision: "decision",
+  event_reminder: "event",
+  event_cancelled: "event",
 };
 
 // Long enough to render a line in the bell, short enough not to dump a whole
@@ -146,6 +150,7 @@ async function presentNotifications(rows, { db } = {}) {
   const roomIds = [];
   const taskIds = [];
   const decisionIds = [];
+  const eventIds = [];
   const actorIds = new Set();
   for (const row of rows) {
     if (row.actor_id) actorIds.add(row.actor_id);
@@ -154,6 +159,7 @@ async function presentNotifications(rows, { db } = {}) {
     else if (TARGET_OF[row.type] === "room") roomIds.push(row.reference_id);
     else if (TARGET_OF[row.type] === "task") taskIds.push(row.reference_id);
     else if (TARGET_OF[row.type] === "decision") decisionIds.push(row.reference_id);
+    else if (TARGET_OF[row.type] === "event") eventIds.push(row.reference_id);
   }
 
   // A soft-deleted message still resolves — the recipient should still see that
@@ -222,6 +228,16 @@ async function presentNotifications(rows, { db } = {}) {
     for (const decision of found) decisions.set(decision.id, decision);
   }
 
+  const events = new Map();
+  if (eventIds.length > 0) {
+    const { rows: found } = await run(
+      `SELECT e.id,e.title,e.room_id,r.name AS room_name,r.slug AS room_slug
+       FROM room_events e JOIN rooms r ON r.id=e.room_id WHERE e.id=ANY($1::uuid[])`,
+      [eventIds],
+    );
+    for (const event of found) events.set(event.id, event);
+  }
+
   return rows.map((row) => {
     let context = {
       room_id: null,
@@ -282,6 +298,9 @@ async function presentNotifications(rows, { db } = {}) {
         decision_title: decision.title,
         decision_status: decision.status,
       };
+    } else if (row.reference_id && TARGET_OF[row.type] === "event") {
+      const event = events.get(row.reference_id);
+      if (event) context = { ...context, room_id: event.room_id, room_name: event.room_name, room_slug: event.room_slug, event_title: event.title };
     }
 
     // Whoever caused it, falling back to the message's sender when the row has

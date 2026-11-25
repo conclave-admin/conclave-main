@@ -277,11 +277,16 @@ These are implementation strengths, not substitutes for final candidate tests.
   transitions with actor, reason, timestamps and an append-only audit table.
 - [x] Add account suspension/restoration. Suspension must block login and API
   access and revoke all sessions immediately.
+- [x] Add report assignment and an audited appeal queue. Suspended users can
+  submit and check appeals with their account credentials; an independent
+  moderator can uphold or reverse a decision.
 - [x] Author authorization/privacy regressions for ordinary users, room admins,
   bounded report context, concurrent transitions, suspended sessions, login,
   refresh and restoration. They were deliberately not executed in this pass at
   the user's request; execution is still a candidate gate.
-- Assignment and full appeals may remain deferred for a single-moderator beta.
+- [ ] Add and run focused coverage for report/appeal assignment, suspension and
+  report appeals, reviewer separation, credential verification, reversal and
+  immediate restoration. These new paths were not tested in this pass.
 - [ ] Name the moderator, support contact and storage operator; confirm who can
   perform urgent content takedown when a room admin or author cannot act.
 
@@ -330,9 +335,11 @@ public self-registration path that assigns platform roles.
 - [ ] Run with Node 22 as declared by the repository and CI.
 - [ ] Run `npm run check`, fresh/rerun migrations, the complete database suite,
   browser/security suites and media suites against the final candidate.
-- [ ] Apply migrations through 065 twice in staging and verify the constraints.
+- [ ] Apply migrations through 074 twice in staging and verify the constraints.
   No production migration is included without a separate deployment decision.
 - [ ] Complete live R2, push and Resend acceptance with beta credentials.
+- [ ] Configure and verify TURN credentials, Web Push call invitations, and
+  audio/video calls across restrictive networks on supported real devices.
 - [ ] Smoke-test supported desktop/mobile browsers and at least one Android and
   iOS device for signup, verification, invitations, rooms/projects, messaging,
   uploads, voice notes, reconnect and accessibility-critical flows.
@@ -358,26 +365,50 @@ public self-registration path that assigns platform roles.
 - [ ] Correct stale deployment, issue, backend-task and privacy documentation
   before publishing beta operator instructions.
 
-## Deferred features and the beta boundary
+## Accepted beta deferrals — not release blockers
 
-The following items from `DEFERRED_FEATURES.md` may remain deferred when their
-limitations are disclosed:
+The following capabilities remain outside the controlled beta scope. Their
+absence is an accepted boundary, not a release blocker, provided the implemented
+baseline behavior and authorization safeguards remain in place.
 
-- OS notification actions.
-- Recurring quiet hours.
-- Voice/video/group calling and call history.
-- Room events.
+- **Room events:** recurring and all-day events remain deferred. One-time event
+  scheduling, editing, RSVP, cancellation notices and reminders are implemented.
+- **Global search:** ranking, type/room/author/date filters and paging are
+  implemented. Stable cursor pagination and large-history performance remain
+  beta hardening work.
+- **Platform moderation:** manual report/appeal assignment and independent
+  appeal review are implemented. Automated assignment, deadlines and direct
+  platform-wide content removal remain deferred.
 
-Cross-room search is no longer wholly absent: scoped work search covers visible
-messages, decisions, tasks, files, rooms and shared people. Broader ranking,
-filters, scale and product semantics may remain deferred, but documentation must
-not describe all cross-room search as unimplemented.
+These scope decisions do not waive the beta requirements for working existing
+notifications, manual DND and recurring quiet hours, calls and call history,
+voice notes, room messaging, access-scoped search,
+or the implemented moderation baseline. The detailed designs and acceptance
+criteria for later work remain in `DEFERRED_FEATURES.md`.
+
+Message push notifications now offer **Mark as read** and **Open chat** actions
+where browser notification actions are supported; ordinary click-through remains
+the fallback. Mark as read is bounded to the notification's visible message
+sequence and requires a short-lived, single-use capability. Inline reply remains
+out of scope.
+
+Recurring quiet hours are available in notification settings. A weekly
+schedule uses the account's selected time zone and suppresses push and in-app
+message alerts while leaving notification history and unread state intact.
+
+Direct and small-group WebRTC calls support audio and video with a four-person
+mesh limit, call controls and recent history. Incoming Web Push opens the app
+to answer; microphone/camera access still requires a foreground action. Live
+TURN and push-provider acceptance are outstanding; configure TURN using
+`RTC_TURN_URLS` and `RTC_TURN_SHARED_SECRET` before relying on calls across
+restrictive networks.
 
 The following deferred items require an explicit beta control:
 
-- **Platform moderation:** the minimum inbox, audit and suspension workflow is
-  implemented. Its authored authorization and revocation regressions still need
-  execution, and a moderator/support owner must be provisioned before beta.
+- **Platform moderation:** report assignment and appeal review are implemented.
+  Their authorization, reviewer-separation and revocation checks were not run
+  in this pass. Provision active moderators and name a support owner before
+  beta; live operations still need a response and takedown policy.
 - **Storage quotas:** reservation accounting may trail beta only with the
   active-account cap, daily storage report, provider billing review and named
   operator response described in `BETA_OPERATIONS.md`.

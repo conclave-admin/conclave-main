@@ -49,6 +49,7 @@ async function acknowledge({
   roomId,
   userId,
   messageId,
+  through = false,
   read = false,
   all = false,
   io,
@@ -56,7 +57,7 @@ async function acknowledge({
 }) {
   if (
     !UUID.test(roomId) ||
-    (!all && (typeof messageId !== "string" || !UUID.test(messageId)))
+      (!all && (typeof messageId !== "string" || !UUID.test(messageId)))
   )
     throw new ApiError(400, "Valid room and message IDs are required");
   const result = await withRoomMembership(roomId, userId, async (db) => {
@@ -72,10 +73,11 @@ async function acknowledge({
     if (
       !all &&
       !(
-        await db.query("SELECT 1 FROM messages WHERE id=$1 AND room_id=$2", [
-          messageId,
-          roomId,
-        ])
+        await db.query(
+          `SELECT 1 FROM messages WHERE id=$1 AND room_id=$2
+           AND ($3::boolean=FALSE OR (room_sequence IS NOT NULL AND message_visible(id,$4)))`,
+          [messageId, roomId, through, userId],
+        )
       ).rowCount
     )
       throw new ApiError(404, "Message not found");
@@ -84,8 +86,10 @@ async function acknowledge({
       delivered_at=CASE WHEN r.delivered THEN r.delivered_at ELSE NOW() END,
       read=r.read OR $4, read_at=CASE WHEN $4 AND NOT r.read THEN NOW() ELSE r.read_at END
       FROM messages m WHERE m.id=r.message_id AND m.room_id=$1 AND r.recipient_id=$2
-      AND ($5 OR m.id=$3::uuid) AND (NOT r.delivered OR ($4 AND NOT r.read)) RETURNING r.message_id`,
-      [roomId, userId, messageId || null, read, all],
+      AND ($5 OR ($6 AND m.room_sequence <= (SELECT boundary.room_sequence FROM messages boundary WHERE boundary.id=$3::uuid)) OR m.id=$3::uuid)
+      AND (NOT $6 OR message_visible(m.id,$2))
+      AND (NOT r.delivered OR ($4 AND NOT r.read)) RETURNING r.message_id`,
+      [roomId, userId, messageId || null, read, all, through],
     );
     const ids = changed.rows.map((row) => row.message_id);
     if (ids.length)

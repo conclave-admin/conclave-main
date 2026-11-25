@@ -12,6 +12,7 @@ import { RealtimeProvider } from "./contexts/RealtimeContext";
 import { OutboxProvider } from "./contexts/OutboxContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { ToastProvider } from "./contexts/ToastContext";
+import { CallProvider } from "./contexts/CallContext";
 import StaticPage from "./pages/StaticPage";
 
 const CatchUpDigestPage = lazy(() => import("./pages/CatchUpDigestPage"));
@@ -28,6 +29,7 @@ const Register = lazy(() => import("./pages/Register"));
 const AccountRecovery = lazy(() => import("./pages/AccountRecovery"));
 const Room = lazy(() => import("./pages/ConversationRoute"));
 const RoomInfo = lazy(() => import("./pages/RoomInfo"));
+const RoomEvents = lazy(() => import("./pages/RoomEvents"));
 const Settings = lazy(() => import("./pages/Settings"));
 const MessageActivity = lazy(() => import("./pages/MessageActivity"));
 const Tasks = lazy(() => import("./pages/Tasks"));
@@ -43,6 +45,9 @@ const RoomBrief = lazy(() => import("./pages/RoomBrief"));
 const TeamHome = lazy(() => import("./pages/TeamHome"));
 const JoinTeam = lazy(() => import("./pages/JoinTeam"));
 const ModerationInbox = lazy(() => import("./pages/ModerationInbox"));
+const ModerationAppeals = lazy(() => import("./pages/ModerationAppeals"));
+const AppealRequest = lazy(() => import("./pages/AppealRequest"));
+const CallHistory = lazy(() => import("./pages/CallHistory"));
 
 // Keep public-page illustrations and content outside the signed-in app bundle.
 const Landing = lazy(() => import("./pages/Landing"));
@@ -87,12 +92,14 @@ export default function App() {
       <ToastProvider>
         <AuthProvider>
           <RealtimeProvider>
-            <SyncProvider>
-              <PushProvider>
-                <OutboxProvider>
+            <CallProvider>
+              <SyncProvider>
+                <PushProvider>
+                  <OutboxProvider>
                   <Suspense fallback={<Spinner fullPage label="Loading" />}>
                     <Routes>
                       <Route path="/" element={<LandingRoute />} />
+                      <Route path="/appeal" element={<AppealRequest />} />
                       <Route
                         path="/account/:kind"
                         element={<AccountRecovery />}
@@ -124,7 +131,8 @@ export default function App() {
                       and the open conversation — both keyed off this URL so a
                       filtered or deep-linked view survives a reload. */}
                           <Route path="/chats" element={<Chats />}>
-                            <Route path=":roomId" element={<RoomRoute />} />
+                          <Route path=":roomId" element={<RoomRoute />} />
+                            <Route path=":roomId/events" element={<RoomEvents />} />
                             <Route path=":roomId/info" element={<RoomInfo />} />
                           </Route>
 
@@ -145,6 +153,7 @@ export default function App() {
                             path="/activity"
                             element={<MessageActivity />}
                           />
+                          <Route path="/calls" element={<CallHistory />} />
                           <Route path="/new" element={<NewChat />} />
                           <Route path="/discover" element={<DiscoverRooms />} />
                           <Route path="/teams" element={<TeamHome />} />
@@ -181,6 +190,7 @@ export default function App() {
                           <Route path="/work/inbox" element={<WorkInbox />} />
                           <Route path="/work/search" element={<WorkSearch />} />
                           <Route path="/moderation/reports" element={<ModerationInbox />} />
+                          <Route path="/moderation/appeals" element={<ModerationAppeals />} />
                           <Route
                             path="/work/rooms/:roomId/brief"
                             element={<RoomBrief />}
@@ -193,9 +203,10 @@ export default function App() {
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </Suspense>
-                </OutboxProvider>
-              </PushProvider>
-            </SyncProvider>
+                  </OutboxProvider>
+                </PushProvider>
+              </SyncProvider>
+            </CallProvider>
           </RealtimeProvider>
         </AuthProvider>
       </ToastProvider>

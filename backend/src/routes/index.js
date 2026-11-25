@@ -25,6 +25,7 @@ router.use("/auth", authRoutes);
 router.use("/users", usersRoutes);
 router.use("/rooms", require("./roomLifecycle.routes"));
 router.use("/rooms", roomsRoutes);
+router.use("/rooms/:roomId/events", require("./roomEvents.routes"));
 router.use("/messages", messagesRoutes);
 router.use("/links", require("./links.routes"));
 router.use("/decisions", decisionsRoutes);
@@ -34,5 +35,6 @@ router.use("/notifications", notificationsRoutes);
 router.use("/upload", uploadRoutes);
 router.use("/attachments", attachmentsRoutes);
 router.use("/polls", pollsRoutes);
+router.use("/calls", require("./calls.routes"));
 
 module.exports = router;
