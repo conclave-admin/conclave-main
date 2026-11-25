@@ -32,6 +32,7 @@ services:
         value: "0"
       - key: DATABASE_URL
         sync: false
+      # Optional. Production rate limits use PostgreSQL when Redis is absent.
       - key: REDIS_URL
         sync: false
       - key: SOCKET_REDIS_ADAPTER
