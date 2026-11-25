@@ -20,7 +20,10 @@ if (env.trustProxyHops > 0) app.set("trust proxy", env.trustProxyHops);
 app.use(helmet());
 app.use(
   cors({
-    origin: env.clientOrigin,
+    origin(origin, callback) {
+      if (!origin || env.clientOrigins.includes(origin)) return callback(null, true);
+      return callback(null, false);
+    },
     credentials: true,
     exposedHeaders: [
       "ETag",

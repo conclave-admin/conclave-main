@@ -83,6 +83,9 @@ async function confirm(userId, value, db = { query }) {
 }
 async function sendToken(user, purpose, send) {
   const token = crypto.randomBytes(32).toString("base64url");
+  const code = purpose === "verify_email"
+    ? crypto.randomInt(0, 100000000).toString().padStart(8, "0")
+    : null;
   const db = await pool.connect();
   try {
     await db.query("BEGIN");
@@ -97,6 +100,12 @@ async function sendToken(user, purpose, send) {
       "INSERT INTO account_tokens(user_id,purpose,token_hash,expires_at) VALUES($1,$2,$3,NOW()+INTERVAL '30 minutes') RETURNING id",
       [user.id, purpose, hash(token)],
     );
+    if (code) {
+      await db.query(
+        "INSERT INTO account_tokens(user_id,purpose,token_hash,expires_at) VALUES($1,'verify_email',$2,NOW()+INTERVAL '30 minutes')",
+        [user.id, hash(`${user.id}:verify_email:${code}`)],
+      );
+    }
     const path = purpose === "verify_email" ? "verify" : "recovery";
     const url = new URL(`/account/${path}`, env.mail.frontendUrl);
     url.hash = `token=${token}`;
@@ -107,7 +116,9 @@ async function sendToken(user, purpose, send) {
         purpose === "verify_email"
           ? "Verify your Conclave email"
           : "Reset your Conclave password",
-      text: `${purpose === "verify_email" ? "Verify your email address" : "Reset your password"} using this link within 30 minutes:\n\n${url.href}\n\nIf you did not request this, ignore this email.`,
+      text: purpose === "verify_email"
+        ? `Verify your Conclave email within 30 minutes.\n\nOpen this link:\n${url.href}\n\nOr enter this one-time code in Conclave:\n${code}\n\nIf you did not request this, ignore this email.`
+        : `Reset your password using this link within 30 minutes:\n\n${url.href}\n\nIf you did not request this, ignore this email.`,
     };
     if (send) await send(message);
     else
@@ -119,6 +130,42 @@ async function sendToken(user, purpose, send) {
     return row.rows[0].id;
   } catch (error) {
     await db.query("ROLLBACK");
+    throw error;
+  } finally {
+    db.release();
+  }
+}
+
+async function redeemVerificationCode(userId, code) {
+  if (typeof code !== "string" || !/^\d{8}$/.test(code))
+    throw new ApiError(400, "Enter the 8-digit verification code");
+  const limiter = require("../middlewares/rateLimit.middleware");
+  await limiter.requireShared(
+    `email-verification-code:${userId}`,
+    { max: 8, windowMs: 15 * 60 * 1000 },
+    "Too many verification attempts. Try again later.",
+  );
+  const db = await pool.connect();
+  try {
+    await db.query("BEGIN");
+    await db.query("SELECT id FROM users WHERE id=$1 AND deleted_at IS NULL FOR NO KEY UPDATE", [userId]);
+    const row = (await db.query(
+      `UPDATE account_tokens SET consumed_at=NOW()
+       WHERE user_id=$1 AND purpose='verify_email' AND token_hash=$2
+         AND consumed_at IS NULL AND expires_at>NOW()
+       RETURNING id`,
+      [userId, hash(`${userId}:verify_email:${code}`)],
+    )).rows[0];
+    if (!row) throw new ApiError(400, "This code is invalid or expired");
+    await db.query("UPDATE users SET email_verified_at=COALESCE(email_verified_at,NOW()) WHERE id=$1", [userId]);
+    await db.query(
+      "UPDATE account_tokens SET consumed_at=NOW() WHERE user_id=$1 AND purpose='verify_email' AND consumed_at IS NULL",
+      [userId],
+    );
+    await db.query("COMMIT");
+    return { message: "Email verified" };
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
     throw error;
   } finally {
     db.release();
@@ -198,12 +245,18 @@ async function redeem(token, purpose, newPassword, io) {
       )
     ).rows[0];
     if (!row) throw new ApiError(400, "This link is invalid or expired");
-    if (purpose === "verify_email")
+    if (purpose === "verify_email") {
       await db.query(
         "UPDATE users SET email_verified_at=COALESCE(email_verified_at,NOW()) WHERE id=$1",
         [row.user_id],
       );
-    else {
+      // The email offers a link and a code as equivalent one-time methods.
+      // Consuming either invalidates the other to prevent replay.
+      await db.query(
+        "UPDATE account_tokens SET consumed_at=NOW() WHERE user_id=$1 AND purpose='verify_email' AND consumed_at IS NULL",
+        [row.user_id],
+      );
+    } else {
       await db.query(
         "UPDATE users SET password_hash=$2,email_verified_at=COALESCE(email_verified_at,NOW()) WHERE id=$1",
         [row.user_id, passwordHash],
@@ -392,6 +445,7 @@ module.exports = {
   confirm,
   mailConfigured,
   requestToken,
+  redeemVerificationCode,
   queueVerificationAfterRegistration,
   redeem,
   listSessions,

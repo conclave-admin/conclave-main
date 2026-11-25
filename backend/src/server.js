@@ -95,7 +95,13 @@ async function main() {
 
   httpServer = http.createServer(app);
   io = new Server(httpServer, {
-    cors: { origin: env.clientOrigin, credentials: true },
+    cors: {
+      origin(origin, callback) {
+        if (!origin || env.clientOrigins.includes(origin)) return callback(null, true);
+        return callback(null, false);
+      },
+      credentials: true,
+    },
   });
 
   // Enable SOCKET_REDIS_ADAPTER only when running 2+ instances.

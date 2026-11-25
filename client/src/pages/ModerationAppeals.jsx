@@ -60,7 +60,7 @@ export default function ModerationAppeals() {
   }
 
   return <Page width="board">
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-3"><div><p className="text-label uppercase text-brand">PLATFORM SAFETY</p><h1 className="mt-2 text-h1">Appeals</h1><p className="mt-2 text-body text-muted">A different reviewer handles appeals of suspensions and report actions.</p></div><div className="flex gap-2"><Link className={button} to="/moderation/reports">Reports</Link><Link className={button} to="/chats">Back to Conclave</Link></div></div>
+    <div className="mb-6 flex flex-wrap items-start justify-between gap-3"><div><p className="text-label uppercase text-brand">PLATFORM SAFETY</p><h1 className="mt-2 text-h1">Appeals</h1><p className="mt-2 text-body text-muted">A different reviewer handles appeals of suspensions and report actions.</p></div><div className="flex gap-2"><Link className={button} to="/moderation/reports">Reports</Link><a className={button} href="https://conclave.com.ng">Back to Conclave</a></div></div>
     {error && <p role="alert" className="mb-4 rounded-lg bg-error/10 p-3 text-body text-error">{error}</p>}
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
       <section aria-label="Appeal queue" className="rounded-xl border border-line bg-surface p-4">

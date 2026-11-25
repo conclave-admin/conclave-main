@@ -372,6 +372,22 @@ const deleteMe = asyncHandler(async (req, res) => {
   try {
     await client.query("BEGIN");
 
+    // Preserve one active platform administrator across concurrent role,
+    // suspension and account-deletion changes.
+    await client.query("SELECT pg_advisory_xact_lock(730041)");
+    const platformRole = (await client.query(
+      "SELECT r.name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=$1 AND u.deleted_at IS NULL FOR UPDATE OF u",
+      [req.user.id],
+    )).rows[0]?.name;
+    if (platformRole === "admin") {
+      const admins = await client.query(
+        `SELECT COUNT(*)::int AS count FROM users u JOIN roles r ON r.id=u.role_id
+         WHERE r.name='admin' AND u.deleted_at IS NULL AND u.suspended_at IS NULL`,
+      );
+      if (admins.rows[0].count <= 1)
+        throw new ApiError(409, "Transfer administrator access before deleting the last active platform administrator");
+    }
+
     const ownedTeams = await client.query(
       "SELECT id FROM teams WHERE owner_id=$1 FOR UPDATE",
       [req.user.id],

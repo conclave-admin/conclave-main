@@ -2,6 +2,7 @@ const { Router } = require("express");
 const requireAuth = require("../middlewares/auth.middleware");
 const validateUuidParams = require("../middlewares/validateParams");
 const platformModerator = require("../middlewares/platformModerator.middleware");
+const platformAdmin = require("../middlewares/platformAdmin.middleware");
 const moderation = require("../controllers/moderation.controller");
 const appeals = require("../controllers/appeals.controller");
 const rateLimit = require("../middlewares/rateLimit.middleware");
@@ -17,7 +18,11 @@ const appealLimit = rateLimit({
 // an account or eligible case exists.
 router.post("/appeals/request", appealLimit, appeals.submitAppeal);
 router.post("/appeals/status", appealLimit, appeals.appealStatus);
-router.use(requireAuth, platformModerator, validateUuidParams);
+router.use(requireAuth);
+router.get("/access", moderation.getAccess);
+router.use(platformModerator, validateUuidParams);
+router.get("/operators", platformAdmin, moderation.listOperators);
+router.patch("/operators/:userId/role", platformAdmin, moderation.changeOperatorRole);
 router.get("/storage", moderation.getStorageOverview);
 router.get("/moderators", appeals.listModerators);
 router.get("/reports", moderation.listReports);

@@ -82,6 +82,12 @@ router.post(
     );
   }),
 );
+router.post(
+  "/verification/code",
+  wrap(async (req, res) =>
+    ok(res, await security.redeemVerificationCode(req.user.id, req.body?.code)),
+  ),
+);
 router.get(
   "/sessions",
   wrap(async (req, res) =>

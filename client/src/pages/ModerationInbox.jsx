@@ -59,7 +59,7 @@ export default function ModerationInbox() {
     <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
       <div><p className="text-label uppercase text-brand">PLATFORM SAFETY</p><h1 className="mt-2 text-h1">Safety reports</h1>
         <p className="mt-2 text-body text-muted">Review reports and record each decision.</p></div>
-      <div className="flex gap-2"><Link className={button} to="/moderation/appeals">Appeals</Link><Link className={button} to="/chats">Back to Conclave</Link></div>
+      <div className="flex gap-2"><Link className={button} to="/moderation/appeals">Appeals</Link><a className={button} href="https://conclave.com.ng">Back to Conclave</a></div>
     </div>
     {error && <p role="alert" className="mb-4 rounded-lg bg-error/10 p-3 text-body text-error">{error}</p>}
     {storage && <section aria-label="Beta storage monitoring" className="mb-5 rounded-xl border border-line bg-surface p-4">

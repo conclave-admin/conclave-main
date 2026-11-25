@@ -125,9 +125,12 @@ These are implementation strengths, not substitutes for final candidate tests.
   return to the pending invitation after verification.
 - Registration now lands on a verification screen that names the account email,
   offers resend and status refresh, and lets a user continue while pending.
-  Email-bound team invitations continue to require verification; this change
-  does not add a global account lock. The user confirmed that Resend delivers
-  verification mail, but expiry, single-use and recovery acceptance remain open.
+  Verification emails provide both a one-time link and an 8-digit code. A
+  signed-in user can enter the code on that screen; either method consumes both
+  outstanding credentials. Email-bound team invitations continue to require
+  verification; this change does not add a global account lock. The user
+  confirmed that Resend delivers verification mail, but live expiry and recovery
+  acceptance remain open.
 - Local evidence: backend unit/HTTP suite **52/52**, client unit suite **22/22**,
   client production build passed, and focused migration tests **2/2**. The full
   database invocation reached **267/271**: identity tests passed; two existing
@@ -337,40 +340,71 @@ These are implementation strengths, not substitutes for final candidate tests.
 - [ ] Name the moderator, support contact and storage operator; confirm who can
   perform urgent content takedown when a room admin or author cannot act.
 
-### Private operator console at `admin.conclave.com.ng` — planned, not implemented
+### Private operator console at `admin.conclave.com.ng`
 
-The hostname is a separate workspace for operators, not a secret URL or an
-authorization boundary. Keep registration on the public app; do not provide a
-public self-registration path that assigns platform roles.
+The frontend is deployed on Vercel and the API on Render. The implementation
+serves the operator workspace from the same client build on a separately
+bound Vercel domain, selected by hostname. This keeps one UI release while the
+browser's origin-scoped session storage keeps public and operator sessions
+separate. The hostname and an external access gate are defense-in-depth; API
+roles remain the authorization authority. Public registration never grants
+platform roles.
 
-- [ ] Configure DNS, TLS and hosting for `admin.conclave.com.ng`, serving an
-  operator-focused frontend with the moderation inbox and audited platform-role
-  administration. The current inbox is `/moderation/reports` in the main app;
-  it is not yet restricted to the admin hostname, and role administration UI
-  does not exist.
-- [ ] Put an identity-aware access gate in front of the operator host and
-  restrict it to the founders/developers selected to operate Conclave. Keep the
-  backend's platform-role check as the authority even when the access gate
-  permits the request. Do not rely on an unlisted link or `noindex` as security.
-- [ ] Allow only the exact public and operator frontend origins in validated
-  backend HTTP CORS and Socket.IO CORS configuration. The current backend
-  accepts one `CLIENT_ORIGIN`, so dual-host support must be implemented before
+#### Repository implementation
+
+- [x] Add exact, validated `CLIENT_ORIGINS` support to backend HTTP and
+  Socket.IO CORS, retaining `CLIENT_ORIGIN` as a single-origin compatibility
+  fallback. The public and operator origins must be explicitly configured in
   deployment.
-- [ ] Keep operator role grants out of public signup. Bootstrap the first
-  platform administrator through a one-time controlled operator procedure;
-  subsequent grants/revocations should require an authenticated platform admin
-  and create append-only audit entries. The existing CLI provisions moderators
-  only and does not provide this admin console or first-admin bootstrap.
-- [ ] Document that browser storage is origin-scoped: operators sign in
-  separately on the admin subdomain, and both the host access gate and Conclave
-  session/role authorization must succeed.
+- [x] Route `admin.conclave.com.ng` into a focused operator shell with sign-in,
+  reports, appeals, storage overview and platform-role administration. Do not
+  render the public signup flow on the operator host. Public-host moderation
+  paths redirect to the operator host.
+- [x] Add an admin-only API for paginated account lookup and role changes.
+  Require expected-role concurrency checks and a reason, append audit entries,
+  revoke affected sessions, and prevent removal/demotion of the last active
+  platform administrator. Role grants require verified accounts; self-role
+  changes and suspended-account changes are refused.
+- [x] Add a one-time CLI path to bootstrap the first active, verified platform
+  administrator. Production invocation requires matching environment, expected
+  database host/port/name and an exact confirmation phrase. Once an admin
+  exists, further role changes happen in the protected console. Moderator
+  provisioning remains available.
+- [ ] Add and run focused regression coverage for CORS origin validation,
+  role-gated console access, role change authorization/audit, last-admin
+  protection, bootstrap refusal after first use and immediate session
+  revocation. No tests were run during this implementation.
+
+#### Deployment and operator setup
+
+- [ ] Bind `admin.conclave.com.ng` to the Vercel project, configure DNS/TLS
+  through WhoGoHost, and verify direct navigation and deep-link fallback on
+  both public and operator hostnames. Set Vercel build variables
+  `VITE_OPERATOR_HOST=admin.conclave.com.ng` and
+  `VITE_OPERATOR_URL=https://admin.conclave.com.ng`.
+- [ ] Select and configure an identity-aware gate in front of the operator
+  hostname for the founders/developers selected to operate Conclave. DNS is
+  managed at WhoGoHost, so no identity-gate provider is selected here. The
+  backend role check remains authoritative after the gate permits a request;
+  an unlisted link or `noindex` is not access control.
+- [ ] Configure the exact public and operator frontend origins in Render
+  `CLIENT_ORIGINS`, then
+  verify HTTP and Socket.IO CORS from each origin and rejection of an unrelated
+  origin.
+- [ ] Bootstrap the first active, verified platform administrator out of band
+  using the guarded `platform:operator bootstrap-admin` command; then sign in
+  on the operator origin, provision moderators and verify reports, appeals,
+  role changes and session revocation. Role grants never appear in public
+  signup. Exact usage is documented in `BETA_OPERATIONS.md`.
+- [ ] Document origin-scoped browser storage: operators sign in separately on
+  the admin subdomain, and both the host gate and Conclave session/role checks
+  must succeed. Assign a named backup admin and support contact.
 
 ## P0 — deployment, media and candidate verification
 
-- [ ] Implement validated exact client-origin allowlists for HTTP and
+- [x] Implement validated exact client-origin allowlists for HTTP and
   Socket.IO, covering production, staging and the admin subdomain as explicitly
-  configured. The current single `CLIENT_ORIGIN` cannot serve these separately
-  and has caused browser-suite CORS failures.
+  configured. Deployment values and live CORS acceptance remain pending.
 - [ ] Complete the approved media path: streaming wiring, preview Worker width
   support and CI, medium viewer step, gallery work and live Worker deployment.
 - [x] Add an atomic active-account signup cap, signup kill switch, storage usage

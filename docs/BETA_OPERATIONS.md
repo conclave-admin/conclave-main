@@ -15,13 +15,71 @@ new registrations once the number of non-deleted accounts reaches the cap. Set
 `BETA_SIGNUPS_ENABLED=false` to pause new accounts immediately. Neither control
 removes existing accounts or blocks them from using the service.
 
-Before sharing the URL, nominate a moderator and support contact, then run
-`cd backend && node scripts/provision-moderator.js grant <email>` and verify
-the account's `/moderation/reports` access. Revoke access with the same command
-and `revoke`. Provisioning records role changes in the
-append-only moderation audit. Keep credentials and the beta URL out of public
-directories; if the signup link is broadly published, treat the cohort as
-untrusted and revisit malware scanning before continuing.
+Before sharing the URL, establish the first verified platform administrator
+through the one-time `bootstrap-admin` command described below. That person can
+add or remove operators from the private console. Moderator provisioning can
+also be done out of band with
+`cd backend && npm run platform:operator -- grant <email> --operator=<name>`;
+revoke with `revoke`. Role changes are recorded in the append-only moderation
+audit. Keep credentials and the beta URL out of public directories; if the
+signup link is broadly published, treat the cohort as untrusted and revisit
+malware scanning before continuing.
+
+For production moderator grants/revocations, include
+`--environment=production`, `--expected-host`, `--expected-database` and
+`--confirm=provision:<grant|revoke>:<email>`. The command compares the expected
+target with `DATABASE_URL` and `NODE_ENV` before it writes.
+
+## Private operator console
+
+The operator console is the same Vercel frontend at
+`https://admin.conclave.com.ng`, served as a separate browser origin. Bind the
+custom domain to the existing Vercel project and configure the Render API's
+`CLIENT_ORIGINS` to the exact public and operator HTTPS origins. Both origins
+share one client build, while browser storage keeps their Conclave sessions
+separate. Public-host moderation URLs redirect to the operator host, and the
+API independently checks platform roles on every request.
+Set the Vercel build variables `VITE_OPERATOR_HOST=admin.conclave.com.ng` and
+`VITE_OPERATOR_URL=https://admin.conclave.com.ng`; the checked-in client
+example uses `admin.localhost` for local development.
+
+DNS is managed at WhoGoHost. The app does not depend on an unlisted URL for
+privacy: configure an identity-aware access gateway or reverse proxy in front
+of the operator host before sharing it. WhoGoHost is recorded as the DNS
+provider; this change does not assume its DNS service supplies that gate or
+select a gateway provider. Require individual founder/operator identities and
+keep Conclave's administrator role as the second authorization check.
+
+Create the initial admin only after the account has registered and verified its
+email. On the production service shell, set/confirm `NODE_ENV=production`, then
+run the command with the database's actual hostname and database name:
+
+```sh
+cd backend
+npm run platform:operator -- bootstrap-admin operator@example.com \
+  --operator="Founders" \
+  --environment=production \
+  --expected-host=actual-postgres-host-and-port \
+  --expected-database=actual_database \
+  --confirm=provision:bootstrap-admin:operator@example.com
+```
+
+Use the exact host and port from `DATABASE_URL` for `--expected-host`. The
+script refuses to run unless its production environment and target database
+checks match. It only elevates an existing verified, active account,
+serializes the first-admin check, and refuses if an active admin already
+exists. After that, use the Operators page in the private console. Never run
+this command with a production database URL from a developer workstation.
+
+Additional founders/operators first create and verify a normal Conclave account
+at `https://conclave.com.ng/register`. An existing administrator then finds
+that account in the operator console and grants moderator or administrator
+access. The operator host does not offer role-bearing registration.
+
+Signup verification email contains a one-time link and an 8-digit code, each
+valid for 30 minutes. A signed-in user can enter the code on the verification
+screen. Either method consumes both outstanding verification credentials; code
+attempts are rate-limited across API instances.
 
 Each team is limited by `BETA_MAX_TEAM_MEMBERS` (default 25). Set the value to
 the agreed small-beta size before opening invitations. The server serializes

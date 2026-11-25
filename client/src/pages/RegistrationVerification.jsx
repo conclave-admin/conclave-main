@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import Page from "@/components/layout/Page";
 import Button from "@/components/ui/Button";
 import { useAuth } from "@/contexts/AuthContext";
-import { requestVerification } from "@/services/security.service";
+import { redeemVerificationCode, requestVerification } from "@/services/security.service";
 
 function nextPath() {
   if (sessionStorage.getItem("conclave:pending-team-invitation")) return "/join-team";
@@ -16,10 +16,11 @@ export default function RegistrationVerification() {
   const location = useLocation();
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [code, setCode] = useState("");
   const [notice, setNotice] = useState(() =>
     location.state?.verificationEmailQueued === false
       ? "We couldn't send the verification email automatically. You can request another one below."
-      : `We sent a verification link to ${user?.email || "your email address"}. The link expires after 30 minutes.`,
+      : `We sent a verification link and an 8-digit code to ${user?.email || "your email address"}. Both expire after 30 minutes.`,
   );
   const [error, setError] = useState("");
   const verified = Boolean(user?.email_verified_at);
@@ -64,6 +65,23 @@ export default function RegistrationVerification() {
     }
   }
 
+  async function verifyCode(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await redeemVerificationCode(code);
+      await refreshUser();
+      setNotice(result.message || "Your email is verified.");
+      setCode("");
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || "That code is invalid or expired.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Page width="form" className="py-8 sm:py-12">
       <section className="rounded-3xl border border-line bg-surface p-6 shadow-sm sm:p-9" aria-labelledby="registration-verification-title">
@@ -80,11 +98,32 @@ export default function RegistrationVerification() {
         <p className="mx-auto mt-3 max-w-md text-center text-body leading-6 text-muted">
           {verified
             ? `You're all set${user?.email ? `, ${user.email} is verified` : ""}. Continue to your Conclave conversations.`
-            : <>We sent a verification link to <strong className="break-all font-semibold text-ink">{user?.email}</strong>. Verify your address to finish setting up your account.</>}
+            : <>We sent a verification link and an 8-digit code to <strong className="break-all font-semibold text-ink">{user?.email}</strong>. Either option verifies your address.</>}
         </p>
 
         {notice && <p role="status" className="mt-5 rounded-xl bg-canvas px-4 py-3 text-center text-body text-muted">{notice}</p>}
         {error && <p role="alert" className="mt-4 rounded-xl bg-error/10 px-4 py-3 text-body text-error">{error}</p>}
+
+        {!verified && (
+          <form className="mt-6 space-y-3" onSubmit={verifyCode}>
+            <label htmlFor="verification-code" className="block text-label font-medium text-ink">Enter your email code</label>
+            <input
+              id="verification-code"
+              autoComplete="one-time-code"
+              inputMode="numeric"
+              pattern="[0-9]{8}"
+              maxLength={8}
+              required
+              value={code}
+              onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 8))}
+              placeholder="8-digit code"
+              className="min-h-12 w-full rounded-xl border border-line bg-surface px-4 text-center text-lg tracking-[0.35em] text-ink outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+            />
+            <Button type="submit" variant="secondary" className="w-full" disabled={busy || checking || code.length !== 8}>
+              {busy ? "Verifying…" : "Verify with code"}
+            </Button>
+          </form>
+        )}
 
         {!verified && (
           <div className="mt-6 flex flex-col gap-3 sm:flex-row">
