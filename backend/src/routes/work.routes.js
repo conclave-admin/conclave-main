@@ -11,6 +11,7 @@ router.get("/inbox", discovery.inbox);
 router.patch("/inbox/state", discovery.setInboxState);
 router.get("/projects", work.listProjects);
 router.post("/projects", work.createProject);
+router.get("/projects/:projectId/task-search", work.searchProjectTasks);
 router.get("/projects/:projectId", work.getProject);
 router.patch("/projects/:projectId", work.updateProject);
 router.post("/projects/:projectId/rooms", work.addProjectRoom);

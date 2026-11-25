@@ -24,6 +24,8 @@ const TYPES = {
   member_joined: { label: "Member joined", dot: "bg-success" },
   task: { label: "Task assigned", dot: "bg-warning" },
   decision: { label: "Decision changed", dot: "bg-success" },
+  event_reminder: { label: "Upcoming event", dot: "bg-warning" },
+  event_cancelled: { label: "Event cancelled", dot: "bg-error" },
 };
 
 const FILTERS = [
@@ -97,6 +99,9 @@ function Row({ notification, onOpen }) {
             {context.decision_status === "retracted" ? "Retracted: " : ""}{context.decision_title}
           </span>
         )}
+        {context.event_title && (
+          <span className="mt-0.5 block truncate text-metadata text-muted">{context.event_title}</span>
+        )}
 
         {context.message_preview && (
           <span className="mt-0.5 block truncate text-metadata text-muted">
@@ -162,7 +167,9 @@ export default function Notifications() {
       return;
     }
     if (notification.context?.room_id)
-      navigate(`/chats/${notification.context.room_id}`);
+      navigate(["event_reminder", "event_cancelled"].includes(notification.type)
+        ? `/chats/${notification.context.room_id}/events`
+        : `/chats/${notification.context.room_id}`);
   };
 
   return (

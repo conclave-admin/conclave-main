@@ -3,6 +3,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
 const { NOTIFICATION_TYPES } = require("../services/notification.service");
+const { validateQuietHours } = require("../services/quietHours");
 
 // What a caller may set. `activity_level` is constrained again by a CHECK in
 // migration 015 — this is the friendly version of the same rule, so the client
@@ -19,6 +20,8 @@ const DEFAULTS = {
   push_enabled: true,
   push_preview_enabled: true,
   in_app_alerts_enabled: true,
+  quiet_hours: [],
+  quiet_hours_timezone: "UTC",
 };
 
 // Upsert rather than update-then-insert. Two concurrent saves on a first-ever
@@ -26,22 +29,24 @@ const DEFAULTS = {
 // duplicate-key error from the loser. ON CONFLICT resolves that in the database
 // instead of in application code.
 const UPSERT = `
-  INSERT INTO notification_preferences (user_id, activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled)
-  VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+  INSERT INTO notification_preferences (user_id, activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, quiet_hours, quiet_hours_timezone)
+  VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7::jsonb, $8)
   ON CONFLICT (user_id) DO UPDATE
     SET activity_level        = EXCLUDED.activity_level,
         muted                 = EXCLUDED.muted,
         push_enabled          = EXCLUDED.push_enabled,
         push_preview_enabled  = EXCLUDED.push_preview_enabled,
         in_app_alerts_enabled = EXCLUDED.in_app_alerts_enabled,
+        quiet_hours           = EXCLUDED.quiet_hours,
+        quiet_hours_timezone  = EXCLUDED.quiet_hours_timezone,
         updated_at            = NOW()
-  RETURNING activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, updated_at
+  RETURNING activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, quiet_hours, quiet_hours_timezone, updated_at
 `;
 
 // ---------- getPreferences ----------
 const getPreferences = asyncHandler(async (req, res) => {
   const result = await query(
-    "SELECT activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, updated_at FROM notification_preferences WHERE user_id = $1",
+    "SELECT activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, quiet_hours, quiet_hours_timezone, updated_at FROM notification_preferences WHERE user_id = $1",
     [req.user.id],
   );
 
@@ -60,6 +65,8 @@ const getPreferences = asyncHandler(async (req, res) => {
     push_enabled: row.push_enabled,
     push_preview_enabled: row.push_preview_enabled,
     in_app_alerts_enabled: row.in_app_alerts_enabled,
+    quiet_hours: row.quiet_hours || [],
+    quiet_hours_timezone: row.quiet_hours_timezone || "UTC",
     updatedAt: row.updated_at || null,
   });
 });
@@ -75,6 +82,8 @@ const updatePreferences = asyncHandler(async (req, res) => {
     push_enabled: push,
     push_preview_enabled: preview,
     in_app_alerts_enabled: inApp,
+    quiet_hours: quietHours,
+    quiet_hours_timezone: quietTimezone,
   } = req.body;
 
   if (
@@ -82,11 +91,13 @@ const updatePreferences = asyncHandler(async (req, res) => {
     muted === undefined &&
     push === undefined &&
     preview === undefined &&
-    inApp === undefined
+    inApp === undefined &&
+    quietHours === undefined &&
+    quietTimezone === undefined
   ) {
     throw new ApiError(
       400,
-      `No updatable fields provided. Allowed: activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled`,
+      `No updatable fields provided. Allowed: activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, quiet_hours, quiet_hours_timezone`,
     );
   }
 
@@ -105,6 +116,13 @@ const updatePreferences = asyncHandler(async (req, res) => {
       400,
       `activity_level must be one of: ${ACTIVITY_LEVELS.join(", ")}`,
     );
+  }
+
+  if (quietHours !== undefined && !Array.isArray(quietHours)) {
+    throw new ApiError(400, "quiet_hours must be an array of weekly time windows");
+  }
+  if (quietTimezone !== undefined && typeof quietTimezone !== "string") {
+    throw new ApiError(400, "quiet_hours_timezone must be a time zone name");
   }
 
   if (muted !== undefined) {
@@ -138,10 +156,17 @@ const updatePreferences = asyncHandler(async (req, res) => {
   // never-saved row produce the same result as a GET on one: the row comes into
   // existence already holding the values a reader would have synthesised.
   const existing = await query(
-    "SELECT activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled FROM notification_preferences WHERE user_id = $1",
+    "SELECT activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, quiet_hours, quiet_hours_timezone FROM notification_preferences WHERE user_id = $1",
     [req.user.id],
   );
   const current = existing.rows.length > 0 ? existing.rows[0] : DEFAULTS;
+  const nextQuietHours = quietHours === undefined ? current.quiet_hours || [] : quietHours;
+  const nextQuietTimezone = quietTimezone === undefined
+    ? current.quiet_hours_timezone || "UTC"
+    : quietTimezone.trim();
+  if (!validateQuietHours(nextQuietHours, nextQuietTimezone)) {
+    throw new ApiError(400, "Quiet hours need valid days, distinct start/end times, and an IANA time zone");
+  }
 
   const result = await query(UPSERT, [
     req.user.id,
@@ -150,6 +175,8 @@ const updatePreferences = asyncHandler(async (req, res) => {
     push === undefined ? current.push_enabled : push,
     preview === undefined ? current.push_preview_enabled : preview,
     inApp === undefined ? current.in_app_alerts_enabled : inApp,
+    JSON.stringify(nextQuietHours),
+    nextQuietTimezone,
   ]);
 
   const row = result.rows[0];
@@ -159,6 +186,8 @@ const updatePreferences = asyncHandler(async (req, res) => {
     push_enabled: row.push_enabled,
     push_preview_enabled: row.push_preview_enabled,
     in_app_alerts_enabled: row.in_app_alerts_enabled,
+    quiet_hours: row.quiet_hours || [],
+    quiet_hours_timezone: row.quiet_hours_timezone || "UTC",
     updatedAt: row.updated_at,
   });
 });

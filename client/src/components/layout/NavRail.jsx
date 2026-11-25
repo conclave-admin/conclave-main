@@ -19,12 +19,14 @@ import IconTasks from "@/assets/icons/tasks.svg?react";
 import IconPublic from "@/assets/icons/public.svg?react";
 import IconChevronRight from "@/assets/icons/chevron-right.svg?react";
 import IconTeams from "@/assets/icons/teams.svg?react";
+import IconCall from "@/assets/icons/call.svg?react";
 
 const navGroups = [
   { label: "Communication", items: [
     { to: "/chats", label: "Chats", Icon: IconMessage, end: false },
     { to: "/teams", label: "Teams", Icon: IconTeams, end: false },
     { to: "/activity", label: "Message activity", Icon: IconRecent },
+    { to: "/calls", label: "Calls", Icon: IconCall },
     { to: "/digest", label: "Catch up", Icon: IconDigest },
   ] },
   { label: "Work", items: [

@@ -1,4 +1,5 @@
 const { pool } = require("../config/db");
+const { isQuietNow } = require("./quietHours");
 // Same record visibility for the bell, badge and interruption policy. Dangling
 // references remain as context-free historical rows; revoked live targets do not.
 function visibleSql(n = "n") {
@@ -6,11 +7,13 @@ function visibleSql(n = "n") {
     AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.id=${n}.reference_id AND ${n}.type IN ('mention','new_message','file_uploaded','reminder') AND NOT message_visible(m.id,${n}.recipient_id))
     AND NOT EXISTS(SELECT 1 FROM rooms r WHERE r.id=${n}.reference_id AND ${n}.type IN ('room_invite','member_joined') AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=r.id AND rm.user_id=${n}.recipient_id))
     AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.id=${n}.reference_id AND ${n}.type='task' AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=t.room_id AND rm.user_id=${n}.recipient_id))
-    AND NOT EXISTS(SELECT 1 FROM decisions d WHERE d.id=${n}.reference_id AND ${n}.type='decision' AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=d.room_id AND rm.user_id=${n}.recipient_id))`;
+    AND NOT EXISTS(SELECT 1 FROM decisions d WHERE d.id=${n}.reference_id AND ${n}.type='decision' AND NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=d.room_id AND rm.user_id=${n}.recipient_id))
+    AND NOT EXISTS(SELECT 1 FROM room_events e WHERE e.id=${n}.reference_id AND ${n}.type IN ('event_reminder','event_cancelled') AND (NOT EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=e.room_id AND rm.user_id=${n}.recipient_id) OR (${n}.type='event_reminder' AND (e.status<>'scheduled' OR e.starts_at<=NOW()))))`;
 }
-function allowsInterruption(preferences = {}, type, roomMuted = false) {
+function allowsInterruption(preferences = {}, type, roomMuted = false, now = new Date()) {
   if (
-    (preferences.dnd_until && new Date(preferences.dnd_until) > new Date()) ||
+    (preferences.dnd_until && new Date(preferences.dnd_until) > now) ||
+    isQuietNow(preferences.quiet_hours, preferences.quiet_hours_timezone, now) ||
     (preferences.room_mute_until &&
       new Date(preferences.room_mute_until) > new Date()) ||
     preferences.notification_level === "none" ||
@@ -42,22 +45,24 @@ async function unseenRoomCount(recipientId, roomId, excludeId) {
 async function interruption(notificationId) {
   const result = await pool.query(
     `SELECT n.*,p.activity_level,p.muted,p.push_enabled,p.push_preview_enabled,
+    p.quiet_hours,p.quiet_hours_timezone,
     recipient.dnd_until,rmp.mute_until AS room_mute_until,rmp.notification_level,
-    COALESCE(m.room_id,t.room_id,d.room_id,r.id) AS room_id,COALESCE(rmp.muted,FALSE) AS room_muted,
+    COALESCE(m.room_id,t.room_id,d.room_id,e.room_id,r.id) AS room_id,COALESCE(rmp.muted,FALSE) AS room_muted,
     (m.deleted_at IS NOT NULL) AS message_deleted, ${visibleSql()} AS visible,
     actor.display_name AS actor_name, sender.display_name AS sender_name,
     CASE WHEN m.deleted_at IS NOT NULL THEN NULL ELSE m.content END AS message_content,
     room.name AS room_name, room.type AS room_type,
-    t.title AS task_title, d.title AS decision_title
+    t.title AS task_title, d.title AS decision_title,e.title AS event_title
     FROM notifications n LEFT JOIN users recipient ON recipient.id=n.recipient_id LEFT JOIN notification_preferences p ON p.user_id=n.recipient_id
     LEFT JOIN messages m ON m.id=n.reference_id AND n.type IN ('mention','new_message','file_uploaded','reminder')
     LEFT JOIN tasks t ON t.id=n.reference_id AND n.type='task'
     LEFT JOIN decisions d ON d.id=n.reference_id AND n.type='decision'
+    LEFT JOIN room_events e ON e.id=n.reference_id AND n.type IN ('event_reminder','event_cancelled')
     LEFT JOIN rooms r ON r.id=n.reference_id AND n.type IN ('room_invite','member_joined')
-    LEFT JOIN room_member_preferences rmp ON rmp.room_id=COALESCE(m.room_id,t.room_id,d.room_id,r.id) AND rmp.user_id=n.recipient_id
+    LEFT JOIN room_member_preferences rmp ON rmp.room_id=COALESCE(m.room_id,t.room_id,d.room_id,e.room_id,r.id) AND rmp.user_id=n.recipient_id
     LEFT JOIN users actor ON actor.id=n.actor_id
     LEFT JOIN users sender ON sender.id=m.sender_id
-    LEFT JOIN rooms room ON room.id=COALESCE(m.room_id,t.room_id,d.room_id,r.id)
+    LEFT JOIN rooms room ON room.id=COALESCE(m.room_id,t.room_id,d.room_id,e.room_id,r.id)
     WHERE n.id=$1`,
     [notificationId],
   );

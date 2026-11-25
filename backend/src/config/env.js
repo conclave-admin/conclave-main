@@ -1,5 +1,23 @@
 require("dotenv").config();
 
+function parseClientOrigins(value, fallback, requireHttps = false) {
+  const entries = (value || fallback || "http://localhost:5173")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const origins = new Set();
+  for (const entry of entries) {
+    let url;
+    try { url = new URL(entry); } catch { throw new Error(`Invalid browser origin in CLIENT_ORIGINS: ${entry}`); }
+    if (!new Set(["http:", "https:"]).has(url.protocol) || (requireHttps && url.protocol !== "https:") || url.origin !== entry || url.username || url.password)
+      throw new Error(`CLIENT_ORIGINS entries must be exact HTTP(S) origins: ${entry}`);
+    origins.add(url.origin);
+  }
+  if (!origins.size) throw new Error("At least one browser origin is required");
+  return [...origins];
+}
+
+const clientOrigin = process.env.CLIENT_ORIGIN || "http://localhost:5173";
 const defaultTrustProxyHops = process.env.NODE_ENV === "production" ? "1" : "0";
 
 module.exports = {
@@ -15,11 +33,17 @@ module.exports = {
   beta: {
     signupsEnabled: process.env.BETA_SIGNUPS_ENABLED !== "false",
     maxActiveAccounts: Math.max(1, Number.parseInt(process.env.BETA_MAX_ACTIVE_ACCOUNTS || "250", 10) || 250),
+    maxTeamMembers: Math.max(1, Number.parseInt(process.env.BETA_MAX_TEAM_MEMBERS || "25", 10) || 25),
     storageAlertGb: Math.max(0, Number.parseFloat(process.env.BETA_STORAGE_ALERT_GB || "50") || 0),
     storageUsdPerGbMonth: Math.max(0, Number.parseFloat(process.env.BETA_STORAGE_USD_PER_GB_MONTH || "0") || 0),
     storageMonthlyBudgetUsd: Math.max(0, Number.parseFloat(process.env.BETA_STORAGE_MONTHLY_BUDGET_USD || "0") || 0),
   },
-  clientOrigin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
+  clientOrigin,
+  clientOrigins: parseClientOrigins(
+    process.env.CLIENT_ORIGINS,
+    clientOrigin,
+    process.env.NODE_ENV === "production",
+  ),
   databaseUrl: process.env.DATABASE_URL,
   redisUrl: process.env.REDIS_URL,
   mail: {
@@ -46,6 +70,17 @@ module.exports = {
       .map((value) => value.trim())
       .filter(Boolean),
   },
+  calls: {
+    stunUrls: (process.env.RTC_STUN_URLS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+    turnUrls: (process.env.RTC_TURN_URLS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+    turnSharedSecret: process.env.RTC_TURN_SHARED_SECRET,
+  },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME,
     apiKey: process.env.CLOUDINARY_API_KEY,
@@ -69,4 +104,5 @@ module.exports = {
     previewWorkerUrl: process.env.R2_PREVIEW_WORKER_URL,
     previewSigningSecret: process.env.R2_PREVIEW_SIGNING_SECRET,
   },
+  parseClientOrigins,
 };

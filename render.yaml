@@ -1,5 +1,7 @@
 # API only. The React client is deployed from client/ on Vercel.
-# Supply database/cache URLs and the final frontend origin in Render's dashboard.
+# Secret values are intentionally not stored in this file. Configure every
+# sync:false entry in Render's Environment dashboard; Blueprint sync preserves
+# those dashboard-managed values instead of replacing them with placeholders.
 services:
   - type: web
     name: conclave-api
@@ -16,15 +18,88 @@ services:
         value: production
       - key: TRUST_PROXY_HOPS
         value: "1"
+      - key: BETA_SIGNUPS_ENABLED
+        value: "true"
+      - key: BETA_MAX_ACTIVE_ACCOUNTS
+        value: "250"
+      - key: BETA_MAX_TEAM_MEMBERS
+        value: "25"
+      - key: BETA_STORAGE_ALERT_GB
+        value: "50"
+      - key: BETA_STORAGE_USD_PER_GB_MONTH
+        value: "0"
+      - key: BETA_STORAGE_MONTHLY_BUDGET_USD
+        value: "0"
       - key: DATABASE_URL
         sync: false
+      # Optional. Production rate limits use PostgreSQL when Redis is absent.
       - key: REDIS_URL
         sync: false
       - key: SOCKET_REDIS_ADAPTER
         value: "false"
+      - key: RATE_LIMIT_KEY_PREFIX
+        value: "rate-limit"
       - key: CLIENT_ORIGIN
         sync: false
+      - key: CLIENT_ORIGINS
+        sync: false
+      - key: APP_PUBLIC_URL
+        value: https://conclave.com.ng
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
+      - key: JWT_ACCESS_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 7d
+      # Resend email delivery and encrypted verification/recovery tokens.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM
+        sync: false
+      - key: MAIL_ENCRYPTION_KEY
+        sync: false
+      # Browser push is optional until VAPID keys are configured.
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
+      - key: PUSH_ALLOWED_ORIGINS
+        value: ""
+      # Cloudinary is retained as a fallback provider; R2 is the primary path.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        value: conclave-uploads
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_PREVIEW_WORKER_URL
+        sync: false
+      - key: R2_PREVIEW_SIGNING_SECRET
+        sync: false
+      - key: R2_DIRECT_UPLOADS_ENABLED
+        value: "false"
+      - key: R2_ALLOWED_ORIGINS
+        value: https://conclave.com.ng,https://admin.conclave.com.ng
+      - key: MEDIA_CLEANUP_INTERVAL_MS
+        value: "300000"
+      # RTC TURN is optional; leave URLs empty until a TURN service is ready.
+      - key: RTC_STUN_URLS
+        value: stun:stun.l.google.com:19302
+      - key: RTC_TURN_URLS
+        value: ""
+      - key: RTC_TURN_SHARED_SECRET
+        sync: false

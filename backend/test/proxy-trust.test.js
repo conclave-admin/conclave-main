@@ -12,6 +12,8 @@ function readTrustProxyHops(nodeEnv, configuredValue = "") {
       ...process.env,
       NODE_ENV: nodeEnv,
       TRUST_PROXY_HOPS: configuredValue,
+      CLIENT_ORIGIN: "https://conclave.example.com",
+      CLIENT_ORIGINS: "https://conclave.example.com,https://admin.conclave.example.com",
     },
   });
   assert.equal(result.status, 0, result.stderr);

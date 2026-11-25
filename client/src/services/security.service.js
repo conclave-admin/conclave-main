@@ -32,6 +32,9 @@ export async function renameSession(label) {
 export async function requestVerification() {
   return (await api.post("/security/verification")).data.data;
 }
+export async function redeemVerificationCode(code) {
+  return (await api.post("/security/verification/code", { code })).data.data;
+}
 export async function requestRecovery(email) {
   return (await api.post("/security/recovery", { email })).data.data;
 }

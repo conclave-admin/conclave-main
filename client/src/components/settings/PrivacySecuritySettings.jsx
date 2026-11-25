@@ -8,12 +8,13 @@ import {
   revokeSession,
   renameSession,
   requestVerification,
+  redeemVerificationCode,
 } from "../../services/security.service";
 import Button from "../ui/Button";
 import Input from "../ui/Input";
 
 export default function PrivacySecuritySettings() {
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
   const owner = useRef(user?.id);
   owner.current = user?.id;
   const [dataOwner, setDataOwner] = useState(null);
@@ -22,6 +23,7 @@ export default function PrivacySecuritySettings() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
+  const [verificationCode, setVerificationCode] = useState("");
   const [target, setTarget] = useState(null),
     [password, setPassword] = useState(""),
     [label, setLabel] = useState("");
@@ -170,26 +172,60 @@ export default function PrivacySecuritySettings() {
             : "Verify your email so you can recover access to your account."}
         </p>
         {!user?.email_verified_at && (
-          <Button
-            className="mt-3"
-            variant="secondary"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                setNotice((await requestVerification()).message);
-              } catch (e) {
-                setError(
-                  e.response?.data?.message ||
-                    "Could not request verification.",
-                );
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            Send verification email
-          </Button>
+          <div className="mt-3 flex flex-col items-start gap-3">
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                setError("");
+                try {
+                  const result = await requestVerification();
+                  setNotice(result.message || "Verification instructions sent.");
+                } catch (e) {
+                  setError(e.response?.data?.message || "Could not request verification.");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? "Sending…" : "Send verification code and link"}
+            </Button>
+            <form
+              className="flex flex-wrap items-end gap-2"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                setBusy(true);
+                setError("");
+                try {
+                  const result = await redeemVerificationCode(verificationCode);
+                  await refreshUser();
+                  setVerificationCode("");
+                  setNotice(result.message || "Your email is verified.");
+                } catch (e) {
+                  setError(e.response?.data?.message || "That code is invalid or expired.");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              <Input
+                label="8-digit email code"
+                value={verificationCode}
+                onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 8))}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{8}"
+                maxLength={8}
+                required
+                disabled={busy}
+              />
+              <Button type="submit" disabled={busy || verificationCode.length !== 8}>
+                Verify email
+              </Button>
+            </form>
+            <p className="text-metadata text-muted">Use the code from your email, or open its verification link.</p>
+          </div>
         )}
         <form
           className="mt-5 flex flex-wrap items-end gap-2"

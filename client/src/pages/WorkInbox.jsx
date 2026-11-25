@@ -15,8 +15,10 @@ export default function WorkInbox() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [hasMore, setHasMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
   const refresh = useCallback(async () => {
-    try { const result = await getWorkInbox(); setItems(result.items); setHasMore(result.hasMore); setError(""); }
+    try { const result = await getWorkInbox(1); setItems(result.items); setHasMore(result.hasMore); setPage(1); setError(""); }
     catch (e) { setError(e.response?.data?.error?.message || "Could not load your work"); }
     finally { setLoading(false); }
   }, []);
@@ -29,6 +31,19 @@ export default function WorkInbox() {
       await refresh();
     } catch (e) { setError(e.response?.data?.error?.message || "Could not update item"); }
     finally { setBusy(""); }
+  }
+  async function loadMore() {
+    setLoadingMore(true); setError("");
+    try {
+      const next = page + 1;
+      const result = await getWorkInbox(next);
+      setItems((current) => {
+        const known = new Set(current.map((item) => item.event_key));
+        return [...current, ...result.items.filter((item) => !known.has(item.event_key))];
+      });
+      setHasMore(result.hasMore); setPage(next);
+    } catch (e) { setError(e.response?.data?.error?.message || "Could not load more work"); }
+    finally { setLoadingMore(false); }
   }
   return <Page width="content">
     <h1 className="text-h1">My work</h1>
@@ -45,7 +60,7 @@ export default function WorkInbox() {
           <button type="button" disabled={!!busy} onClick={() => void change(item, "snoozed")} className="rounded-lg border border-line px-3 py-2 text-label hover:border-brand">Snooze 1 day</button>
         </div>
       </article>)}
-      {hasMore && <p className="text-metadata text-muted">Showing the 100 most recent items.</p>}
+      {hasMore && <button type="button" disabled={loadingMore} onClick={() => void loadMore()} className="w-full rounded-lg border border-line px-4 py-3 text-label text-ink hover:border-brand disabled:opacity-50">{loadingMore ? "Loading…" : "Load more"}</button>}
     </div>}
   </Page>;
 }

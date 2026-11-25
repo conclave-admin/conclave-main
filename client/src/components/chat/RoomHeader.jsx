@@ -5,6 +5,8 @@ import { useRealtime } from "../../contexts/RealtimeContext";
 import { Link } from "react-router-dom";
 import IconArrowLeft from "@/assets/icons/arrow-left.svg?react";
 import IconInfo from "@/assets/icons/info.svg?react";
+import IconCall from "@/assets/icons/call.svg?react";
+import IconCalendar from "@/assets/icons/calendar.svg?react";
 import Avatar from "@/components/ui/Avatar";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePresence } from "@/contexts/PresenceContext";
@@ -39,10 +41,19 @@ export default function RoomHeader({ room, isConnected }) {
   const peer = isDm
     ? room.members?.find((member) => member.id !== user?.id)
     : null;
+  const canCall = (isDm && peer && !peer.suspended_at) || room.type === "group";
   const peerActive = Boolean(peer && isOnlineIn(room.id, peer.id));
 
   return (
     <div className="flex min-w-0 items-center gap-2">
+      <Link
+        to={`/chats/${room.id}/events`}
+        aria-label="Room events"
+        title="Room events"
+        className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-muted hover:bg-canvas"
+      >
+        <IconCalendar className="h-5 w-5" aria-hidden="true" />
+      </Link>
       <Link
         to="/chats"
         aria-label="Back to chats"
@@ -87,6 +98,18 @@ export default function RoomHeader({ room, isConnected }) {
           </span>
         </p>
       </div>
+
+      {canCall && (
+        <Link
+          to="/calls"
+          aria-label="Voice and video calls coming soon"
+          title="Voice and video calls coming soon"
+          className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl px-2 text-muted hover:bg-canvas"
+        >
+          <IconCall className="h-5 w-5" aria-hidden="true" />
+          <span className="hidden text-[10px] font-semibold sm:inline">Soon</span>
+        </Link>
+      )}
 
       <button
         type="button"

@@ -30,6 +30,8 @@ process.env.JWT_REFRESH_SECRET =
   process.env.JWT_REFRESH_SECRET || "smoke-test-refresh-secret";
 process.env.CLIENT_ORIGIN =
   process.env.CLIENT_ORIGIN || "http://localhost:5173";
+process.env.CLIENT_ORIGINS =
+  "http://localhost:5173,http://localhost:5174";
 
 require("../src/config/env").redisUrl = undefined;
 const app = require("../src/app");
@@ -101,6 +103,13 @@ const EXPECTED_ROUTES = [
   // attachments — the delivery proxy, auth-guarded and membership-checked
   ["GET", "/api/attachments/:attachmentId", true],
   ["GET", "/api/attachments/:attachmentId/url", true],
+  // Operator console APIs. The access and role-management endpoints remain
+  // authenticated; platform role authorization is enforced by their middleware.
+  ["POST", "/api/moderation/appeals/request", false],
+  ["POST", "/api/moderation/appeals/status", false],
+  ["GET", "/api/moderation/access", true],
+  ["GET", "/api/moderation/operators", true],
+  ["PATCH", "/api/moderation/operators/:userId/role", true],
 ];
 
 // Express keeps a router's own paths relative to its mount point, so a route
@@ -259,6 +268,13 @@ test("malformed UUID param is a 400, not a 500", async () => {
   assert.notEqual(res.status, 500);
 });
 
+test("operator role routes require authentication before database access", async () => {
+  for (const path of ["/api/moderation/access", "/api/moderation/operators"]) {
+    const res = await fetch(`${baseUrl}${path}`);
+    assert.equal(res.status, 401, `${path} should reject an anonymous request`);
+  }
+});
+
 test("security headers are set by helmet", async () => {
   const res = await fetch(`${baseUrl}/health`);
   assert.ok(
@@ -281,6 +297,17 @@ test("CORS allows the configured client origin with credentials", async () => {
     "http://localhost:5173",
   );
   assert.equal(res.headers.get("access-control-allow-credentials"), "true");
+});
+
+test("CORS allows both configured app origins and rejects unrelated origins", async () => {
+  const operator = await fetch(`${baseUrl}/health`, {
+    headers: { Origin: "http://localhost:5174" },
+  });
+  assert.equal(operator.headers.get("access-control-allow-origin"), "http://localhost:5174");
+  const unrelated = await fetch(`${baseUrl}/health`, {
+    headers: { Origin: "https://unrelated.example" },
+  });
+  assert.equal(unrelated.headers.get("access-control-allow-origin"), null);
 });
 
 test("every backend module loads without throwing", async () => {

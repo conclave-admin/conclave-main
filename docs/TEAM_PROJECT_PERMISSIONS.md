@@ -37,3 +37,16 @@ Project rules:
   cannot create an empty team project.
 - Archived teams remain readable to authorized members and reject team/project
   mutations until restored.
+
+Team identity and recovery:
+
+- Team names are not globally unique. The team switcher and team page show a
+  stable short reference derived from the team UUID; support records use the
+  full UUID.
+- Controlled beta teams admit up to `BETA_MAX_TEAM_MEMBERS` users (default 25).
+  Invite acceptance and join-request approval enforce the cap transactionally.
+- The owner must transfer ownership before leaving, being removed, or deleting
+  their account. Each team should keep a trusted backup admin. If the owner
+  cannot recover their account, the beta support operator can transfer
+  ownership to an active team admin with the audited recovery command described
+  in `BETA_OPERATIONS.md`.

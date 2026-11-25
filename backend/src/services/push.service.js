@@ -5,6 +5,8 @@ const env = require("../config/env");
 const ApiError = require("../utils/ApiError");
 const policy = require("./notificationPolicy.service");
 const { preview: previewText } = require("./notification.service");
+const { isQuietNow } = require("./quietHours");
+const CALL_PUSH_TTL_SECONDS = 40;
 
 // Opt-out rich content: sender/actor name, room, and a truncated message
 // preview, grouped per conversation so several unread messages in one room
@@ -79,6 +81,18 @@ function buildPayload(n, unseenCount) {
       title: room,
       body: `${who} updated a decision: ${n.decision_title || "Untitled decision"}`,
       tag: kindTag("decision"),
+    };
+  if (n.type === "event_reminder")
+    return {
+      title: room,
+      body: `Upcoming event: ${n.event_title || "Room event"}`,
+      tag: kindTag("event"),
+    };
+  if (n.type === "event_cancelled")
+    return {
+      title: room,
+      body: `${who} cancelled ${n.event_title || "an event"}`,
+      tag: kindTag("event"),
     };
   return { ...generic, tag: kindTag(n.type) };
 }
@@ -253,6 +267,78 @@ async function remove(userId, endpoint) {
     [userId, endpoint],
   );
 }
+
+async function issueNotificationActionToken({ notificationId, messageId, userId, sessionId, subscriptionId, bindingId }) {
+  const token = crypto.randomBytes(32).toString("base64url");
+  await pool.query(
+    `INSERT INTO notification_action_tokens
+       (token_hash,notification_id,message_id,user_id,session_id,subscription_id,binding_id,action,expires_at)
+     VALUES($1,$2,$3,$4,$5,$6,$7,'mark_read',NOW()+INTERVAL '10 minutes')`,
+    [digest(token), notificationId, messageId, userId, sessionId, subscriptionId, bindingId],
+  );
+  return token;
+}
+
+async function markNotificationReadAction(token, io) {
+  if (typeof token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(token))
+    throw new ApiError(404, "Notification action is no longer available");
+  const db = await pool.connect();
+  let action;
+  let markedCount = 0;
+  try {
+    await db.query("BEGIN");
+    action = (await db.query(
+      `SELECT a.notification_id,a.message_id,a.user_id,a.session_id,m.room_id,m.room_sequence
+       FROM notification_action_tokens a
+       JOIN notifications n ON n.id=a.notification_id AND n.recipient_id=a.user_id
+       JOIN messages m ON m.id=a.message_id AND m.id=n.reference_id
+       JOIN room_members rm ON rm.room_id=m.room_id AND rm.user_id=a.user_id
+       JOIN push_subscriptions p ON p.id=a.subscription_id AND p.user_id=a.user_id AND p.binding_id=a.binding_id
+       JOIN auth_sessions s ON s.id=a.session_id AND s.user_id=a.user_id
+       JOIN users u ON u.id=a.user_id
+       WHERE a.token_hash=$1 AND a.action='mark_read' AND a.used_at IS NULL
+         AND a.expires_at>NOW() AND n.seen=FALSE AND m.deleted_at IS NULL
+         AND s.revoked_at IS NULL AND s.expires_at>NOW()
+         AND u.deleted_at IS NULL AND u.suspended_at IS NULL
+         AND message_visible(m.id,a.user_id) AND ${policy.visibleSql("n")}
+       FOR UPDATE OF a`,
+      [digest(token)],
+    )).rows[0];
+    if (!action) throw new ApiError(404, "Notification action is no longer available");
+
+    // The receipt service repeats the room membership check and advances the
+    // read pointer only through the specific message represented by this push.
+    await require("./messageReceipt.service").acknowledge({
+      roomId: action.room_id,
+      userId: action.user_id,
+      messageId: action.message_id,
+      through: true,
+      read: true,
+      io,
+    });
+    const marked = await db.query(
+      `UPDATE notifications n SET seen=TRUE FROM messages m
+       WHERE n.recipient_id=$1 AND n.seen=FALSE
+         AND n.type IN ('mention','new_message','file_uploaded','reminder')
+         AND m.id=n.reference_id AND m.room_id=$2 AND m.room_sequence<=$3
+         AND m.deleted_at IS NULL AND message_visible(m.id,$1) AND ${policy.visibleSql("n")}
+       RETURNING n.id`,
+      [action.user_id, action.room_id, action.room_sequence],
+    );
+    if (!marked.rowCount) throw new ApiError(404, "Notification action is no longer available");
+    markedCount = marked.rowCount;
+    await db.query("UPDATE notification_action_tokens SET used_at=NOW() WHERE token_hash=$1", [digest(token)]);
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    db.release();
+  }
+  require("./notification.service").emitNotificationsSeen(io, action.user_id, markedCount);
+  return { markedRead: true };
+}
+
 async function dispatch(limit = 50, transport = webpush.sendNotification) {
   if (!configured()) return 0;
   const token = crypto.randomUUID();
@@ -287,6 +373,17 @@ async function dispatch(limit = 50, transport = webpush.sendNotification) {
         new Date(job.expires_at) > new Date()
       ) {
         const payload = buildPayload(checked.notification, checked.unseenCount || 0);
+        let markReadToken = null;
+        if (["mention", "new_message", "file_uploaded", "reminder"].includes(checked.notification.type)) {
+          markReadToken = await issueNotificationActionToken({
+            notificationId: job.notification_id,
+            messageId: checked.notification.reference_id,
+            userId: sub.rows[0].user_id,
+            sessionId: sub.rows[0].session_id,
+            subscriptionId: sub.rows[0].id,
+            bindingId: job.binding_id,
+          });
+        }
         await transport(
           sub.rows[0].subscription,
           JSON.stringify({
@@ -297,6 +394,7 @@ async function dispatch(limit = 50, transport = webpush.sendNotification) {
             body: payload.body,
             tag: payload.tag,
             url: "/notifications",
+            actionToken: markReadToken,
           }),
           {
             vapidDetails: {
@@ -350,7 +448,63 @@ async function dispatch(limit = 50, transport = webpush.sendNotification) {
   }
   return jobs.rowCount;
 }
+
+async function sendCallInvitation(userId, call) {
+  if (!configured()) return 0;
+  if (await require("./presence.service").isUserOnline(userId)) return 0;
+  const subscriptions = await pool.query(
+    `SELECT p.id,p.subscription,p.binding_id,s.expires_at,
+      COALESCE(np.push_enabled,TRUE) AS push_enabled,
+      COALESCE(np.activity_level,'all') AS activity_level,COALESCE(np.muted,'{}'::jsonb) AS muted,
+      np.quiet_hours,np.quiet_hours_timezone,u.dnd_until,
+      rmp.muted AS room_muted,rmp.mute_until
+     FROM push_subscriptions p JOIN auth_sessions s ON s.id=p.session_id
+     JOIN users u ON u.id=p.user_id
+     LEFT JOIN notification_preferences np ON np.user_id=u.id
+     LEFT JOIN room_member_preferences rmp ON rmp.room_id=$2 AND rmp.user_id=u.id
+     WHERE p.user_id=$1 AND s.revoked_at IS NULL AND s.expires_at>NOW()
+       AND u.deleted_at IS NULL AND u.suspended_at IS NULL`,
+    [userId, call.roomId],
+  );
+  let sent = 0;
+  for (const subscription of subscriptions.rows) {
+    const dnd = subscription.dnd_until && new Date(subscription.dnd_until) > new Date();
+    const roomMute = subscription.room_muted || (subscription.mute_until && new Date(subscription.mute_until) > new Date());
+    const quiet = isQuietNow(subscription.quiet_hours || [], subscription.quiet_hours_timezone || "UTC");
+    if (!subscription.push_enabled || subscription.activity_level === "none" || dnd || roomMute || quiet)
+      continue;
+    try {
+      await webpush.sendNotification(
+        subscription.subscription,
+        JSON.stringify({
+          id: call.id,
+          bindingId: subscription.binding_id,
+          kind: "call",
+          callId: call.id,
+          roomId: call.roomId,
+          title: "Conclave",
+          body: call.callType === "video" ? "Incoming video call" : "Incoming voice call",
+        }),
+        {
+          vapidDetails: { subject: env.push.subject, publicKey: env.push.publicKey, privateKey: env.push.privateKey },
+          TTL: CALL_PUSH_TTL_SECONDS,
+          timeout: 5000,
+          urgency: "high",
+        },
+      );
+      sent++;
+    } catch (error) {
+      if ([404, 410].includes(error.statusCode))
+        await pool.query("DELETE FROM push_subscriptions WHERE id=$1", [subscription.id]);
+      else console.warn("Call push could not be delivered", error.statusCode || error.message);
+    }
+  }
+  return sent;
+}
 async function prune() {
+  await pool.query(
+    "DELETE FROM notification_action_tokens WHERE used_at IS NOT NULL OR expires_at<NOW()",
+  );
   await pool.query(
     "DELETE FROM push_jobs WHERE completed_at<NOW()-INTERVAL '30 days'",
   );
@@ -389,6 +543,9 @@ module.exports = {
   register,
   renew,
   remove,
+  issueNotificationActionToken,
+  markNotificationReadAction,
+  sendCallInvitation,
   dispatch,
   start,
   stop,

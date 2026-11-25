@@ -100,6 +100,15 @@ const createProject = asyncHandler(async (req, res) => {
 
 const getProject = asyncHandler(async (req, res) => {
   const projectId = req.params.projectId;
+  const pageParam = (value, label) => {
+    if (value == null) return 1;
+    if (!/^\d+$/.test(String(value)) || Number(value) < 1 || Number(value) > 10000)
+      throw new ApiError(400, `Invalid ${label} page`);
+    return Number(value);
+  };
+  const taskPage = pageParam(req.query.taskPage, "task");
+  const decisionPage = pageParam(req.query.decisionPage, "decision");
+  const pageSize = 50;
   const p = await project({ query }, projectId, req.user.id);
   const rooms = await query(
     `SELECT r.id,r.name,r.slug,rm.role FROM project_rooms pr JOIN rooms r ON r.id=pr.room_id
@@ -123,12 +132,14 @@ const getProject = asyncHandler(async (req, res) => {
      LEFT JOIN task_dependencies dep ON dep.task_id=t.id
      LEFT JOIN tasks blocker ON blocker.id=dep.depends_on_id
      WHERE t.project_id=$1 GROUP BY t.id,u.display_name,r.name
-     ORDER BY t.due_date NULLS LAST,t.created_at DESC LIMIT 200`, [projectId, req.user.id]);
+     ORDER BY t.due_date NULLS LAST,t.created_at DESC LIMIT $3::int OFFSET $4::int`,
+    [projectId, req.user.id, pageSize + 1, (taskPage - 1) * pageSize]);
   const decisions = await query(
     `SELECT d.id,d.room_id,d.title,d.status,d.updated_at,r.name AS room_name
      FROM decisions d JOIN project_rooms pr ON pr.room_id=d.room_id AND pr.project_id=$1
      JOIN room_members rm ON rm.room_id=d.room_id AND rm.user_id=$2
-     JOIN rooms r ON r.id=d.room_id ORDER BY d.updated_at DESC LIMIT 50`, [projectId, req.user.id]);
+     JOIN rooms r ON r.id=d.room_id ORDER BY d.updated_at DESC LIMIT $3::int OFFSET $4::int`,
+    [projectId, req.user.id, pageSize + 1, (decisionPage - 1) * pageSize]);
   const dependencies = await query(
     `SELECT dep.task_id,dep.depends_on_id,blocker.title AS blocker_title
      FROM task_dependencies dep JOIN tasks task ON task.id=dep.task_id
@@ -148,8 +159,26 @@ const getProject = asyncHandler(async (req, res) => {
      FROM tasks t JOIN room_members rm ON rm.room_id=t.room_id AND rm.user_id=$2
      WHERE t.project_id=$1`, [projectId, req.user.id]);
   return ok(res, { project: p, rooms: rooms.rows, milestones: milestones.rows,
-    tasks: tasks.rows, decisions: decisions.rows, dependencies: dependencies.rows, report: report.rows[0],
-    truncated: tasks.rowCount === 200 || decisions.rowCount === 50 });
+    tasks: tasks.rows.slice(0, pageSize), decisions: decisions.rows.slice(0, pageSize),
+    dependencies: dependencies.rows, report: report.rows[0],
+    pagination: {
+      tasks: { page: taskPage, pageSize, hasMore: tasks.rowCount > pageSize },
+      decisions: { page: decisionPage, pageSize, hasMore: decisions.rowCount > pageSize },
+    } });
+});
+
+const searchProjectTasks = asyncHandler(async (req, res) => {
+  await project({ query }, req.params.projectId, req.user.id);
+  const q = text(req.query.q || "", 100, "Task search");
+  if (q.length < 2) return ok(res, { tasks: [] });
+  const rows = await query(
+    `SELECT t.id,t.title,r.name AS room_name FROM tasks t
+     JOIN rooms r ON r.id=t.room_id
+     JOIN room_members rm ON rm.room_id=t.room_id AND rm.user_id=$2
+     WHERE t.project_id=$1 AND position(lower($3) in lower(t.title))>0
+     ORDER BY position(lower($3) in lower(t.title)),t.created_at DESC,t.id LIMIT 20`,
+    [req.params.projectId, req.user.id, q]);
+  return ok(res, { tasks: rows.rows });
 });
 
 const updateProject = asyncHandler(async (req, res) => {
@@ -293,12 +322,22 @@ const getBrief = asyncHandler(async (req, res) => {
   await member({ query }, req.params.roomId, req.user.id);
   await plainRoom({ query }, req.params.roomId);
   const brief = await query(
-    `SELECT b.*,u.display_name AS editor_name FROM room_briefs b
-     JOIN users u ON u.id=b.updated_by WHERE b.room_id=$1`, [req.params.roomId]);
+    `SELECT b.room_id,b.body,b.version,b.updated_by,b.updated_at,
+       CASE WHEN b.source_message_id IS NOT NULL AND EXISTS(
+         SELECT 1 FROM messages m WHERE m.id=b.source_message_id AND m.room_id=b.room_id
+           AND m.deleted_at IS NULL AND message_visible(m.id,$2)
+       ) THEN b.source_message_id ELSE NULL END AS source_message_id,
+       u.display_name AS editor_name FROM room_briefs b
+     JOIN users u ON u.id=b.updated_by WHERE b.room_id=$1`, [req.params.roomId, req.user.id]);
   const revisions = await query(
-    `SELECT br.version,br.body,br.source_message_id,br.changed_at,u.display_name AS editor_name FROM room_brief_revisions br
+    `SELECT br.version,br.body,
+       CASE WHEN br.source_message_id IS NOT NULL AND EXISTS(
+         SELECT 1 FROM messages m WHERE m.id=br.source_message_id AND m.room_id=br.room_id
+           AND m.deleted_at IS NULL AND message_visible(m.id,$2)
+       ) THEN br.source_message_id ELSE NULL END AS source_message_id,
+       br.changed_at,u.display_name AS editor_name FROM room_brief_revisions br
      JOIN users u ON u.id=br.changed_by WHERE br.room_id=$1 ORDER BY br.version DESC LIMIT 20`,
-    [req.params.roomId]);
+    [req.params.roomId, req.user.id]);
   return ok(res, { brief: brief.rows[0] || null, revisions: revisions.rows });
 });
 const putBrief = asyncHandler(async (req, res) => {
@@ -338,6 +377,7 @@ const putBrief = asyncHandler(async (req, res) => {
 });
 
 module.exports = { listProjects, createProject, getProject, updateProject,
+  searchProjectTasks,
   addProjectRoom, removeProjectRoom, createMilestone, updateMilestone,
   setTaskMilestone, addDependency, removeDependency, getBrief, putBrief,
   project, member, text, uuid };

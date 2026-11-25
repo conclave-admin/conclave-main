@@ -114,10 +114,11 @@ export function AuthProvider({ children }) {
   async function register(values) {
     if (isDevAuthBypass) {
       setUser(previewUser);
-      return;
+      return { user: previewUser, verificationEmailQueued: false };
     }
     const session = await authService.register(values);
     setUser(session.user);
+    return session;
   }
   async function logout() {
     if (isDevAuthBypass) {

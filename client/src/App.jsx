@@ -1,5 +1,5 @@
 import JoinRoom from "./pages/JoinRoom";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import AppShell from "./components/layout/AppShell";
 import ProtectedRoute from "./components/routing/ProtectedRoute";
@@ -12,6 +12,9 @@ import { RealtimeProvider } from "./contexts/RealtimeContext";
 import { OutboxProvider } from "./contexts/OutboxContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { ToastProvider } from "./contexts/ToastContext";
+import { isOperatorHost, operatorUrl } from "./config/operatorHost";
+import OperatorShell from "./components/routing/OperatorShell";
+import { CallProvider } from "./contexts/CallContext";
 import StaticPage from "./pages/StaticPage";
 
 const CatchUpDigestPage = lazy(() => import("./pages/CatchUpDigestPage"));
@@ -26,8 +29,10 @@ const MemberProfile = lazy(() => import("./pages/MemberProfile"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Register = lazy(() => import("./pages/Register"));
 const AccountRecovery = lazy(() => import("./pages/AccountRecovery"));
+const RegistrationVerification = lazy(() => import("./pages/RegistrationVerification"));
 const Room = lazy(() => import("./pages/ConversationRoute"));
 const RoomInfo = lazy(() => import("./pages/RoomInfo"));
+const RoomEvents = lazy(() => import("./pages/RoomEvents"));
 const Settings = lazy(() => import("./pages/Settings"));
 const MessageActivity = lazy(() => import("./pages/MessageActivity"));
 const Tasks = lazy(() => import("./pages/Tasks"));
@@ -43,6 +48,10 @@ const RoomBrief = lazy(() => import("./pages/RoomBrief"));
 const TeamHome = lazy(() => import("./pages/TeamHome"));
 const JoinTeam = lazy(() => import("./pages/JoinTeam"));
 const ModerationInbox = lazy(() => import("./pages/ModerationInbox"));
+const ModerationAppeals = lazy(() => import("./pages/ModerationAppeals"));
+const AppealRequest = lazy(() => import("./pages/AppealRequest"));
+const CallHistory = lazy(() => import("./pages/CallHistory"));
+const PlatformOperators = lazy(() => import("./pages/PlatformOperators"));
 
 // Keep public-page illustrations and content outside the signed-in app bundle.
 const Landing = lazy(() => import("./pages/Landing"));
@@ -76,6 +85,35 @@ function LandingRoute() {
   );
 }
 
+function OperatorHome() {
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) return <Spinner fullPage label="Loading" />;
+  return <Navigate to={isAuthenticated ? "/moderation/reports" : "/login"} replace />;
+}
+
+function PublicModerationRedirect() {
+  const location = window.location;
+  useEffect(() => {
+    window.location.replace(operatorUrl(`${location.pathname}${location.search}${location.hash}`));
+  }, [location.hash, location.pathname, location.search]);
+  return <Spinner fullPage label="Opening operator console" />;
+}
+
+function RuntimeProviders({ children }) {
+  if (isOperatorHost) return children;
+  return (
+    <RealtimeProvider>
+      <CallProvider>
+        <SyncProvider>
+          <PushProvider>
+            <OutboxProvider>{children}</OutboxProvider>
+          </PushProvider>
+        </SyncProvider>
+      </CallProvider>
+    </RealtimeProvider>
+  );
+}
+
 export default function App() {
   return (
     // Outermost: the auth screens need the theme too, and it does not depend on
@@ -86,13 +124,26 @@ export default function App() {
     <ThemeProvider>
       <ToastProvider>
         <AuthProvider>
-          <RealtimeProvider>
-            <SyncProvider>
-              <PushProvider>
-                <OutboxProvider>
+          <RuntimeProviders>
                   <Suspense fallback={<Spinner fullPage label="Loading" />}>
                     <Routes>
+                      {isOperatorHost ? <>
+                        <Route path="/" element={<OperatorHome />} />
+                        <Route path="/login" element={<Login />} />
+                        <Route path="/account/:kind" element={<AccountRecovery />} />
+                        <Route element={<ProtectedRoute />}>
+                          <Route element={<OperatorShell />}>
+                            <Route path="/moderation/reports" element={<ModerationInbox />} />
+                            <Route path="/moderation/appeals" element={<ModerationAppeals />} />
+                            <Route path="/moderation/operators" element={<PlatformOperators />} />
+                          </Route>
+                        </Route>
+                        <Route path="*" element={<Navigate to="/" replace />} />
+                      </> : <>
                       <Route path="/" element={<LandingRoute />} />
+                      <Route path="/moderation" element={<PublicModerationRedirect />} />
+                      <Route path="/moderation/*" element={<PublicModerationRedirect />} />
+                      <Route path="/appeal" element={<AppealRequest />} />
                       <Route
                         path="/account/:kind"
                         element={<AccountRecovery />}
@@ -119,12 +170,17 @@ export default function App() {
                       />
 
                       <Route element={<ProtectedRoute />}>
+                        <Route path="/verify-email" element={<RegistrationVerification />} />
+                      </Route>
+
+                      <Route element={<ProtectedRoute />}>
                         <Route element={<AppShell />}>
                           {/* Target of the post-auth redirect. Two panes: the list,
                       and the open conversation — both keyed off this URL so a
                       filtered or deep-linked view survives a reload. */}
                           <Route path="/chats" element={<Chats />}>
-                            <Route path=":roomId" element={<RoomRoute />} />
+                          <Route path=":roomId" element={<RoomRoute />} />
+                            <Route path=":roomId/events" element={<RoomEvents />} />
                             <Route path=":roomId/info" element={<RoomInfo />} />
                           </Route>
 
@@ -145,6 +201,7 @@ export default function App() {
                             path="/activity"
                             element={<MessageActivity />}
                           />
+                          <Route path="/calls" element={<CallHistory />} />
                           <Route path="/new" element={<NewChat />} />
                           <Route path="/discover" element={<DiscoverRooms />} />
                           <Route path="/teams" element={<TeamHome />} />
@@ -180,7 +237,6 @@ export default function App() {
                           />
                           <Route path="/work/inbox" element={<WorkInbox />} />
                           <Route path="/work/search" element={<WorkSearch />} />
-                          <Route path="/moderation/reports" element={<ModerationInbox />} />
                           <Route
                             path="/work/rooms/:roomId/brief"
                             element={<RoomBrief />}
@@ -191,12 +247,10 @@ export default function App() {
                       <Route path="/join" element={<JoinRoom />} />
                       <Route path="/join-team" element={<JoinTeam />} />
                       <Route path="*" element={<Navigate to="/" replace />} />
+                      </>}
                     </Routes>
                   </Suspense>
-                </OutboxProvider>
-              </PushProvider>
-            </SyncProvider>
-          </RealtimeProvider>
+          </RuntimeProviders>
         </AuthProvider>
       </ToastProvider>
     </ThemeProvider>

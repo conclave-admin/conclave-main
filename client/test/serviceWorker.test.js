@@ -63,6 +63,7 @@ async function pushWorker() {
   const shown = [];
   const messages = [];
   const opened = [];
+  const requests = [];
   let binding = {
     bindingId: "binding",
     renewalToken: "renewal",
@@ -91,13 +92,16 @@ async function pushWorker() {
       },
       addEventListener: (name, handler) => handlers.set(name, handler),
     },
-    fetch: async (url) => ({
-      ok: true,
-      json: async () =>
-        url.endsWith("/config")
-          ? { data: { configured: true, publicKey: "AQID" } }
-          : { data: { bindingId: "binding", renewalToken: "new-renewal" } },
-    }),
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        json: async () =>
+          url.endsWith("/config")
+            ? { data: { configured: true, publicKey: "AQID" } }
+            : { data: { bindingId: "binding", renewalToken: "new-renewal" } },
+      };
+    },
   };
   vm.createContext(context);
   vm.runInContext(
@@ -126,6 +130,7 @@ async function pushWorker() {
     shown,
     messages,
     opened,
+    requests,
     event,
     setBinding: (value) => {
       binding = value;
@@ -181,6 +186,8 @@ test("an opted-in preview payload is shown with its conversation-grouped tag", a
         title: "Priya Shah",
         body: "Can you review the draft before standup?",
         tag: "conclave:room:room-1",
+        actionToken: "A".repeat(43),
+        roomId: "00000000-0000-0000-0000-000000000001",
       }),
     },
   });
@@ -192,6 +199,45 @@ test("an opted-in preview payload is shown with its conversation-grouped tag", a
   );
   assert.equal(f.shown[0].tag, "conclave:room:room-1");
   assert.equal(f.shown[0].renotify, true);
+  assert.equal(JSON.stringify(f.shown[0].actions), JSON.stringify([
+    { action: "mark-read", title: "Mark as read" },
+    { action: "open-chat", title: "Open chat" },
+  ]));
+});
+test("the mark-read notification action uses its scoped capability and does not open a window", async () => {
+  const f = await pushWorker();
+  const token = "A".repeat(43);
+  await f.event("notificationclick", {
+    action: "mark-read",
+    notification: {
+      close() {},
+      data: { bindingId: "binding", actionToken: token, roomId: "00000000-0000-0000-0000-000000000001" },
+    },
+  });
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].url, "https://api.example.test/api/push/actions/mark-read");
+  assert.equal(JSON.parse(f.requests[0].options.body).token, token);
+  assert.deepEqual(f.opened, []);
+});
+test("the open-chat notification action navigates only to the same-origin conversation", async () => {
+  const f = await pushWorker();
+  let target;
+  f.setClients([{
+    focused: false,
+    visibilityState: "hidden",
+    url: "https://conclave.example.test/notifications",
+    focus: async () => {},
+    navigate: async (url) => { target = url; },
+    postMessage: () => {},
+  }]);
+  await f.event("notificationclick", {
+    action: "open-chat",
+    notification: {
+      close() {},
+      data: { bindingId: "binding", roomId: "00000000-0000-0000-0000-000000000001" },
+    },
+  });
+  assert.equal(target, "https://conclave.example.test/chats/00000000-0000-0000-0000-000000000001");
 });
 test("foreground conversation suppresses interruption and notification clicks remain on this origin", async () => {
   const f = await pushWorker();

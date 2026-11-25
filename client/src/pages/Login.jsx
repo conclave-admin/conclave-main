@@ -4,6 +4,7 @@ import AuthLayout from "@/components/layout/AuthLayout";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import { useAuth } from "@/contexts/AuthContext";
+import { isOperatorHost } from "@/config/operatorHost";
 
 /**
  * Sign in.
@@ -32,7 +33,7 @@ export default function Login() {
       // deep link sounds considerate until the session expires on /settings or
       // /profile, where signing in then dumping you back on that screen reads
       // as "the app ignored my login" rather than as "we remembered".
-      navigate(sessionStorage.getItem("conclave:pending-team-invitation") ? "/join-team" : sessionStorage.getItem("conclave:pending-invitation") ? "/join" : "/chats", { replace: true });
+      navigate(isOperatorHost ? "/moderation/reports" : sessionStorage.getItem("conclave:pending-team-invitation") ? "/join-team" : sessionStorage.getItem("conclave:pending-invitation") ? "/join" : "/chats", { replace: true });
     } catch (err) {
       setError(err.response?.data?.message || "Could not sign in.");
     } finally {
@@ -42,9 +43,9 @@ export default function Login() {
 
   return (
     <AuthLayout
-      title="Welcome back"
-      description="Sign in to your private workspace"
-      alternateText="Anyone can join Conclave. Create an account to start collaborating."
+      title={isOperatorHost ? "Operator sign in" : "Welcome back"}
+      description={isOperatorHost ? "Sign in with your provisioned Conclave operator account" : "Sign in to your private workspace"}
+      alternateText={isOperatorHost ? "Operator access is provisioned by an existing platform administrator." : "Anyone can join Conclave. Create an account to start collaborating."}
     >
       <form onSubmit={submit} className="space-y-5" noValidate={false}>
         <Input
@@ -87,12 +88,12 @@ export default function Login() {
         >
           Forgot password?
         </Link>
-        <Link
+        {isOperatorHost && <a className="block text-label text-brand hover:underline" href="https://conclave.com.ng/register">Create a regular Conclave account</a>}
+        {!isOperatorHost && <Link className="block text-label text-brand hover:underline" to="/appeal">Appeal an account action</Link>}
+        {!isOperatorHost && <Link
           className="inline-block text-label text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
           to="/register"
-        >
-          Need an account?
-        </Link>
+        >Need an account?</Link>}
       </form>
     </AuthLayout>
   );

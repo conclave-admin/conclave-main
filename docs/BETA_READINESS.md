@@ -1,6 +1,6 @@
 # Controlled beta readiness
 
-Assessment date: **24 November 2026 (Africa/Lagos)**.
+Assessment date: **25 November 2026 (Africa/Lagos)**.
 
 This checklist defines the minimum gate for Conclave's small controlled beta.
 Registration remains open because Conclave supports direct messages and personal
@@ -123,6 +123,14 @@ These are implementation strengths, not substitutes for final candidate tests.
   provider availability a registration dependency. Email-bound team invites
   expose resend, block acceptance while unverified, refresh on tab focus, and
   return to the pending invitation after verification.
+- Registration now lands on a verification screen that names the account email,
+  offers resend and status refresh, and lets a user continue while pending.
+  Verification emails provide both a one-time link and an 8-digit code. A
+  signed-in user can enter the code on that screen; either method consumes both
+  outstanding credentials. Email-bound team invitations continue to require
+  verification; this change does not add a global account lock. The user
+  confirmed that Resend delivers verification mail, but live expiry and recovery
+  acceptance remain open.
 - Local evidence: backend unit/HTTP suite **52/52**, client unit suite **22/22**,
   client production build passed, and focused migration tests **2/2**. The full
   database invocation reached **267/271**: identity tests passed; two existing
@@ -146,7 +154,7 @@ These are implementation strengths, not substitutes for final candidate tests.
   roles, rooms, projects, discovery, archive and transfers in
   `TEAM_PROJECT_PERMISSIONS.md`.
 - [ ] Preserve the single-owner database invariant and require ownership
-  transfer before the owner can leave or be removed.
+  transfer before the owner can leave, be removed or delete their account.
 
 ### Required lifecycle evidence
 
@@ -157,15 +165,24 @@ These are implementation strengths, not substitutes for final candidate tests.
   concurrent acceptance. Repeated acceptance must not consume another use.
 - [x] Cover shareable invitations and join-request decisions without widening
   access to unrelated rooms.
-- [ ] Cover ownership transfer: old-owner demotion, new-owner administration in
-  every team room, history boundary and the single-owner invariant under races.
-- [ ] Cover member removal and self-leave, including HTTP/socket revocation,
-  pending-task cleanup, invite cleanup and loss of project access.
+- [x] Add deferred database constraints that require exactly one `owner` team
+  member matching `teams.owner_id`; reconcile prior owner/grant state safely.
+- [x] Cover ownership transfer: old-owner demotion, new-owner administration
+  in every team room, the history boundary and concurrent transfer races. The
+  tests are authored but were not run in this pass.
+- [x] Cover member removal and self-leave, including HTTP/socket revocation,
+  pending-task cleanup, invite cleanup, pending-grant cleanup and loss of room
+  access. The tests are authored but were not run in this pass.
 - [x] Cover archive/restore as read-only behavior across messages, tasks,
   decisions, projects, briefs and automations.
-- [ ] Keep team names non-unique and document that IDs identify teams. Add a
-  stable slug or visible disambiguator before duplicate names cause confusion.
-- [ ] Set a beta cohort cap per team and document owner recovery/support.
+- [x] Keep team names non-unique; show a stable short team-ID reference in the
+  team list and detail view. The full UUID remains the authoritative identifier.
+- [x] Set a configurable per-team beta cap (default 25), limit invitation uses
+  to available spaces and reject acceptance/join when full.
+- [x] Define owner support: recover the account first; if that fails, an
+  operator verifies the request and may transfer ownership to an active team
+  admin using the audited recovery script. Each beta team should have a backup
+  admin before invitations are distributed.
 
 ### Team lifecycle test implementation — 24 November 2026
 
@@ -184,9 +201,33 @@ These are implementation strengths, not substitutes for final candidate tests.
 - Archive coverage asserts read-only behavior for rooms, messages, tasks,
   decisions, projects, briefs and automations, followed by successful writes
   after restoration. Brief writes now apply the archived-team guard.
-- The broader unchecked ownership/removal bullets still require race coverage,
-  self-leave, pending-task/invite cleanup and explicit history-boundary checks.
-  No lifecycle test was executed in this implementation pass.
+- The previously open race, self-leave, cleanup and history-boundary cases are
+  now authored in `realtime-access.test.js`, together with
+  owner invariant, concurrent transfer and cohort-cap regressions. No lifecycle
+  test was executed in this implementation pass.
+
+### Team lifecycle guardrails — 25 November 2026
+
+- Migration `075_team_owner_invariant.sql` repairs owner-role/grant mismatches,
+  removes stale deleted-member rows, creates immutable owner-transfer audit
+  records, and defers database checks until every team transaction has exactly
+  one owner row matching `teams.owner_id`. Team creation and ownership transfer
+  remain atomic; owner account deletion is rejected until ownership transfers.
+  The migration stops with an actionable error if a soft-deleted account still
+  owns a team; an operator must recover/transfer that team before retrying.
+  It is authored but has not been applied to the local or staging database;
+  the database invariant becomes active only after the migration is applied.
+- The default beta team cap is 25 members, configurable with
+  `BETA_MAX_TEAM_MEMBERS`. Shareable invitation use is capped at currently
+  available spaces; invite acceptance and approved join requests serialize on
+  the team row and reject new members at capacity.
+- Team names remain non-unique. The UI displays a stable 12-character team ID
+  reference while the full UUID remains the authoritative support identifier.
+- `backend/scripts/recover-team-owner.js` supports an operator-approved
+  transfer to an existing active team admin and records the operator, reason,
+  previous owner and successor in append-only `team_audit_events`.
+- Regression coverage is authored but was not run. Operators and named support
+  contacts still need to be assigned in the release evidence.
 
 ## P0 — projects and connected work fit for beta
 
@@ -233,18 +274,18 @@ These are implementation strengths, not substitutes for final candidate tests.
   rejection, duplicate room assignment, archived-team rejection and status.
 - [x] Cover visibility: non-members see nothing; eligible members see only
   projects and linked rooms allowed by policy; removal immediately removes access.
-- [ ] Cover milestones, task assignment, dependency cycle prevention, dependency
+- [x] Cover milestones, task assignment, dependency cycle prevention, dependency
   cleanup on room removal and decision/task summaries.
-- [ ] Cover brief optimistic concurrency and source-message visibility.
-- [ ] Cover automation idempotency across competing workers and failure/retry.
-- [ ] Surface API truncation at 200 tasks or 50 decisions; add pagination before
-  the beta cohort can realistically reach those limits.
-- [ ] Cover work inbox and search after history clearing, deletion, room leave
+- [x] Cover brief optimistic concurrency and source-message visibility.
+- [x] Cover automation idempotency across competing workers and failure/retry.
+- [x] Replace project task/decision fixed result ceilings with API pagination;
+  paginate the work inbox as well.
+- [x] Cover work inbox and search after history clearing, deletion, room leave
   and team removal.
 - [ ] Leave `teams.avatar_url` unwired only if no team-avatar control is shown.
   Track avatar upload as polish rather than implying it works.
 
-### Project lifecycle test implementation — 24 November 2026
+### Project lifecycle implementation — 25 November 2026
 
 - Creation coverage requires initial rooms and rejects duplicate selections,
   duplicate attachment, cross-team attachment and member creation. Visibility
@@ -254,16 +295,25 @@ These are implementation strengths, not substitutes for final candidate tests.
   coverage creates a blocker, rejects a cycle, and verifies that removing a
   room clears its project and milestone links plus every related dependency.
 - Brief coverage races two writers at the same version and verifies one commit,
-  one `409`, the winning body and the revision history.
+  one `409`, the winning body and the revision history. Brief source-message IDs
+  are now hidden when that message is deleted or outside the viewer's retained
+  history.
 - Automation coverage runs competing workers for one decision event and verifies
-  one durable claim and one generated task across repeated scans.
+  one durable claim and one generated task across repeated scans. A transient
+  task-write failure rolls back the event claim so a later scan can retry.
 - Work discovery coverage verifies assignment inbox and cross-room search,
-  message deletion, task completion, and immediate disappearance after team
-  membership removal.
-- The broader unchecked bullets still require source-message brief checks,
-  automation failure/retry, history clearing, explicit room leave, and complete
-  decision/task summary coverage. No lifecycle test was executed in this
-  implementation pass.
+  message deletion, task completion, history clearing, explicit room leave,
+  and immediate disappearance after team membership removal.
+- Project task and decision lists return 50 items per page with independent
+  `taskPage` and `decisionPage` page parameters and `hasMore` metadata. Project
+  health totals still aggregate every task visible to the viewer. The task
+  dependency picker searches across all project pages. The work inbox now
+  returns 50 items per page and the UI can load more.
+- Added regression cases for pagination beyond 50 results, complete project
+  summary counts, source-message visibility after history clearing, room-leave
+  visibility revocation, and automation retry after a failed write.
+- **Tests were authored but not run**, honoring the request to defer all test
+  execution. Backend static syntax checks and the client production build passed.
 
 ## P0 — moderation and enforcement
 
@@ -277,48 +327,84 @@ These are implementation strengths, not substitutes for final candidate tests.
   transitions with actor, reason, timestamps and an append-only audit table.
 - [x] Add account suspension/restoration. Suspension must block login and API
   access and revoke all sessions immediately.
+- [x] Add report assignment and an audited appeal queue. Suspended users can
+  submit and check appeals with their account credentials; an independent
+  moderator can uphold or reverse a decision.
 - [x] Author authorization/privacy regressions for ordinary users, room admins,
   bounded report context, concurrent transitions, suspended sessions, login,
   refresh and restoration. They were deliberately not executed in this pass at
   the user's request; execution is still a candidate gate.
-- Assignment and full appeals may remain deferred for a single-moderator beta.
+- [ ] Add and run focused coverage for report/appeal assignment, suspension and
+  report appeals, reviewer separation, credential verification, reversal and
+  immediate restoration. These new paths were not tested in this pass.
 - [ ] Name the moderator, support contact and storage operator; confirm who can
   perform urgent content takedown when a room admin or author cannot act.
 
-### Private operator console at `admin.conclave.com.ng` — planned, not implemented
+### Private operator console at `admin.conclave.com.ng`
 
-The hostname is a separate workspace for operators, not a secret URL or an
-authorization boundary. Keep registration on the public app; do not provide a
-public self-registration path that assigns platform roles.
+The frontend is deployed on Vercel and the API on Render. The implementation
+serves the operator workspace from the same client build on a separately
+bound Vercel domain, selected by hostname. This keeps one UI release while the
+browser's origin-scoped session storage keeps public and operator sessions
+separate. The hostname and an external access gate are defense-in-depth; API
+roles remain the authorization authority. Public registration never grants
+platform roles.
 
-- [ ] Configure DNS, TLS and hosting for `admin.conclave.com.ng`, serving an
-  operator-focused frontend with the moderation inbox and audited platform-role
-  administration. The current inbox is `/moderation/reports` in the main app;
-  it is not yet restricted to the admin hostname, and role administration UI
-  does not exist.
-- [ ] Put an identity-aware access gate in front of the operator host and
-  restrict it to the founders/developers selected to operate Conclave. Keep the
-  backend's platform-role check as the authority even when the access gate
-  permits the request. Do not rely on an unlisted link or `noindex` as security.
-- [ ] Allow only the exact public and operator frontend origins in validated
-  backend HTTP CORS and Socket.IO CORS configuration. The current backend
-  accepts one `CLIENT_ORIGIN`, so dual-host support must be implemented before
+#### Repository implementation
+
+- [x] Add exact, validated `CLIENT_ORIGINS` support to backend HTTP and
+  Socket.IO CORS, retaining `CLIENT_ORIGIN` as a single-origin compatibility
+  fallback. The public and operator origins must be explicitly configured in
   deployment.
-- [ ] Keep operator role grants out of public signup. Bootstrap the first
-  platform administrator through a one-time controlled operator procedure;
-  subsequent grants/revocations should require an authenticated platform admin
-  and create append-only audit entries. The existing CLI provisions moderators
-  only and does not provide this admin console or first-admin bootstrap.
-- [ ] Document that browser storage is origin-scoped: operators sign in
-  separately on the admin subdomain, and both the host access gate and Conclave
-  session/role authorization must succeed.
+- [x] Route `admin.conclave.com.ng` into a focused operator shell with sign-in,
+  reports, appeals, storage overview and platform-role administration. Do not
+  render the public signup flow on the operator host. Public-host moderation
+  paths redirect to the operator host.
+- [x] Add an admin-only API for paginated account lookup and role changes.
+  Require expected-role concurrency checks and a reason, append audit entries,
+  revoke affected sessions, and prevent removal/demotion of the last active
+  platform administrator. Role grants require verified accounts; self-role
+  changes and suspended-account changes are refused.
+- [x] Add a one-time CLI path to bootstrap the first active, verified platform
+  administrator. Production invocation requires matching environment, expected
+  database host/port/name and an exact confirmation phrase. Once an admin
+  exists, further role changes happen in the protected console. Moderator
+  provisioning remains available.
+- [ ] Add and run focused regression coverage for CORS origin validation,
+  role-gated console access, role change authorization/audit, last-admin
+  protection, bootstrap refusal after first use and immediate session
+  revocation. No tests were run during this implementation.
+
+#### Deployment and operator setup
+
+- [ ] Bind `admin.conclave.com.ng` to the Vercel project, configure DNS/TLS
+  through WhoGoHost, and verify direct navigation and deep-link fallback on
+  both public and operator hostnames. Set Vercel build variables
+  `VITE_OPERATOR_HOST=admin.conclave.com.ng` and
+  `VITE_OPERATOR_URL=https://admin.conclave.com.ng`.
+- [ ] Select and configure an identity-aware gate in front of the operator
+  hostname for the founders/developers selected to operate Conclave. DNS is
+  managed at WhoGoHost, so no identity-gate provider is selected here. The
+  backend role check remains authoritative after the gate permits a request;
+  an unlisted link or `noindex` is not access control.
+- [ ] Configure the exact public and operator frontend origins in Render
+  `CLIENT_ORIGINS`, then
+  verify HTTP and Socket.IO CORS from each origin and rejection of an unrelated
+  origin.
+- [ ] Bootstrap the first active, verified platform administrator out of band
+  using the guarded `platform:operator bootstrap-admin` command; then sign in
+  on the operator origin, provision moderators and verify reports, appeals,
+  role changes and session revocation. Role grants never appear in public
+  signup. Exact usage is documented in `BETA_OPERATIONS.md`.
+- [ ] Document origin-scoped browser storage: operators sign in separately on
+  the admin subdomain, and both the host gate and Conclave session/role checks
+  must succeed. Assign a named backup admin and support contact.
 
 ## P0 — deployment, media and candidate verification
 
-- [ ] Implement validated exact client-origin allowlists for HTTP and
+- [x] Implement validated exact client-origin allowlists for HTTP and
   Socket.IO, covering production, staging and the admin subdomain as explicitly
-  configured. The current single `CLIENT_ORIGIN` cannot serve these separately
-  and has caused browser-suite CORS failures.
+  configured. Deployment values and live CORS acceptance remain pending.
 - [ ] Complete the approved media path: streaming wiring, preview Worker width
   support and CI, medium viewer step, gallery work and live Worker deployment.
 - [x] Add an atomic active-account signup cap, signup kill switch, storage usage
@@ -330,9 +416,13 @@ public self-registration path that assigns platform roles.
 - [ ] Run with Node 22 as declared by the repository and CI.
 - [ ] Run `npm run check`, fresh/rerun migrations, the complete database suite,
   browser/security suites and media suites against the final candidate.
-- [ ] Apply migrations through 065 twice in staging and verify the constraints.
+- [ ] Apply migrations through 075 twice in staging and verify the constraints.
   No production migration is included without a separate deployment decision.
 - [ ] Complete live R2, push and Resend acceptance with beta credentials.
+- Calls, video calling and call history are hidden behind the default-off
+  `VITE_CALLS_ENABLED` client flag and are not part of this beta release. Keep
+  the implementation; do not configure TURN or count call acceptance as a beta
+  gate until the feature is intentionally unveiled.
 - [ ] Smoke-test supported desktop/mobile browsers and at least one Android and
   iOS device for signup, verification, invitations, rooms/projects, messaging,
   uploads, voice notes, reconnect and accessibility-critical flows.
@@ -358,26 +448,52 @@ public self-registration path that assigns platform roles.
 - [ ] Correct stale deployment, issue, backend-task and privacy documentation
   before publishing beta operator instructions.
 
-## Deferred features and the beta boundary
+## Accepted beta deferrals — not release blockers
 
-The following items from `DEFERRED_FEATURES.md` may remain deferred when their
-limitations are disclosed:
+The following capabilities remain outside the controlled beta scope. Their
+absence is an accepted boundary, not a release blocker, provided the implemented
+baseline behavior and authorization safeguards remain in place.
 
-- OS notification actions.
-- Recurring quiet hours.
-- Voice/video/group calling and call history.
-- Room events.
+- **Voice/video calls and call history:** implemented in the codebase but
+  hidden behind `VITE_CALLS_ENABLED=false`. They are not available in the beta
+  UI; TURN, call push and real-device call acceptance are deferred until launch.
+- **Room events:** recurring and all-day events remain deferred. One-time event
+  scheduling, editing, RSVP, cancellation notices and reminders are implemented.
+- **Global search:** ranking, type/room/author/date filters and paging are
+  implemented. Stable cursor pagination and large-history performance remain
+  beta hardening work.
+- **Platform moderation:** manual report/appeal assignment and independent
+  appeal review are implemented. Automated assignment, deadlines and direct
+  platform-wide content removal remain deferred.
 
-Cross-room search is no longer wholly absent: scoped work search covers visible
-messages, decisions, tasks, files, rooms and shared people. Broader ranking,
-filters, scale and product semantics may remain deferred, but documentation must
-not describe all cross-room search as unimplemented.
+These scope decisions do not waive the beta requirements for working existing
+notifications, manual DND and recurring quiet hours, voice notes, room
+messaging, access-scoped search,
+or the implemented moderation baseline. The detailed designs and acceptance
+criteria for later work remain in `DEFERRED_FEATURES.md`.
+
+Message push notifications now offer **Mark as read** and **Open chat** actions
+where browser notification actions are supported; ordinary click-through remains
+the fallback. Mark as read is bounded to the notification's visible message
+sequence and requires a short-lived, single-use capability. Inline reply remains
+out of scope.
+
+Recurring quiet hours are available in notification settings. A weekly
+schedule uses the account's selected time zone and suppresses push and in-app
+message alerts while leaving notification history and unread state intact.
+
+The call implementation remains in the repository, including direct and
+small-group WebRTC audio/video, call controls and recent history. The beta client
+keeps `VITE_CALLS_ENABLED=false`: call actions lead to a Coming soon screen,
+call history is not shown, and incoming call UI is suppressed. TURN and live
+call-push acceptance are intentionally deferred until calls are unveiled.
 
 The following deferred items require an explicit beta control:
 
-- **Platform moderation:** the minimum inbox, audit and suspension workflow is
-  implemented. Its authored authorization and revocation regressions still need
-  execution, and a moderator/support owner must be provisioned before beta.
+- **Platform moderation:** report assignment and appeal review are implemented.
+  Their authorization, reviewer-separation and revocation checks were not run
+  in this pass. Provision active moderators and name a support owner before
+  beta; live operations still need a response and takedown policy.
 - **Storage quotas:** reservation accounting may trail beta only with the
   active-account cap, daily storage report, provider billing review and named
   operator response described in `BETA_OPERATIONS.md`.

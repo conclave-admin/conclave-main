@@ -10,6 +10,7 @@ const { revokeRoomAccess } = require('../services/realtimeAccess.service');
 const { queueTeamInvite } = require('../services/accountSecurity.service');
 const { createTeamProject } = require('../services/project.service');
 const { projectNameConflict } = require('../utils/projectIdentity');
+const env = require('../config/env');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validId = (value) => { if (!UUID.test(value || '')) throw new ApiError(400, 'Invalid identifier'); return value; };
@@ -59,6 +60,11 @@ async function roomMember(db, roomId, userId, role='member', start=0, owner=fals
 async function joinTeam(db, t, userId) {
   const user = (await db.query('SELECT id FROM users WHERE id=$1 AND deleted_at IS NULL',[userId])).rows[0];
   if (!user) throw new ApiError(409,'Account unavailable');
+  const existing = (await db.query('SELECT 1 FROM team_members WHERE team_id=$1 AND user_id=$2',[t.id,userId])).rowCount > 0;
+  if (!existing) {
+    const count = Number((await db.query('SELECT count(*)::int AS count FROM team_members WHERE team_id=$1',[t.id])).rows[0].count);
+    if (count >= env.beta.maxTeamMembers) throw new ApiError(409,'This team has reached its beta member limit');
+  }
   await db.query(`INSERT INTO team_members(team_id,user_id,role) VALUES($1,$2,'member')
     ON CONFLICT(team_id,user_id) DO NOTHING`,[t.id,userId]);
   await roomMember(db,t.general_room_id,userId);
@@ -104,7 +110,7 @@ router.get('/',wrap(async(req,res)=>{
     (SELECT count(*)::int FROM team_members x WHERE x.team_id=t.id) AS member_count
     FROM teams t JOIN rooms r ON r.id=t.general_room_id JOIN team_members tm ON tm.team_id=t.id AND tm.user_id=$1
     ORDER BY t.archived_at NULLS FIRST,t.created_at DESC LIMIT 100`,[req.user.id]);
-  return ok(res,{teams:rows.rows});
+  return ok(res,{teams:rows.rows,maxMembers:env.beta.maxTeamMembers});
 }));
 router.get('/:teamId',wrap(async(req,res)=>{
   const t=await team({query},req.params.teamId,req.user.id);
@@ -123,7 +129,7 @@ router.get('/:teamId',wrap(async(req,res)=>{
       FROM team_invites WHERE team_id=$1 ORDER BY created_at DESC LIMIT 100`,[t.id]),
     t.my_role==='member' ? Promise.resolve({rows:[]}) : query(`SELECT q.user_id,u.display_name,q.source_room_id,q.status,q.requested_at
       FROM team_join_requests q JOIN users u ON u.id=q.user_id WHERE q.team_id=$1 AND q.status='pending' ORDER BY q.requested_at LIMIT 100`,[t.id])]);
-  return ok(res,{team:t,members:members.rows,rooms:rooms.rows,projects:projects.rows,invites:invites.rows,requests:requests.rows});
+  return ok(res,{team:t,members:members.rows,rooms:rooms.rows,projects:projects.rows,invites:invites.rows,requests:requests.rows,maxMembers:env.beta.maxTeamMembers});
 }));
 router.patch('/:teamId',wrap(async(req,res)=>{
   const name=trimmed(req.body?.name,120,'team name',true), description=trimmed(req.body?.description || '',2000,'description');
@@ -134,10 +140,14 @@ router.patch('/:teamId',wrap(async(req,res)=>{
 router.post('/:teamId/invites',rate({max:20}),wrap(async(req,res)=>{
   const email=req.body?.email ? trimmed(req.body.email,320,'email').toLowerCase() : null;
   if(email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ApiError(400,'Invalid email');
-  const maxUses=email ? 1 : Math.min(100,Math.max(1,Number(req.body?.maxUses)||10));
+  const requestedUses=email ? 1 : Math.min(100,Math.max(1,Number(req.body?.maxUses)||10));
   const hours=Math.min(720,Math.max(1,Number(req.body?.expiresInHours)||168));
   const token=makeToken();
   const invite=await tx(async db=>{const t=await team(db,req.params.teamId,req.user.id,['owner','admin'],true);active(t);
+    const memberCount=Number((await db.query('SELECT count(*)::int AS count FROM team_members WHERE team_id=$1',[t.id])).rows[0].count);
+    const availableSlots=env.beta.maxTeamMembers-memberCount;
+    if(availableSlots<=0) throw new ApiError(409,'This team has reached its beta member limit');
+    const maxUses=Math.min(requestedUses,availableSlots);
     const row=(await db.query(`INSERT INTO team_invites(team_id,token_hash,email_normalized,created_by,expires_at,max_uses)
       VALUES($1,$2,$3,$4,NOW()+($5::int * INTERVAL '1 hour'),$6) RETURNING id,team_id,email_normalized,expires_at,max_uses,uses`,
       [t.id,tokenHash(token),email,req.user.id,hours,maxUses])).rows[0];
@@ -229,8 +239,9 @@ router.post('/:teamId/transfer-owner',wrap(async(req,res)=>{
   const target=validId(req.body?.userId);
   await tx(async db=>{const t=await team(db,req.params.teamId,req.user.id,['owner'],true);active(t);
     if(target===req.user.id) return;
-    const member=(await db.query('SELECT 1 FROM team_members WHERE team_id=$1 AND user_id=$2',[t.id,target])).rowCount;
-    if(!member) throw new ApiError(404,'Member unavailable');
+    const member=(await db.query(`SELECT tm.role FROM team_members tm JOIN users u ON u.id=tm.user_id
+      WHERE tm.team_id=$1 AND tm.user_id=$2 AND u.deleted_at IS NULL AND u.suspended_at IS NULL`,[t.id,target])).rows[0];
+    if(!member) throw new ApiError(404,'Active team member unavailable');
     await db.query(`UPDATE team_members SET role='member' WHERE team_id=$1 AND user_id=$2`,[t.id,req.user.id]);
     await db.query(`UPDATE team_members SET role='owner' WHERE team_id=$1 AND user_id=$2`,[t.id,target]);
     await db.query(`UPDATE room_members rm SET role=CASE WHEN independent_admin THEN 'admin' ELSE 'member' END,
@@ -242,6 +253,9 @@ router.post('/:teamId/transfer-owner',wrap(async(req,res)=>{
       await roomMember(db,room.id,target,'admin',alreadyMember?0:room.message_sequence,true);
     }
     await db.query('UPDATE teams SET owner_id=$2,updated_at=NOW() WHERE id=$1',[t.id,target]);
+    await db.query(`INSERT INTO team_audit_events(team_id,actor_user_id,actor_label,action,previous_owner_id,new_owner_id,reason)
+      VALUES($1,$2,NULL,'owner_transferred',$3,$4,$5)`,[t.id,req.user.id,req.user.id,target,
+      typeof req.body?.reason==='string' ? req.body.reason.trim().slice(0,1000)||null : null]);
   });
   return ok(res,{ownerId:target});
 }));

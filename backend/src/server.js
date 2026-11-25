@@ -52,6 +52,7 @@ async function shutdown(signal) {
     await require("./services/experienceWorker.service").stop();
     await require("./services/accountSecurity.service").stop();
     await require("./services/projectAutomation.service").stop();
+    require("./services/call.service").stop();
 
     // io.close() disconnects every socket and, because the server was attached,
     // closes the underlying HTTP server too.
@@ -94,7 +95,13 @@ async function main() {
 
   httpServer = http.createServer(app);
   io = new Server(httpServer, {
-    cors: { origin: env.clientOrigin, credentials: true },
+    cors: {
+      origin(origin, callback) {
+        if (!origin || env.clientOrigins.includes(origin)) return callback(null, true);
+        return callback(null, false);
+      },
+      credentials: true,
+    },
   });
 
   // Enable SOCKET_REDIS_ADAPTER only when running 2+ instances.
@@ -120,6 +127,7 @@ async function main() {
   require("./services/accountSecurity.service").start();
   require("./services/experienceWorker.service").start(io);
   require("./services/projectAutomation.service").start(io);
+  require("./services/call.service").start(io);
 
   httpServer.listen(env.port, () => {
     console.log(`API + Socket.IO listening on http://localhost:${env.port}`);

@@ -23,6 +23,16 @@ router.post(
     ),
   ),
 );
+// Service-worker actions use a short-lived, single-use capability scoped to
+// one message and current push subscription. No general API session is stored
+// in the worker.
+router.post(
+  "/actions/mark-read",
+  limit({ max: 30, windowMs: 60_000 }),
+  asyncHandler(async (req, res) =>
+    ok(res, await push.markNotificationReadAction(req.body?.token, req.app.get("io"))),
+  ),
+);
 router.use(require("../middlewares/auth.middleware"));
 router.post(
   "/subscriptions",

@@ -5915,11 +5915,15 @@ dbTest(
       true,
       "in-app toast/sound alerts are on unless turned off",
     );
+    assert.deepEqual(defaults.quiet_hours, []);
+    assert.equal(defaults.quiet_hours_timezone, "UTC");
     assert.equal(defaults.updatedAt, null, "defaults are not a saved state");
 
     const saved = await prefsVia(me.token, "PATCH", {
       activity_level: "mentions",
       muted: { new_message: true },
+      quiet_hours: [{ days: [1, 2, 3, 4, 5], start: "22:00", end: "08:00" }],
+      quiet_hours_timezone: "Africa/Lagos",
     });
     const savedBody = await saved.text();
     assert.equal(saved.status, 200, savedBody);
@@ -5932,6 +5936,8 @@ dbTest(
       "the change survived a reload",
     );
     assert.deepEqual(reread.muted, { new_message: true });
+    assert.deepEqual(reread.quiet_hours, [{ days: [1, 2, 3, 4, 5], start: "22:00", end: "08:00" }]);
+    assert.equal(reread.quiet_hours_timezone, "Africa/Lagos");
     assert.ok(reread.updatedAt, "a written row carries a timestamp");
 
     // A partial update keeps what it did not mention.
@@ -5944,6 +5950,7 @@ dbTest(
       "the untouched field survived",
     );
     assert.equal(merged.push_enabled, false);
+    assert.deepEqual(merged.quiet_hours, reread.quiet_hours, "partial changes preserve the schedule");
   },
 );
 
@@ -5991,6 +5998,17 @@ dbTest(
       400,
       "the in-app alert switch must be a boolean",
     );
+
+    const invalidWindow = await prefsVia(me.token, "PATCH", {
+      quiet_hours: [{ days: [1, 8], start: "22:00", end: "08:00" }],
+      quiet_hours_timezone: "UTC",
+    });
+    assert.equal(invalidWindow.status, 400, "weekly days are validated");
+    const invalidZone = await prefsVia(me.token, "PATCH", {
+      quiet_hours: [],
+      quiet_hours_timezone: "Mars/Olympus",
+    });
+    assert.equal(invalidZone.status, 400, "the time zone must be a valid IANA name");
 
     // Nothing above should have written a row.
     const after = JSON.parse(await (await prefsVia(me.token)).text()).data;
