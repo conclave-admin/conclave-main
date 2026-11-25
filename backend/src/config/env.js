@@ -1,9 +1,17 @@
 require("dotenv").config();
 
+const defaultTrustProxyHops = process.env.NODE_ENV === "production" ? "1" : "0";
+
 module.exports = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: process.env.PORT || 7000,
-  trustProxyHops: Math.max(0, Number.parseInt(process.env.TRUST_PROXY_HOPS || "0", 10) || 0),
+  trustProxyHops: Math.max(
+    0,
+    Number.parseInt(
+      process.env.TRUST_PROXY_HOPS || defaultTrustProxyHops,
+      10,
+    ) || 0,
+  ),
   beta: {
     signupsEnabled: process.env.BETA_SIGNUPS_ENABLED !== "false",
     maxActiveAccounts: Math.max(1, Number.parseInt(process.env.BETA_MAX_ACTIVE_ACCOUNTS || "250", 10) || 250),
