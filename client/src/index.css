@@ -345,7 +345,35 @@ html.dark .bg-brand {
 .conversation-canvas {
   background-color: rgb(var(--chat-canvas));
   background-image: url("./assets/chat-wallpaper.svg");
-  background-size: 240px 240px;
+  background-size: 220px 220px;
+  background-attachment: local;
+}
+.app-shell select:not([multiple]) {
+  appearance: none;
+  padding-right: 2.35rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m5 7.5 5 5 5-5' stroke='%23716e86' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: 1rem;
+  background-position: right 0.8rem center;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+.app-shell select:not([multiple]):hover:not(:disabled) {
+  border-color: rgb(var(--color-brand) / 0.45);
+}
+.app-shell select:not([multiple]):focus-visible {
+  outline: 2px solid rgb(var(--color-brand) / 0.35);
+  outline-offset: 2px;
+}
+.dark .app-shell select:not([multiple]) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m5 7.5 5 5 5-5' stroke='%23aaa5c2' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.link-preview-card {
+  animation: link-preview-enter 180ms ease-out both;
+}
+@keyframes link-preview-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .message-bubble {
   border: 1px solid rgb(var(--color-line) / 0.55);
@@ -416,6 +444,10 @@ html.dark .bg-brand {
       transform: translateY(0);
     }
   }
+}
+@media (prefers-reduced-motion: reduce) {
+  .link-preview-card { animation: none; }
+  .app-shell select:not([multiple]) { transition: none; }
 }
 .dark .app-shell .bg-brand {
   background-color: #6555d9;

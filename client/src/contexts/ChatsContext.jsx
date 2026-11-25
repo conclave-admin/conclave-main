@@ -66,6 +66,7 @@ export function ChatsProvider({ children }) {
   currentUser.current = userId;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  const alertedNotificationIds = useRef(new Map());
   const archivedRef = useRef(archived);
   archivedRef.current = archived;
   // Mirrors the server's allowsInterruption rules (notificationPolicy.service)
@@ -150,6 +151,18 @@ export function ChatsProvider({ children }) {
         })
       )
         return;
+
+      const notificationId = notification.id;
+      if (notificationId) {
+        const now = Date.now();
+        const seen = alertedNotificationIds.current;
+        for (const [id, timestamp] of seen) {
+          if (now - timestamp > 5 * 60 * 1000) seen.delete(id);
+        }
+        if (seen.has(notificationId)) return;
+        seen.set(notificationId, now);
+        while (seen.size > 300) seen.delete(seen.keys().next().value);
+      }
 
       const context = notification.context || {};
       const roomId = context.room_id;

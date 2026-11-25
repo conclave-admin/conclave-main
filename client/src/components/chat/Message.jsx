@@ -8,6 +8,7 @@ import MessageStatus from "./MessageStatus";
 import { AttachmentGroup } from "./AttachmentCard";
 import MessageActions from "./MessageActions";
 import MessageReactions from "./MessageReactions";
+import LinkPreviewCard from "./LinkPreviewCard";
 import PollCard from "./PollCard";
 import MessageSendState from "./MessageSendState";
 import { useRef, useState } from "react";
@@ -226,6 +227,7 @@ export default function Message({
                     forceExpanded={Boolean(message._searchMatch)}
                     query={message._searchQuery || ""}
                   />
+                  <LinkPreviewCard text={message.content} compact />
                   {!message.attachments?.length && metadata}
                 </div>
               ))}

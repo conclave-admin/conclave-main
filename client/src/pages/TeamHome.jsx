@@ -19,7 +19,7 @@ export default function TeamHome(){
   const {setRoomHeader}=useOutletContext();
   const {user}=useAuth();
   const {rooms:allRooms,refresh:refreshChats}=useChats();
-  const [list,setList]=useState([]),[detail,setDetail]=useState(null),[teamCap,setTeamCap]=useState(25);
+  const [list,setList]=useState([]),[communityDetails,setCommunityDetails]=useState([]),[detail,setDetail]=useState(null),[teamCap,setTeamCap]=useState(25);
   const [loading,setLoading]=useState(true),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   const [teamName,setTeamName]=useState(''),[description,setDescription]=useState('');
   const [creationKey,setCreationKey]=useState(()=>crypto.randomUUID());
@@ -30,6 +30,7 @@ export default function TeamHome(){
   const [legacyProjects,setLegacyProjects]=useState([]);
   const load=useCallback(async()=>{setLoading(true);setError('');try{
     const result=await teams.listTeams();setList(result.teams);setTeamCap(result.maxMembers||25);
+    if(!teamId)setCommunityDetails(result.teams.map(item=>({team:item,rooms:item.rooms||[]})));
     if(teamId){const next=await teams.getTeam(teamId);setDetail(next);localStorage.setItem('conclave:last-team',teamId);}
     else setDetail(null);
   }catch(e){setError(errorText(e));}finally{setLoading(false);}},[teamId]);
@@ -54,11 +55,13 @@ export default function TeamHome(){
     {error&&<p role="alert" className="mb-5 rounded-xl bg-error/10 p-3 text-body text-error">{error}</p>}
     {loading&&<p role="status" className="text-body text-muted">Loading teams…</p>}
     {!teamId&&<div className="grid gap-5 lg:grid-cols-[1fr_360px]">
-      <section className={card}><h2 className="text-h2">Switch teams</h2><div className="mt-4 space-y-2">
-        {list.map(t=><Link key={t.id} to={`/teams/${t.id}`} className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-line px-4 hover:border-brand">
-          <span className="min-w-0"><span className="block truncate text-label">{t.name}</span><span className="block text-metadata text-muted" title={`Full team ID: ${t.id}`}>{teamReference(t.id)}</span></span><span className="shrink-0 text-right text-metadata text-muted">{t.member_count}/{teamCap} members · {t.my_role}{t.archived_at?' · archived':''}</span></Link>)}
-        {!list.length&&!loading&&<p className="text-body text-muted">Create your first team to start a shared conversation.</p>}
-      </div><p className="mt-5 text-metadata text-muted">Personal DMs and rooms you have not moved into a team remain in Chats.</p></section>
+      <section className={card}><div className="flex items-start justify-between gap-3"><div><h2 className="text-h2">Communities</h2><p className="mt-1 text-metadata text-muted">Your teams and their shared conversations, together.</p></div><span className="rounded-full bg-brand-soft px-3 py-1 text-metadata text-brand">{list.length} {list.length===1?'team':'teams'}</span></div><div className="mt-4 space-y-4">
+        {communityDetails.map(group=>{const t=group.team;return <article key={t.id} className="overflow-hidden rounded-2xl border border-line bg-surface transition-colors hover:border-brand/50">
+          <Link to={`/teams/${t.id}`} className="flex min-h-16 items-center justify-between gap-3 px-4 py-3 hover:bg-canvas/70"><span className="min-w-0"><span className="block truncate text-label font-semibold">{t.name}</span><span className="block text-metadata text-muted">{group.rooms?.length||0} conversations · {t.member_count}/{teamCap} members · {t.my_role}{t.archived_at?' · archived':''}</span></span><span aria-hidden="true" className="text-brand">›</span></Link>
+          {group.rooms?.length>0&&<div className="border-t border-line bg-canvas/45 p-2"><p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted">Conversations</p><div className="grid gap-1 sm:grid-cols-2">{group.rooms.map(room=>{const latest=allRooms.find(item=>item.id===room.id);return <Link key={room.id} to={`/chats/${room.id}`} className="flex min-h-10 items-center gap-2 rounded-lg px-2.5 text-body text-ink transition-colors hover:bg-brand-soft hover:text-brand"><span aria-hidden="true" className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-surface text-[11px] font-semibold text-brand">#</span><span className="min-w-0 flex-1 truncate">{room.name}</span>{latest?.unread_count>0&&<span className="min-w-5 rounded-full bg-brand px-1.5 text-center text-[11px] font-semibold text-white">{latest.unread_count}</span>}</Link>})}</div></div>}
+        </article>})}
+        {!list.length&&!loading&&<p className="rounded-xl border border-dashed border-line p-4 text-body text-muted">Create your first team to bring its people and group conversations together.</p>}
+      </div><p className="mt-5 text-metadata text-muted">Personal DMs and rooms outside a team stay in Chats.</p></section>
       <form className={`${card} space-y-4`} onSubmit={e=>{e.preventDefault();void act(async()=>{const t=await teams.createTeam({name:teamName,description,creationKey});setCreationKey(crypto.randomUUID());navigate(`/teams/${t.id}`);});}}>
         <h2 className="text-h2">Create team</h2><p className="text-body text-muted">A general room is created automatically. You can invite people and add a project next.</p>
         <label className="block text-label">Team name<input className={`mt-2 ${field}`} maxLength={120} required value={teamName} onChange={e=>setTeamName(e.target.value)}/></label>
