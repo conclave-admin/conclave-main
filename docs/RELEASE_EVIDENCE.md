@@ -36,7 +36,27 @@ The minimum invite-only release gate is tracked in
   and Redis, including the merged migration chain and migration rerun check.
 - Release browser regressions passed: 36/36 under `CI=true`, with three repeats
   on each desktop/mobile project. No assertions, timeouts, or skips were relaxed.
-- Hosted CI for this repaired candidate remains pending a commit and push.
+- Commit `da7667c` passed the hosted backend and client jobs. Both hosted
+  browser jobs passed recovery, then failed security at account registration:
+  the disposable API inherited missing JWT secrets on the clean runner.
+
+### Clean-runner security fixture repair — 26 November 2026
+
+- The security browser server now generates fresh access, refresh, and mail
+  encryption keys for its disposable API. Its browser origins, signup cohort,
+  proxy trust, and provider switches are explicit. It no longer depends on a
+  developer `.env` or production secrets for authentication.
+- Signup fixtures use distinct randomized client addresses and account names
+  across worker restarts, retaining the real signup limiter and unique-name
+  policy. No production rate limit, authentication behavior, assertion, timeout,
+  or skip was relaxed.
+- Backend unit checks passed: 61/61, including token issuance without environment
+  secrets and isolation from conflicting developer settings.
+- Real-API security browser checks passed: 12/12 desktop/mobile with `CI=true`,
+  blank JWT/mail keys, a conflicting origin, and signups disabled in the parent
+  environment. The disposable API overrides those inputs; `/tmp/conclave-security-clean-env.log`.
+- Hosted verification will first run the candidate on a temporary CI branch;
+  the same commit can then update `branch-michael` after a successful run.
 
 The older results below are historical and describe the 23 November candidate.
 
