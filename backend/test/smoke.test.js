@@ -88,6 +88,13 @@ const EXPECTED_ROUTES = [
   ["GET", "/api/decisions/room/:roomId/search", true],
   // digest
   ["GET", "/api/digest", true],
+  // Work routes must keep their controller exports through branch merges.
+  ["GET", "/api/work/search", true],
+  ["GET", "/api/work/inbox", true],
+  ["PATCH", "/api/work/inbox/state", true],
+  ["GET", "/api/work/projects/:projectId/automations", true],
+  ["POST", "/api/work/projects/:projectId/automations", true],
+  ["PATCH", "/api/work/projects/:projectId/automations/:ruleId", true],
   ["GET", "/api/digest/room/:roomId", true],
   ["POST", "/api/digest/read", true],
   // tasks — implemented, but must be auth-guarded

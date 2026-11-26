@@ -61,7 +61,7 @@ test('sidebar navigation keeps the shell mounted while a lazy page loads', async
       await page.getByRole('button', { name: 'Open menu', exact: true }).click();
     await page.locator('a[href="/settings"]:visible').first().click();
     await expect(page).toHaveURL(/\/settings$/);
-    expect(settingsImportRequested).toBe(true);
+    await expect.poll(() => settingsImportRequested).toBe(true);
     // React Router can retain the previous outlet while a lazy module is
     // pending. The invariant is that navigation does not replace the shell.
     await expect(page.locator('.app-shell')).toBeVisible();
