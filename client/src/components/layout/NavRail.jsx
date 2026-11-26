@@ -49,7 +49,11 @@ function RailItem({ to, end, label, Icon, badge = 0, collapsed, onNavigate }) {
     <NavLink
       to={to}
       end={end}
-      onClick={() => onNavigate?.(to)}
+      onClick={() => {
+        // Let React Router handle the link before the mobile drawer unmounts
+        // this rail. Closing synchronously can cancel navigation on touch.
+        if (onNavigate) queueMicrotask(() => onNavigate(to));
+      }}
       title={collapsed ? label : undefined}
       aria-label={collapsed ? label : undefined}
       className={({ isActive }) =>

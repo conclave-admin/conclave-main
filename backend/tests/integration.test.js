@@ -33,6 +33,7 @@ const ADMIN_URL =
   process.env.DATABASE_URL || "postgres://app:app@127.0.0.1:5432/postgres";
 // A unique name per suite/run: never drop a pre-existing database.
 const TEST_DB = `conclave_test_${randomBytes(12).toString("hex")}`;
+process.env.RATE_LIMIT_KEY_PREFIX = `${TEST_DB}:rate-limit`;
 
 const testUrl = new URL(ADMIN_URL);
 testUrl.pathname = `/${TEST_DB}`;
@@ -42,10 +43,14 @@ const TEST_DB_URL = testUrl.toString();
 process.env.DATABASE_URL = TEST_DB_URL;
 process.env.REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 process.env.SOCKET_REDIS_ADAPTER = "true";
+// CI has no developer .env file; set these explicitly so local settings cannot
+// disable the randomized forwarded addresses or cap this fixture suite at the
+// real beta cohort size.
+process.env.TRUST_PROXY_HOPS = "1";
+process.env.BETA_MAX_ACTIVE_ACCOUNTS = "10000";
 process.env.JWT_ACCESS_SECRET ||= "integration-test-access-secret";
 process.env.JWT_REFRESH_SECRET ||= "integration-test-refresh-secret";
 process.env.CLIENT_ORIGIN ||= "http://localhost:5173";
-process.env.TRUST_PROXY_HOPS ||= "1";
 
 const { query } = require("../src/config/db");
 const { createMessage } = require("../src/services/message.service");
@@ -431,7 +436,10 @@ async function authedUser(email) {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-forwarded-for": `198.51.100.${(randomBytes(3).readUIntBE(0, 3) % 250) + 1}`,
+      // Give each generated account a distinct client address so the real
+      // registration limiter is exercised without exhausting one shared IP
+      // bucket across this large fixture suite.
+      "x-forwarded-for": Array.from(randomBytes(4)).join("."),
     },
     body: JSON.stringify({
       email,
@@ -456,7 +464,7 @@ async function authedAccount(email) {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-forwarded-for": `198.51.100.${(randomBytes(3).readUIntBE(0, 3) % 250) + 1}`,
+      "x-forwarded-for": Array.from(randomBytes(4)).join("."),
     },
     body: JSON.stringify({
       email,
@@ -7156,10 +7164,10 @@ dbTest(
       const socketId = `notification-${randomUUID()}`;
       t.after(async () => {
         const reopen = !redisClient.isOpen;
-        if (reopen) await connectRedis();
+        if (reopen && !(await connectRedis())) return;
         await userLeftRoom(present.userId, room.id, socketId);
         await socketDisconnected(present.userId, socketId);
-        if (reopen) await redisClient.quit();
+        if (reopen && redisClient.isOpen) await redisClient.quit();
       });
       await socketConnected(present.userId, socketId);
       await userJoinedRoom(present.userId, room.id, socketId);

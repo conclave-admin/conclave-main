@@ -140,7 +140,12 @@ async function assertCanSendDm(db, roomId, senderId) {
     await db.query("SELECT * FROM dm_requests WHERE room_id=$1", [roomId])
   ).rows[0];
   if (!row || row.status === "accepted") return;
-  if (row.status === "declined" || row.recipient_id === senderId)
+  if (row.status === "declined")
+    throw new ApiError(
+      403,
+      "This request was declined. The recipient must accept before the conversation can continue.",
+    );
+  if (row.recipient_id === senderId)
     throw new ApiError(403, "Accept this message request before replying");
   if (
     (

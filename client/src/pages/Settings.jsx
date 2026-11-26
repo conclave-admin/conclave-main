@@ -578,6 +578,7 @@ export default function Settings() {
                 const next = {
                   ...mediaPreferences,
                   network: event.target.value,
+                  networkExplicit: true,
                 };
                 setMediaPreferences(next);
                 saveMediaPreferences(next);

@@ -19,6 +19,7 @@ import StaticPage from "./pages/StaticPage";
 
 const CatchUpDigestPage = lazy(() => import("./pages/CatchUpDigestPage"));
 const Chats = lazy(() => import("./pages/Chats"));
+const MessageRequests = lazy(() => import("./pages/MessageRequests"));
 const Decisions = lazy(() => import("./pages/Decisions"));
 const DiscoverRooms = lazy(() => import("./pages/DiscoverRooms"));
 const DecisionDetail = lazy(() => import("./pages/DecisionDetail"));
@@ -183,6 +184,7 @@ export default function App() {
                             <Route path=":roomId/events" element={<RoomEvents />} />
                             <Route path=":roomId/info" element={<RoomInfo />} />
                           </Route>
+                          <Route path="/message-requests" element={<MessageRequests />} />
 
                           {/* The sidebar has always linked to /dms. Rather than
                       maintain a second list component, it resolves into the

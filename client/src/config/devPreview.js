@@ -771,7 +771,7 @@ export const previewSocket = {
       acknowledge?.({ ok: true, data: { available: true } });
       return;
     }
-    // Typing is echoed back as room-typing so the indicator renders offline.
+    // Model a peer typing so the indicator can be previewed offline.
     // `stop-typing` is dropped deliberately: sending clears the sender's typing
     // state, and echoing it would put them straight back on the list.
     if (event === "typing") {
@@ -781,7 +781,7 @@ export const previewSocket = {
           ?.forEach((handler) =>
             handler({
               roomId: payload.roomId,
-              typingUserIds: [previewUser.id],
+              typingUserIds: ["dev-victor"],
             }),
           ),
       );

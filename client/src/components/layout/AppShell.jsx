@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { ChatsProvider } from "@/contexts/ChatsContext";
 import { NotificationsProvider } from "@/contexts/NotificationsContext";
 import { PresenceProvider } from "@/contexts/PresenceContext";
@@ -87,6 +87,7 @@ function QuickSwitcher({ open, onClose }) {
  * richer than a string.
  */
 export default function AppShell() {
+  const { pathname } = useLocation();
   const [roomHeader, setRoomHeader] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [railHovered, setRailHovered] = useState(false);
@@ -103,6 +104,10 @@ export default function AppShell() {
   useEffect(() => {
     if (isDesktop) setDrawerOpen(false);
   }, [isDesktop]);
+
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -139,12 +144,6 @@ export default function AppShell() {
       : "Expand sidebar"
     : "Open menu";
   const showRailLabels = expanded || railHovered || railFocused;
-  const closeRailAfterNavigate = () => {
-    setExpanded(false);
-    if (document.activeElement instanceof HTMLElement)
-      document.activeElement.blur();
-  };
-
   return (
     // Every provider here sits at the shell rather than at the root for the
     // same reason: each needs a valid session, and at the root they would all
@@ -176,7 +175,10 @@ export default function AppShell() {
               className="app-rail relative z-30 hidden min-h-0 md:block"
               onMouseEnter={() => setRailHovered(true)}
               onMouseLeave={() => setRailHovered(false)}
-              onFocusCapture={() => setRailFocused(true)}
+              onFocusCapture={(event) => {
+                if (event.target instanceof HTMLElement && event.target.matches(":focus-visible"))
+                  setRailFocused(true);
+              }}
               onBlurCapture={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget))
                   setRailFocused(false);
@@ -189,7 +191,6 @@ export default function AppShell() {
                   collapsed={!showRailLabels}
                   pinned={expanded}
                   onToggleExpanded={() => setExpanded((value) => !value)}
-                  onNavigate={closeRailAfterNavigate}
                 />
               </div>
             </aside>
@@ -222,7 +223,7 @@ export default function AppShell() {
                   aria-hidden="true"
                 />
                 <div className="absolute left-0 top-0 h-full w-[min(280px,85vw)] overscroll-contain border-r border-line bg-surface shadow-modal">
-                  <NavRail onNavigate={() => setDrawerOpen(false)} />
+                  <NavRail />
                 </div>
               </div>
             )}

@@ -56,7 +56,7 @@ export default function ChatFilters() {
     { value: "", label: "All" },
     { value: "unread", label: "Unread" },
     { value: "groups", label: "Groups" },
-    { value: "dms", label: "Direct" },
+    { value: "dms", label: "DMs" },
     { value: "archived", label: "Archived" },
   ];
 
@@ -110,6 +110,12 @@ export default function ChatFilters() {
             </button>
           );
         })}
+        <Link
+          to="/message-requests"
+          className="min-h-9 shrink-0 rounded-full bg-canvas px-3 py-2 text-label text-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+        >
+          Message requests
+        </Link>
       </div>
     </div>
   );

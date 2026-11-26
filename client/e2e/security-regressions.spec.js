@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 const API = "http://localhost:7120/api";
 test.beforeEach(({}, info) => {
   test.skip(
@@ -7,15 +8,16 @@ test.beforeEach(({}, info) => {
     "requires the disposable real API in playwright.security.config.js",
   );
 });
-let accountNumber = 0;
 async function account(request, name) {
+  const nonce = randomBytes(6).toString("hex");
+  const address = [...randomBytes(3)].map(value => value || 1).join(".");
   const result = await request.post(`${API}/auth/register`, {
     // Distinct simulated clients retain the real signup limiter without
     // exhausting a single localhost IP as the browser matrix grows.
-    headers: { "X-Forwarded-For": `192.0.2.${++accountNumber}` },
+    headers: { "X-Forwarded-For": `10.${address}` },
     data: {
-      email: `security-${name}-${Date.now()}@example.test`,
-      displayName: `Security ${name}`,
+      email: `security-${name}-${nonce}@example.test`,
+      displayName: `Security ${name} ${nonce}`,
       password: "Security browser password!",
     },
   });

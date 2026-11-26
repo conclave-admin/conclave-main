@@ -16,6 +16,50 @@ The minimum invite-only release gate is tracked in
 
 ## Local evidence
 
+### CI failure repair — 26 November 2026
+
+- Investigated the supplied hosted logs from 11:41 UTC. The pull-request backend
+  job checked the synthetic merge of `5ac0c2d` into `dcd9547`; the push backend
+  job passed because it checked the branch without those main-branch changes.
+- Reconciled `origin/main` locally without committing. Restored the work inbox
+  state and automation controller exports required by `work.routes.js` and kept
+  `toLowerCase()` in search scoring. Main's deleted exports caused Express to
+  fail during startup with an undefined PATCH callback; its `toLower()` would
+  also fail when search returned results. Work routes now have explicit smoke
+  coverage. Main's migration changes are included in this merged candidate.
+- Fixed the lazy Settings import regression to wait for the intercepted request
+  using an auto-retrying assertion. A route URL update does not guarantee that
+  the browser has dispatched the module request. The request remains blocked
+  while the test checks that the main element and shell stay mounted.
+- Backend unit checks passed: 59/59, including the expanded route checklist.
+- Complete database checks passed: 301/301 against disposable local PostgreSQL
+  and Redis, including the merged migration chain and migration rerun check.
+- Release browser regressions passed: 36/36 under `CI=true`, with three repeats
+  on each desktop/mobile project. No assertions, timeouts, or skips were relaxed.
+- Commit `da7667c` passed the hosted backend and client jobs. Both hosted
+  browser jobs passed recovery, then failed security at account registration:
+  the disposable API inherited missing JWT secrets on the clean runner.
+
+### Clean-runner security fixture repair — 26 November 2026
+
+- The security browser server now generates fresh access, refresh, and mail
+  encryption keys for its disposable API. Its browser origins, signup cohort,
+  proxy trust, and provider switches are explicit. It no longer depends on a
+  developer `.env` or production secrets for authentication.
+- Signup fixtures use distinct randomized client addresses and account names
+  across worker restarts, retaining the real signup limiter and unique-name
+  policy. No production rate limit, authentication behavior, assertion, timeout,
+  or skip was relaxed.
+- Backend unit checks passed: 61/61, including token issuance without environment
+  secrets and isolation from conflicting developer settings.
+- Real-API security browser checks passed: 12/12 desktop/mobile with `CI=true`,
+  blank JWT/mail keys, a conflicting origin, and signups disabled in the parent
+  environment. The disposable API overrides those inputs; `/tmp/conclave-security-clean-env.log`.
+- Hosted verification will first run the candidate on a temporary CI branch;
+  the same commit can then update `branch-michael` after a successful run.
+
+The older results below are historical and describe the 23 November candidate.
+
 Further CI/browser verification was paused at the user’s request on 23 November
 2026. The results below record completed work; pending and failed checks remain
 unresolved. No hosted CI pass or deployment readiness is claimed.

@@ -332,7 +332,7 @@ export default function RoomInfo() {
       </Link>
       <section
         className="room-info-overview rounded-2xl border border-line bg-surface p-4 md:p-5"
-        aria-label={isDm ? "Conversation overview" : "Room overview"}
+        aria-label={isDm ? "Direct message details" : "Room overview"}
       >
         <div className="flex items-start gap-4">
           <div className="flex shrink-0 flex-col items-center gap-2">
@@ -425,7 +425,7 @@ export default function RoomInfo() {
       </section>
 
       <nav
-        aria-label="Conversation shortcuts"
+        aria-label={isDm ? "Direct message shortcuts" : "Room shortcuts"}
         className="mt-3 grid grid-cols-2 gap-2"
       >
         <Link

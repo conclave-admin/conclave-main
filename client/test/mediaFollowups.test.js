@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   allowsAutomaticDownload,
+  getMediaPreferences,
   networkSnapshot,
 } from "../src/lib/mediaPreferences.js";
 import {
@@ -56,6 +57,40 @@ test("network restrictions are conservative for unknown connections and respect 
   );
   assert.equal(allowsAutomaticDownload(any, {}, false), false);
 });
+
+test("automatic media downloads default to Wi-Fi and cellular downloads remain opt-in", () => {
+  const preferences = getMediaPreferences();
+  assert.equal(preferences.network, "unmetered");
+  assert.equal(allowsAutomaticDownload(preferences, { type: "wifi" }), true);
+  assert.equal(allowsAutomaticDownload(preferences, { type: "ethernet" }), true);
+  assert.equal(allowsAutomaticDownload(preferences, { type: "cellular" }), false);
+  assert.equal(allowsAutomaticDownload(preferences, { type: "unknown" }), false);
+  assert.equal(
+    allowsAutomaticDownload({ ...preferences, network: "any" }, { type: "cellular" }),
+    true,
+  );
+});
+
+test("legacy implicit any-connection settings migrate while explicit choices persist", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  let value = JSON.stringify({ network: "any", images: false });
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: { getItem: () => value },
+  });
+  try {
+    const migrated = getMediaPreferences();
+    assert.equal(migrated.network, "unmetered");
+    assert.equal(migrated.images, false);
+
+    value = JSON.stringify({ network: "any", networkExplicit: true });
+    assert.equal(getMediaPreferences().network, "any");
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, "localStorage", descriptor);
+    else delete globalThis.localStorage;
+  }
+});
+
 test("video compression reports unsupported environments and limits local input", () => {
   assert.equal(videoCompressionSupported(), false);
   assert.equal(MAX_VIDEO_INPUT_BYTES, 200 * 1024 * 1024);

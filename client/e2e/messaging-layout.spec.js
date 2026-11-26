@@ -63,6 +63,56 @@ test("composer switches between voice and send and retains mention insertion", a
   await expect(input).toBeFocused();
 });
 
+test("typing indicator stays by the composer while focused history scroll reaches both ends", async ({
+  page,
+}, info) => {
+  test.skip(!info.project.name.startsWith("app-"), "uses the app preview");
+  await page.goto("/chats/preview-large-room");
+  const scroller = page.locator("[data-message-scroll]");
+  const input = page.getByRole("textbox", { name: "Message", exact: true });
+  await expect(page.locator('[data-message-id="perf-1199"]')).toBeVisible({
+    timeout: 25000,
+  });
+  await input.fill("I am typing while reviewing the conversation");
+  const indicator = page.locator(".typing-indicator");
+  await expect(indicator).toBeVisible();
+  await expect(input).toBeFocused();
+  await expect(page.locator(".composer-pill")).toHaveCSS("border-width", "0px");
+
+  const expectIndicatorAboveComposer = async () => {
+    const indicatorBox = await indicator.boundingBox();
+    const composerBox = await page.locator(".composer-pill").boundingBox();
+    expect(indicatorBox).not.toBeNull();
+    expect(composerBox).not.toBeNull();
+    expect(indicatorBox.y + indicatorBox.height).toBeLessThanOrEqual(
+      composerBox.y + 1,
+    );
+    expect(composerBox.y - (indicatorBox.y + indicatorBox.height)).toBeLessThan(
+      56,
+    );
+  };
+
+  await scroller.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(0);
+  await expect(page.locator('[data-message-id="perf-0"]')).toBeVisible();
+  await expect(input).toBeFocused();
+  await expectIndicatorAboveComposer();
+
+  await scroller.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect.poll(() =>
+    scroller.evaluate(
+      (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+    ),
+  ).toBeLessThanOrEqual(2);
+  await expect(page.locator('[data-message-id="perf-1199"]')).toBeVisible();
+  await expect(input).toBeFocused();
+  await expectIndicatorAboveComposer();
+});
+
 test("text bubbles retain their own timestamps and receipt details within a grouped run", async ({
   page,
 }) => {

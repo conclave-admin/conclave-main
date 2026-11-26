@@ -820,7 +820,7 @@ const MessageComposer = forwardRef(function MessageComposer(
 
       {content.trim() && <LinkPreviewCard text={content} compact />}
 
-      <div className="composer-pill relative flex items-end gap-1 rounded-[26px] border border-line bg-surface p-1.5 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10">
+      <div className="composer-pill relative flex items-end gap-1 rounded-[26px] bg-surface p-1.5">
         <div
           className={`${recording ? "hidden" : "flex"} shrink-0 items-center gap-0.5`}
         >

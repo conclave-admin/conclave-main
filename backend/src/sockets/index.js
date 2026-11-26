@@ -559,7 +559,7 @@ function registerSocketHandlers(io) {
           const refreshDue =
             Date.now() - (socket.data.presenceRenewedAt || 0) >=
             4 * 60 * 1000;
-          const rebuildPresence =
+          let rebuildPresence =
             refreshDue || socket.data.presenceNeedsResync === true;
           if (stateChanged || rebuildPresence) {
             if (roomId) {
@@ -575,30 +575,37 @@ function registerSocketHandlers(io) {
             } else {
               changed = await presence.renewSocket(userId, socket.id, activity);
             }
-            socket.data.presenceRenewedAt = Date.now();
-            if (rebuildPresence) {
-              const rooms = [...socket.rooms].filter((id) =>
-                /^[0-9a-f-]{36}$/i.test(id),
-              );
-              for (const id of rooms) {
-                try {
-                  await withRoomMembership(id, userId, async () => {
-                    if (socket.connected && socket.rooms.has(id))
-                      await presence.userJoinedRoom(userId, id, socket.id);
-                  });
-                } catch (error) {
-                  if (error.status !== 403) throw error;
-                  await socket.leave(id);
-                  await presence.userLeftRoom(userId, id, socket.id);
-                  socket.emit("room:members", {
-                    roomId: id,
-                    userId,
-                    action: "removed",
-                  });
-                }
+          }
+          // Renew each authenticated heartbeat so a socket that wakes after
+          // its Redis lease expired, or after volatile presence data was lost,
+          // can rebuild its device and room indexes without waiting four
+          // minutes for the periodic renewal window.
+          if (!stateChanged && !rebuildPresence)
+            changed = await presence.renewSocket(userId, socket.id, activity);
+          rebuildPresence ||= changed === true;
+          socket.data.presenceRenewedAt = Date.now();
+          if (rebuildPresence) {
+            const rooms = [...socket.rooms].filter((id) =>
+              /^[0-9a-f-]{36}$/i.test(id),
+            );
+            for (const id of rooms) {
+              try {
+                await withRoomMembership(id, userId, async () => {
+                  if (socket.connected && socket.rooms.has(id))
+                    await presence.userJoinedRoom(userId, id, socket.id);
+                });
+              } catch (error) {
+                if (error.status !== 403) throw error;
+                await socket.leave(id);
+                await presence.userLeftRoom(userId, id, socket.id);
+                socket.emit("room:members", {
+                  roomId: id,
+                  userId,
+                  action: "removed",
+                });
               }
-              socket.data.presenceNeedsResync = false;
             }
+            socket.data.presenceNeedsResync = false;
           }
           socket.data.activity = activity;
           if (previous.roomId && previous.roomId !== activity.roomId) {

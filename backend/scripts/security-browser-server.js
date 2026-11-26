@@ -5,6 +5,7 @@ const { spawn } = require("node:child_process");
 const { once } = require("node:events");
 const path = require("node:path");
 const env = require("../src/config/env");
+const securityBrowserEnv = require("./security-browser-env");
 const database = `conclave_security_browser_${randomBytes(10).toString("hex")}`;
 const url = new URL(env.databaseUrl);
 url.pathname = `/${database}`;
@@ -39,21 +40,7 @@ process.on("SIGINT", () => cleanup());
   await admin.connect();
   await admin.query(`CREATE DATABASE ${database}`);
   created = true;
-  const childEnv = {
-    ...process.env,
-    DATABASE_URL: url.toString(),
-    RATE_LIMIT_KEY_PREFIX: database,
-    PORT: "7120",
-    CLIENT_ORIGIN: "http://localhost:5188",
-    NODE_ENV: "test",
-    // Fixture-only proxy trust lets signup fixtures represent distinct clients.
-    TRUST_PROXY_HOPS: "1",
-    R2_DIRECT_UPLOADS_ENABLED: "false",
-    RESEND_API_KEY: "",
-    RESEND_FROM: "",
-    VAPID_PUBLIC_KEY: "",
-    VAPID_PRIVATE_KEY: "",
-  };
+  const childEnv = securityBrowserEnv(process.env, url.toString(), database);
   const migration = spawn(process.execPath, ["database/migrate.js"], {
     cwd: path.resolve(__dirname, ".."),
     env: childEnv,
