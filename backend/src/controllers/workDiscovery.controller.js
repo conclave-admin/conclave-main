@@ -84,12 +84,13 @@ const search = asyncHandler(async (req, res) => {
       WHERE u.deleted_at IS NULL AND position(lower($2) in lower(u.display_name))>0
       AND EXISTS(SELECT 1 FROM room_members a JOIN room_members b ON b.room_id=a.room_id
         WHERE a.user_id=$1 AND b.user_id=u.id AND ($3::uuid IS NULL OR a.room_id=$3))
+      AND ($4::uuid IS NULL OR u.id=$4)
       AND ($5::date IS NULL OR u.created_at >= $5::date) AND ($6::date IS NULL OR u.created_at < $6::date+1)
       ORDER BY (position(lower($2) in lower(u.display_name))>0) DESC,u.created_at DESC LIMIT $7::int`, params));
   const results = await Promise.all(searches);
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   const score = (item) => {
-    const title = String(item.title || "").toLowerCase();
+    const title = String(item.title || "").toLower();
     const exact = title.includes(q.toLowerCase()) ? 4 : 0;
     const words = terms.reduce((sum, word) => sum + (title.includes(word) ? 1 : 0), 0);
     const ageHours = Math.max(0, (Date.now() - new Date(item.created_at).getTime()) / 3600000);
@@ -147,66 +148,4 @@ const inbox = asyncHandler(async (req, res) => {
   return ok(res, { items: rows.rows.slice(0, pageSize), hasMore: rows.rowCount > pageSize, page, pageSize });
 });
 
-const setInboxState = asyncHandler(async (req, res) => {
-  const eventKey = req.body?.eventKey;
-  const state = req.body?.state;
-  if (typeof eventKey !== "string" || !/^(?:(?:assignment|mention|blocked):[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|overdue:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}:\d{4}-\d{2}-\d{2})$/i.test(eventKey))
-    throw new ApiError(400, "Invalid inbox item");
-  if (!["done", "snoozed", "open"].includes(state)) throw new ApiError(400, "Invalid inbox state");
-  // Confirm current access before storing a personal action for the item.
-  const [, type, id] = eventKey.match(/^(assignment|mention|blocked|overdue):([0-9a-f-]{36})/i) || [];
-  const source = type === "mention"
-    ? await query(`SELECT 1 FROM message_mentions mm JOIN messages m ON m.id=mm.message_id
-       JOIN room_members rm ON rm.room_id=m.room_id AND rm.user_id=$2
-       WHERE m.id=$1 AND mm.user_id=$2 AND m.deleted_at IS NULL AND message_visible(m.id,$2)`, [id, req.user.id])
-    : await query(`SELECT 1 FROM tasks t JOIN room_members rm ON rm.room_id=t.room_id AND rm.user_id=$2
-       WHERE t.id=$1 AND (t.assignee_id=$2 OR t.created_by=$2)`, [id, req.user.id]);
-  if (!source.rowCount) throw new ApiError(404, "Inbox item unavailable");
-  if (state === "open") await query("DELETE FROM work_inbox_state WHERE user_id=$1 AND event_key=$2",
-    [req.user.id, eventKey]);
-  else {
-    const until = state === "snoozed" ? req.body?.until : null;
-    if (state === "snoozed" && (!Number.isFinite(Date.parse(until)) ||
-        Date.parse(until) <= Date.now() || Date.parse(until) > Date.now() + 30 * 86400000))
-      throw new ApiError(400, "Snooze must end within 30 days");
-    await query(`INSERT INTO work_inbox_state(user_id,event_key,state,snoozed_until)
-      VALUES($1,$2,$3,$4) ON CONFLICT(user_id,event_key) DO UPDATE
-      SET state=EXCLUDED.state,snoozed_until=EXCLUDED.snoozed_until,updated_at=NOW()`,
-      [req.user.id, eventKey, state, until]);
-  }
-  return ok(res, { eventKey, state });
-});
-
-const listAutomations = asyncHandler(async (req, res) => {
-  await project({ query }, req.params.projectId, req.user.id);
-  const rules = await query(
-    `SELECT a.*,COUNT(run.event_key)::int AS run_count,MAX(run.ran_at) AS last_run_at
-     FROM project_automations a LEFT JOIN project_automation_runs run ON run.rule_id=a.id
-     WHERE a.project_id=$1 GROUP BY a.id ORDER BY a.created_at DESC`, [req.params.projectId]);
-  return ok(res, { rules: rules.rows });
-});
-const createAutomation = asyncHandler(async (req, res) => {
-  await project({ query }, req.params.projectId, req.user.id, true);
-  const trigger = req.body?.triggerKind;
-  const action = trigger === "decision_recorded" ? "create_task" :
-    trigger === "task_overdue" ? "notify_assignee" : null;
-  if (!action) throw new ApiError(400, "Invalid automation trigger");
-  const prefix = text(req.body?.titlePrefix || "Follow up:", 40, "Title prefix", true);
-  const row = await query(
-    `INSERT INTO project_automations(project_id,trigger_kind,action_kind,title_prefix,created_by)
-     VALUES($1,$2,$3,$4,$5) RETURNING *`,
-    [req.params.projectId, trigger, action, prefix, req.user.id]);
-  return ok(res, row.rows[0], 201);
-});
-const setAutomation = asyncHandler(async (req, res) => {
-  await project({ query }, req.params.projectId, req.user.id, true);
-  if (typeof req.body?.enabled !== "boolean") throw new ApiError(400, "Invalid enabled state");
-  const row = await query(
-    "UPDATE project_automations SET enabled=$3 WHERE id=$1 AND project_id=$2 RETURNING *",
-    [req.params.ruleId, req.params.projectId, req.body.enabled]);
-  if (!row.rowCount) throw new ApiError(404, "Automation unavailable");
-  return ok(res, row.rows[0]);
-});
-
-module.exports = { search, inbox, setInboxState,
-  listAutomations, createAutomation, setAutomation };
+module.exports = { search, inbox };
