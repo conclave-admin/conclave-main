@@ -1,12 +1,13 @@
-const { query } = require('../config/db');
-const asyncHandler = require('../utils/asyncHandler');
-const { ok } = require('../utils/apiResponse');
-const ApiError = require('../utils/ApiError');
+const { query } = require("../config/db");
+const asyncHandler = require("../utils/asyncHandler");
+const { ok } = require("../utils/apiResponse");
+const ApiError = require("../utils/ApiError");
 const {
   presentNotifications,
   emitNotificationsSeen,
-} = require('../services/notification.service');
+} = require("../services/notification.service");
 
+const { visibleSql } = require("../services/notificationPolicy.service");
 const PAGE_SIZE = 50;
 
 // ---------- listNotifications ----------
@@ -22,10 +23,10 @@ const listNotifications = asyncHandler(async (req, res) => {
   const { before, unseenOnly } = req.query;
 
   const params = [req.user.id];
-  const filters = [`recipient_id = $1`];
+  const filters = [`recipient_id = $1`, visibleSql()];
 
-  if (unseenOnly === 'true') {
-    filters.push('seen = FALSE');
+  if (unseenOnly === "true") {
+    filters.push("seen = FALSE");
   }
 
   if (before) {
@@ -35,7 +36,7 @@ const listNotifications = asyncHandler(async (req, res) => {
     // row equal to the cursor — including the one just returned. The id breaks the
     // tie. A cursor without the separator is still accepted, so a client holding
     // an older one keeps working.
-    const sep = before.indexOf('|');
+    const sep = before.indexOf("|");
     if (sep === -1) {
       params.push(before);
       filters.push(`created_at < $${params.length}`);
@@ -53,8 +54,8 @@ const listNotifications = asyncHandler(async (req, res) => {
     // explicit ::int cast is required: Postgres will not infer a type for a bare
     // parameter in LIMIT and reports it as a uuid instead.
     `SELECT id, recipient_id, type, reference_id, actor_id, seen, created_at
-     FROM notifications
-     WHERE ${filters.join(' AND ')}
+     FROM notifications n
+     WHERE ${filters.join(" AND ")}
      ORDER BY created_at DESC, id DESC
      LIMIT $${params.length + 1}::int`,
     [...params, PAGE_SIZE],
@@ -67,8 +68,8 @@ const listNotifications = asyncHandler(async (req, res) => {
   // badge is a total — not "unseen among the 50 most recent".
   const { rows: countRows } = await query(
     `SELECT COUNT(*)::int AS unread_count
-     FROM notifications
-     WHERE recipient_id = $1 AND seen = FALSE`,
+     FROM notifications n
+     WHERE recipient_id = $1 AND seen = FALSE AND ${visibleSql()}`,
     [req.user.id],
   );
 
@@ -77,7 +78,9 @@ const listNotifications = asyncHandler(async (req, res) => {
   // Only on a full page: a short page is the end of the walk, and handing back a
   // cursor there would send the client looking for rows that do not exist.
   const nextCursor =
-    rows.length === PAGE_SIZE && last ? `${last.created_at}|${last.id}` : null;
+    rows.length === PAGE_SIZE && last
+      ? `${new Date(last.created_at).toISOString()}|${last.id}`
+      : null;
 
   return ok(res, {
     notifications,
@@ -96,14 +99,14 @@ const markSeen = asyncHandler(async (req, res) => {
   const { notificationId, all } = req.body || {};
 
   if (all !== true && !notificationId) {
-    throw new ApiError(400, 'notificationId or all: true is required');
+    throw new ApiError(400, "notificationId or all: true is required");
   }
 
   let result;
   if (all === true) {
     result = await query(
-      `UPDATE notifications SET seen = TRUE
-       WHERE recipient_id = $1 AND seen = FALSE`,
+      `UPDATE notifications n SET seen = TRUE
+       WHERE recipient_id = $1 AND seen = FALSE AND ${visibleSql()}`,
       [req.user.id],
     );
   } else {
@@ -114,7 +117,7 @@ const markSeen = asyncHandler(async (req, res) => {
     // `AND seen = FALSE` keeps the return value meaningful: a repeated mark-all
     // reports 0 changed rather than claiming work it did not do.
     result = await query(
-      `UPDATE notifications SET seen = TRUE
+      `UPDATE notifications n SET seen = TRUE
        WHERE id = $1 AND recipient_id = $2 AND seen = FALSE
        RETURNING id, recipient_id, type, reference_id, actor_id, seen, created_at`,
       [notificationId, req.user.id],
@@ -125,7 +128,7 @@ const markSeen = asyncHandler(async (req, res) => {
     // Either it does not exist, or it belongs to someone else, or it was already
     // seen. Indistinguishable from outside — and deliberately so, since saying
     // "not yours" would confirm the id exists.
-    throw new ApiError(404, 'Notification not found');
+    throw new ApiError(404, "Notification not found");
   }
 
   const updated = result.rowCount;
@@ -134,7 +137,7 @@ const markSeen = asyncHandler(async (req, res) => {
   // rather than a chat room. On `notification:seen`, NOT `notification`: that
   // event always carries a full row and clients append it straight to their list,
   // so reusing it here would insert a phantom `{ updated }` entry.
-  const io = req.app.get('io');
+  const io = req.app.get("io");
   emitNotificationsSeen(io, req.user.id, updated);
 
   return ok(res, { updated });

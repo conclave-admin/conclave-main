@@ -1,22 +1,48 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import IconMoreVertical from '@/assets/icons/more-vertical.svg?react';
-import IconSearch from '@/assets/icons/search.svg?react';
-import Avatar from '@/components/ui/Avatar';
-import Badge from '@/components/ui/Badge';
-import Button from '@/components/ui/Button';
-import EmptyState from '@/components/ui/EmptyState';
-import Input from '@/components/ui/Input';
-import PopoverMenu from '@/components/ui/PopoverMenu';
-import Spinner from '@/components/ui/Spinner';
-import Textarea from '@/components/ui/Textarea';
-import useRoom from '@/hooks/useRoom';
-import { useAuth } from '@/contexts/AuthContext';
-import { useRealtime } from '@/contexts/RealtimeContext';
-import { useToast } from '@/contexts/ToastContext';
-import { addMember, removeMember, setMemberRole, updateRoom } from '@/services/rooms.service';
-import { searchUsers } from '@/services/users.service';
-import Page from '@/components/layout/Page';
+import AdvancedConversationSettings from "../components/chat/AdvancedConversationSettings";
+import ConversationManagement, {
+  PersonalHistoryActions,
+} from "../components/chat/ConversationManagement";
+import SharedLinksBrowser from "../components/chat/SharedLinksBrowser";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import IconMoreVertical from "@/assets/icons/more-vertical.svg?react";
+import IconSearch from "@/assets/icons/search.svg?react";
+import IconMember from "@/assets/icons/member.svg?react";
+import IconMessage from "@/assets/icons/message.svg?react";
+import IconImage from "@/assets/icons/image.svg?react";
+import IconCamera from "@/assets/icons/camera.svg?react";
+import Avatar from "@/components/ui/Avatar";
+import Badge from "@/components/ui/Badge";
+import Button from "@/components/ui/Button";
+import EmptyState from "@/components/ui/EmptyState";
+import Input from "@/components/ui/Input";
+import PopoverMenu from "@/components/ui/PopoverMenu";
+import Spinner from "@/components/ui/Spinner";
+import Textarea from "@/components/ui/Textarea";
+import useRoom from "@/hooks/useRoom";
+import { useAuth } from "@/contexts/AuthContext";
+import { useRealtime } from "@/contexts/RealtimeContext";
+import { useToast } from "@/contexts/ToastContext";
+import {
+  addMember,
+  createRoom,
+  removeMember,
+  setMemberRole,
+  updateRoom,
+} from "@/services/rooms.service";
+import {
+  blockUser,
+  getBlockStatus,
+  getSharedRooms,
+  reportUser,
+  searchUsers,
+  unblockUser,
+  uploadAvatar,
+} from "@/services/users.service";
+import SharedMediaBrowser from "@/components/chat/SharedMediaBrowser";
+import Modal from "@/components/ui/Modal";
+import Page from "@/components/layout/Page";
+import { usePresence } from "@/contexts/PresenceContext";
 
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -46,26 +72,37 @@ export default function RoomInfo() {
   const { room, isLoading, error, reload } = useRoom(roomId);
   const { user } = useAuth();
   const { socket } = useRealtime();
+  const { getPresence, isOnlineIn, labelFor } = usePresence();
   const { toast } = useToast();
 
-  const [term, setTerm] = useState('');
+  const [term, setTerm] = useState("");
   const [candidates, setCandidates] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const [editing, setEditing] = useState(false);
-  const [draftName, setDraftName] = useState('');
-  const [draftDescription, setDraftDescription] = useState('');
+  const [draftName, setDraftName] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
   const [isSavingRoom, setIsSavingRoom] = useState(false);
   const debounceRef = useRef(null);
+  const avatarFileRef = useRef(null);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [commonRooms, setCommonRooms] = useState([]);
+  const [reportTarget, setReportTarget] = useState(null);
+  const [reportReason, setReportReason] = useState("harassment");
+  const [reportDetails, setReportDetails] = useState("");
+  const [peerBlocked, setPeerBlocked] = useState(false);
 
   const members = useMemo(() => room?.members || [], [room]);
   const myRole = useMemo(
     () => members.find((member) => member.id === user?.id)?.role || null,
     [members, user],
   );
-  const isAdmin = myRole === 'admin';
-  const adminCount = members.filter((member) => member.role === 'admin').length;
-  const memberIds = useMemo(() => new Set(members.map((member) => member.id)), [members]);
+  const isAdmin = myRole === "admin";
+  const adminCount = members.filter((member) => member.role === "admin").length;
+  const memberIds = useMemo(
+    () => new Set(members.map((member) => member.id)),
+    [members],
+  );
 
   // Someone else changing the membership is pushed, not polled. This panel is
   // the only place that shows the member list, so it is also the only place that
@@ -78,11 +115,11 @@ export default function RoomInfo() {
     const onRoom = (payload) => {
       if (payload?.roomId === roomId) reload();
     };
-    socket.on('room:members', onMembers);
-    socket.on('room:updated', onRoom);
+    socket.on("room:members", onMembers);
+    socket.on("room:updated", onRoom);
     return () => {
-      socket.off('room:members', onMembers);
-      socket.off('room:updated', onRoom);
+      socket.off("room:members", onMembers);
+      socket.off("room:updated", onRoom);
     };
   }, [socket, roomId, reload]);
 
@@ -113,18 +150,40 @@ export default function RoomInfo() {
   function onError(prefix, err) {
     toast({
       title: prefix,
-      description: err.response?.data?.message || 'That did not work. Try again.',
-      tone: 'error',
+      description:
+        err.response?.data?.message || "That did not work. Try again.",
+      tone: "error",
     });
   }
 
   // A DM's name is derived from the other member on every read, so there is
   // nothing to edit there and the control is not shown at all.
-  const canEditRoom = isAdmin && room?.type !== 'dm';
+  const canEditRoom = isAdmin && room?.type !== "dm";
+  const isDm = room?.type === "dm";
+  const peer = isDm ? members.find((member) => member.id !== user?.id) : null;
+
+  useEffect(() => {
+    if (!isDm || !peer?.id) {
+      setCommonRooms([]);
+      return;
+    }
+    getSharedRooms(peer.id)
+      .then(setCommonRooms)
+      .catch(() => setCommonRooms([]));
+  }, [isDm, peer?.id]);
+  useEffect(() => {
+    if (!isDm || !peer?.id) {
+      setPeerBlocked(false);
+      return;
+    }
+    getBlockStatus(peer.id)
+      .then((result) => setPeerBlocked(Boolean(result.blocked)))
+      .catch(() => setPeerBlocked(false));
+  }, [isDm, peer?.id]);
 
   function startEditing() {
-    setDraftName(room?.display_name || room?.name || '');
-    setDraftDescription(room?.description || '');
+    setDraftName(room?.display_name || room?.name || "");
+    setDraftDescription(room?.description || "");
     setEditing(true);
   }
 
@@ -138,11 +197,28 @@ export default function RoomInfo() {
       });
       setEditing(false);
       await reload();
-      toast({ title: 'Room updated', tone: 'success' });
+      toast({ title: "Room updated", tone: "success" });
     } catch (err) {
-      onError('Could not update the room', err);
+      onError("Could not update the room", err);
     } finally {
       setIsSavingRoom(false);
+    }
+  }
+
+  async function onPickRoomAvatar(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setIsUploadingAvatar(true);
+    try {
+      const avatarUrl = await uploadAvatar(file);
+      await updateRoom(roomId, { avatar_url: avatarUrl });
+      await reload();
+      toast({ title: "Room photo updated", tone: "success" });
+    } catch (err) {
+      onError("Could not update the room photo", err);
+    } finally {
+      setIsUploadingAvatar(false);
     }
   }
 
@@ -151,10 +227,10 @@ export default function RoomInfo() {
     try {
       await addMember(roomId, person.id);
       setCandidates((prev) => prev.filter((entry) => entry.id !== person.id));
-      setTerm('');
-      toast({ title: `${person.display_name} added`, tone: 'success' });
+      setTerm("");
+      toast({ title: `${person.display_name} added`, tone: "success" });
     } catch (err) {
-      onError('Could not add them', err);
+      onError("Could not add them", err);
     } finally {
       setBusyId(null);
     }
@@ -163,10 +239,13 @@ export default function RoomInfo() {
   async function demote(person) {
     setBusyId(person.id);
     try {
-      await setMemberRole(roomId, person.id, 'member');
-      toast({ title: `${person.display_name} is no longer an admin`, tone: 'success' });
+      await setMemberRole(roomId, person.id, "member");
+      toast({
+        title: `${person.display_name} is no longer an admin`,
+        tone: "success",
+      });
     } catch (err) {
-      onError('Could not change their role', err);
+      onError("Could not change their role", err);
     } finally {
       setBusyId(null);
     }
@@ -175,10 +254,13 @@ export default function RoomInfo() {
   async function promote(person) {
     setBusyId(person.id);
     try {
-      await setMemberRole(roomId, person.id, 'admin');
-      toast({ title: `${person.display_name} is now an admin`, tone: 'success' });
+      await setMemberRole(roomId, person.id, "admin");
+      toast({
+        title: `${person.display_name} is now an admin`,
+        tone: "success",
+      });
     } catch (err) {
-      onError('Could not change their role', err);
+      onError("Could not change their role", err);
     } finally {
       setBusyId(null);
     }
@@ -189,14 +271,45 @@ export default function RoomInfo() {
     try {
       await removeMember(roomId, person.id);
       toast({
-        title: leaving ? 'You left the room' : `${person.display_name} was removed`,
-        tone: 'success',
+        title: leaving
+          ? "You left the room"
+          : `${person.display_name} was removed`,
+        tone: "success",
       });
-      if (leaving) navigate('/chats');
+      if (leaving) navigate("/chats");
     } catch (err) {
-      onError(leaving ? 'Could not leave' : 'Could not remove them', err);
+      onError(leaving ? "Could not leave" : "Could not remove them", err);
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function messagePerson(person) {
+    try {
+      const dm = await createRoom({ type: "dm", memberIds: [person.id] });
+      navigate(`/chats/${dm.id}`);
+    } catch (err) {
+      onError("Could not open a direct message", err);
+    }
+  }
+
+  async function submitReport(event) {
+    event.preventDefault();
+    try {
+      await reportUser(reportTarget.id, {
+        reason: reportReason,
+        details: reportDetails,
+        roomId,
+      });
+      setReportTarget(null);
+      setReportDetails("");
+      toast({
+        title: "Report submitted",
+        description: "Thank you. The report has been recorded for review.",
+        tone: "success",
+      });
+    } catch (err) {
+      onError("Could not submit report", err);
     }
   }
 
@@ -210,32 +323,216 @@ export default function RoomInfo() {
   }
 
   return (
-      <Page width="form">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-h1 text-ink">{room?.display_name || room?.name || 'Room'}</h1>
-          <p className="mt-2 text-body leading-relaxed text-muted">
-            {members.length} {members.length === 1 ? 'member' : 'members'}
-            {adminCount > 0 && ` · ${adminCount} ${adminCount === 1 ? 'admin' : 'admins'}`}
-          </p>
+    <Page width="content">
+      <Link
+        to={`/chats/${roomId}`}
+        className="mb-3 inline-flex min-h-11 items-center text-label text-brand hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+      >
+        Back to conversation
+      </Link>
+      <section
+        className="room-info-overview rounded-2xl border border-line bg-surface p-4 md:p-5"
+        aria-label={isDm ? "Conversation overview" : "Room overview"}
+      >
+        <div className="flex items-start gap-4">
+          <div className="flex shrink-0 flex-col items-center gap-2">
+            <Avatar
+              name={
+                isDm
+                  ? peer?.display_name || room?.display_name
+                  : room?.display_name || room?.name
+              }
+              src={
+                isDm
+                  ? peer?.avatar_url
+                  : room?.avatar_url || room?.display_avatar
+              }
+              size="md"
+            />
+            {canEditRoom && (
+              <>
+                <input
+                  ref={avatarFileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  onChange={onPickRoomAvatar}
+                  className="sr-only"
+                  aria-label="Upload a room photo"
+                />
+                <Button
+                  variant="ghost"
+                  onClick={() => avatarFileRef.current?.click()}
+                  disabled={isUploadingAvatar}
+                  className="gap-1 px-2 text-metadata"
+                >
+                  <IconCamera className="h-3.5 w-3.5" aria-hidden="true" />
+                  {isUploadingAvatar ? "Uploading…" : "Room photo"}
+                </Button>
+              </>
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="min-w-0 text-h1 text-ink [overflow-wrap:anywhere]">
+                {isDm
+                  ? peer?.display_name || room?.display_name || room?.name
+                  : room?.display_name || room?.name || "Room"}
+              </h1>
+              <Badge
+                tone={
+                  isDm
+                    ? "brand"
+                    : room?.type === "public"
+                      ? "success"
+                      : "neutral"
+                }
+              >
+                {isDm
+                  ? "Direct message"
+                  : room?.type === "department"
+                    ? "Department"
+                    : room?.type === "private"
+                      ? "Private room"
+                      : room?.type === "public"
+                        ? "Public room"
+                        : "Group room"}
+              </Badge>
+            </div>
+            {!isDm && room?.description && (
+              <p className="mt-2 max-w-2xl text-body leading-relaxed text-muted">
+                {room.description}
+              </p>
+            )}
+            {!isDm && (
+              <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-metadata text-muted">
+                <span className="inline-flex items-center gap-1.5">
+                  <IconMember className="h-4 w-4" aria-hidden="true" />
+                  {members.length} {members.length === 1 ? "member" : "members"}
+                </span>
+              </div>
+            )}
+          </div>
+          {canEditRoom && !editing && (
+            <Button
+              variant="secondary"
+              onClick={startEditing}
+              className="shrink-0 self-start"
+            >
+              Edit room
+            </Button>
+          )}
         </div>
-        {canEditRoom && !editing && (
-          <Button variant="secondary" onClick={startEditing} className="shrink-0">
-            Edit room
-          </Button>
-        )}
-      </div>
+      </section>
+
+      <nav
+        aria-label="Conversation shortcuts"
+        className="mt-3 grid grid-cols-2 gap-2"
+      >
+        <Link
+          to={`/chats/${roomId}`}
+          className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-label text-brand hover:bg-brand/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+        >
+          <IconMessage className="h-5 w-5" aria-hidden="true" />
+          Message
+        </Link>
+        <a
+          href="#room-shared-media"
+          onClick={(event) => {
+            event.preventDefault();
+            const section = document.getElementById("room-shared-media");
+            section?.focus({ preventScroll: true });
+            section?.scrollIntoView({ behavior: "instant", block: "start" });
+          }}
+          className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface text-label text-brand hover:bg-brand/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+        >
+          <IconImage className="h-5 w-5" aria-hidden="true" />
+          Media and files
+        </a>
+      </nav>
+
+      {isDm && peer && (
+        <section
+          className="mt-6 rounded-2xl border border-line bg-surface p-5 md:p-6"
+          aria-labelledby="person-details-heading"
+        >
+          <div className="flex items-start gap-4">
+            {getPresence(roomId, peer.id) !== "unknown" && (
+              <span
+                className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${isOnlineIn(roomId, peer.id) ? "bg-success" : "bg-muted/40"}`}
+                aria-hidden="true"
+              />
+            )}
+            <div className="min-w-0 flex-1">
+              <Link
+                to={`/profile/${peer.id}`}
+                className="float-right inline-flex min-h-11 items-center text-label text-brand hover:underline"
+              >
+                View profile
+              </Link>
+              <h2 id="person-details-heading" className="text-h2 text-ink">
+                About
+              </h2>
+              {getPresence(roomId, peer.id) !== "unknown" && (
+                <p className="mt-1 text-metadata text-muted">
+                  {labelFor(roomId, peer.id)}
+                </p>
+              )}
+              <p className="mt-4 whitespace-pre-wrap text-body leading-relaxed text-ink">
+                {peer.bio || "No about information"}
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {isDm && (
+        <section
+          className="mt-6 rounded-2xl border border-line bg-surface p-5 md:p-6"
+          aria-labelledby="common-groups-heading"
+        >
+          <h2 id="common-groups-heading" className="text-h2 text-ink">
+            Groups in common
+          </h2>
+          {commonRooms.length ? (
+            <ul className="mt-3 divide-y divide-line">
+              {commonRooms.map((group) => (
+                <li key={group.id} className="flex items-center gap-3 py-3">
+                  <Avatar
+                    name={group.display_name || group.name}
+                    src={group.display_avatar || group.avatar_url}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-body text-ink">
+                      {group.display_name || group.name}
+                    </p>
+                    <p className="text-metadata text-muted">
+                      {group.member_count || group.members?.length || 0} members
+                    </p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    onClick={() => navigate(`/chats/${group.id}`)}
+                  >
+                    Open
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-metadata text-muted">
+              You and {peer?.display_name} are not in any other groups together.
+            </p>
+          )}
+        </section>
+      )}
 
       {/* Shown outside the form too, so a room's purpose is readable by every
           member — editing it is admin-only, seeing it is not. */}
-      {room?.description && !editing && (
-        <p className="mt-3 max-w-xl text-body leading-relaxed text-muted">
-          {room.description}
-        </p>
-      )}
-
       {canEditRoom && editing && (
-        <form onSubmit={saveRoom} className="mt-6 rounded-xl border border-line bg-surface p-6">
+        <form
+          onSubmit={saveRoom}
+          className="mt-6 rounded-xl border border-line bg-surface p-6"
+        >
           <h2 className="text-h2 text-ink">Edit room</h2>
           <div className="mt-4 space-y-4">
             <Input
@@ -253,21 +550,22 @@ export default function RoomInfo() {
               placeholder="What this room is for"
             />
           </div>
-          <p className="mt-2 text-metadata text-muted">
-            The room&rsquo;s address in the URL does not change when you rename it.
-          </p>
           <div className="mt-4 flex items-center gap-3">
             <Button type="submit" disabled={!draftName.trim() || isSavingRoom}>
-              {isSavingRoom ? 'Saving…' : 'Save changes'}
+              {isSavingRoom ? "Saving…" : "Save changes"}
             </Button>
-            <Button variant="ghost" onClick={() => setEditing(false)} disabled={isSavingRoom}>
+            <Button
+              variant="ghost"
+              onClick={() => setEditing(false)}
+              disabled={isSavingRoom}
+            >
               Cancel
             </Button>
           </div>
         </form>
       )}
 
-      {isAdmin && (
+      {isAdmin && !isDm && (
         <section className="mt-6">
           <h2 className="text-h2 text-ink">Add people</h2>
           <div className="relative mt-3">
@@ -296,7 +594,10 @@ export default function RoomInfo() {
           {candidates.length > 0 && (
             <ul className="mt-3 divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
               {candidates.map((person) => (
-                <li key={person.id} className="flex items-center gap-3 px-4 py-3">
+                <li
+                  key={person.id}
+                  className="flex items-center gap-3 px-4 py-3"
+                >
                   <Avatar name={person.display_name} src={person.avatar_url} />
                   <span className="min-w-0 flex-1 truncate text-body text-ink">
                     {person.display_name}
@@ -307,7 +608,7 @@ export default function RoomInfo() {
                     onClick={() => invite(person)}
                     className="shrink-0 px-3 text-metadata"
                   >
-                    {busyId === person.id ? 'Adding…' : 'Add'}
+                    {busyId === person.id ? "Adding…" : "Add"}
                   </Button>
                 </li>
               ))}
@@ -316,59 +617,251 @@ export default function RoomInfo() {
         </section>
       )}
 
-      <section className="mt-8">
-        <h2 className="text-h2 text-ink">Members</h2>
-        <ul className="mt-3 divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
-          {members.map((member) => {
-            const isSelf = member.id === user?.id;
-            const isLastAdmin = member.role === 'admin' && adminCount <= 1;
-            return (
-              <li key={member.id} className="flex items-center gap-3 px-4 py-3">
-                <Avatar name={member.display_name} src={member.avatar_url} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-body text-ink">{member.display_name}</span>
-                    {isSelf && <span className="shrink-0 text-metadata text-muted">You</span>}
+      {!isDm && (
+        <section className="mt-8">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h2 className="text-h2 text-ink">Room members</h2>
+              <p className="mt-1 text-metadata text-muted">
+                {members.length} {members.length === 1 ? "person" : "people"}
+                {!isDm && adminCount
+                  ? ` · ${adminCount} ${adminCount === 1 ? "admin" : "admins"}`
+                  : ""}
+              </p>
+            </div>
+          </div>
+          <ul className="mt-3 divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
+            {members.map((member) => {
+              const isSelf = member.id === user?.id;
+              const isLastAdmin = member.role === "admin" && adminCount <= 1;
+              return (
+                <li
+                  key={member.id}
+                  className="flex flex-wrap items-center gap-3 px-4 py-3"
+                >
+                  <Avatar name={member.display_name} src={member.avatar_url} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <Link
+                        to={isSelf ? "/profile" : `/profile/${member.id}`}
+                        className="truncate text-body font-medium text-ink hover:text-brand hover:underline"
+                      >
+                        {member.display_name}
+                      </Link>
+                      {isSelf && (
+                        <span className="shrink-0 text-metadata text-muted">
+                          You
+                        </span>
+                      )}
+                    </div>
+                    {getPresence(roomId, member.id) !== "unknown" && (
+                      <p className="mt-0.5 truncate text-metadata text-muted">
+                        {labelFor(roomId, member.id)}
+                      </p>
+                    )}
                   </div>
-                </div>
 
-                {member.role === 'admin' && (
-                  <Badge tone="brand" className="shrink-0">
-                    Admin
-                  </Badge>
-                )}
+                  {!isDm && member.role === "admin" && (
+                    <Badge tone="brand" className="shrink-0">
+                      Admin
+                    </Badge>
+                  )}
 
-                {/*
-                  The menu exists for a non-admin (Leave room) and for an admin
-                  acting on somebody else. It is omitted entirely for an admin
-                  acting on themselves: the only self-action is leaving, and on
-                  the last admin that is refused with a 409 — better to not offer
-                  a control the server will reject than to offer it and explain.
-                */}
-                {(!isAdmin || !isSelf) && (
-                  <div className="relative shrink-0">
-                    <RowMenu
-                      person={member}
-                      isSelf={isSelf}
-                      isAdmin={isAdmin}
-                      isLastAdmin={isLastAdmin}
-                      busy={busyId === member.id}
-                      onRemove={remove}
-                      onPromote={promote}
-                      onDemote={demote}
-                    />
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+                  {/* Admin controls are separate from member safety and DM actions. */}
+                  {!isDm && !isSelf && (
+                    <div className="relative basis-full shrink-0 sm:basis-auto">
+                      {isAdmin ? (
+                        <RowMenu
+                          person={member}
+                          isSelf={isSelf}
+                          isAdmin={isAdmin}
+                          isLastAdmin={isLastAdmin}
+                          busy={busyId === member.id}
+                          onRemove={remove}
+                          onPromote={promote}
+                          onDemote={demote}
+                        />
+                      ) : null}
+                      <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                        <Button
+                          variant="secondary"
+                          onClick={() => messagePerson(member)}
+                          className="px-3 text-metadata"
+                        >
+                          Message
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => setReportTarget(member)}
+                          className="px-2 text-metadata"
+                        >
+                          Report
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={async () => {
+                            try {
+                              await blockUser(member.id);
+                              toast({
+                                title: `${member.display_name} blocked`,
+                                description:
+                                  "Direct messages with this person are blocked.",
+                                tone: "success",
+                              });
+                            } catch (err) {
+                              onError("Could not block user", err);
+                            }
+                          }}
+                          className="px-2 text-metadata"
+                        >
+                          Block
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+
+      <AdvancedConversationSettings room={room} />
+      <ConversationManagement
+        key={`management:${user.id}:${roomId}`}
+        room={room}
+        user={user}
+        onChanged={reload}
+      />
+      <SharedLinksBrowser
+        key={`links:${user.id}:${roomId}`}
+        room={room}
+        user={user}
+      />
+
+      <SharedMediaBrowser
+        key={`${user.id}:${roomId}`}
+        roomId={roomId}
+        userId={user.id}
+      />
+
+      <section
+        className="mt-6 rounded-2xl border border-error/20 bg-surface p-5 md:p-6"
+        aria-label="Conversation actions"
+      >
+        <h2 className="text-h2 text-ink">Conversation controls</h2>
+        <p className="mt-1 text-metadata text-muted">
+          These actions affect your account or this device only.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <PersonalHistoryActions
+            key={`${user.id}:${roomId}`}
+            roomId={roomId}
+            userId={user.id}
+            onChanged={reload}
+          />
+          {peer && (
+            <>
+              <Button variant="ghost" onClick={() => setReportTarget(peer)}>
+                Report {peer.display_name}
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={async () => {
+                  try {
+                    if (peerBlocked) await unblockUser(peer.id);
+                    else await blockUser(peer.id);
+                    setPeerBlocked((value) => !value);
+                    toast({
+                      title: peerBlocked
+                        ? `${peer.display_name} unblocked`
+                        : `${peer.display_name} blocked`,
+                      description: peerBlocked
+                        ? "Direct messages are available again."
+                        : "You will not be able to exchange direct messages.",
+                      tone: "success",
+                    });
+                  } catch (err) {
+                    onError(
+                      peerBlocked
+                        ? "Could not unblock user"
+                        : "Could not block user",
+                      err,
+                    );
+                  }
+                }}
+              >
+                {peerBlocked
+                  ? `Unblock ${peer.display_name}`
+                  : `Block ${peer.display_name}`}
+              </Button>
+            </>
+          )}
+          {!isDm && (
+            <Button
+              variant="ghost"
+              className="text-error"
+              disabled={busyId === user.id}
+              onClick={() =>
+                remove({ ...user, display_name: user.display_name }, true)
+              }
+            >
+              Leave room
+            </Button>
+          )}
+        </div>
       </section>
-      </Page>
+
+      <Modal
+        open={Boolean(reportTarget)}
+        onClose={() => setReportTarget(null)}
+        title={`Report ${reportTarget?.display_name || "user"}`}
+      >
+        <form onSubmit={submitReport} className="space-y-4">
+          <label className="block text-label text-ink">
+            Reason
+            <select
+              value={reportReason}
+              onChange={(event) => setReportReason(event.target.value)}
+              className="mt-1 min-h-11 w-full rounded-lg border border-line bg-surface px-3 text-body"
+            >
+              <option value="harassment">Harassment</option>
+              <option value="spam">Spam</option>
+              <option value="inappropriate_content">
+                Inappropriate content
+              </option>
+              <option value="impersonation">Impersonation</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <Textarea
+            label="Details (optional)"
+            value={reportDetails}
+            onChange={(event) => setReportDetails(event.target.value)}
+            maxLength={1000}
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setReportTarget(null)}>
+              Cancel
+            </Button>
+            <Button type="submit">Submit report</Button>
+          </div>
+        </form>
+      </Modal>
+    </Page>
   );
 }
 
-function RowMenu({ person, isSelf, isAdmin, isLastAdmin, busy, onRemove, onPromote, onDemote }) {
+function RowMenu({
+  person,
+  isSelf,
+  isAdmin,
+  isLastAdmin,
+  busy,
+  onRemove,
+  onPromote,
+  onDemote,
+}) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef(null);
 
@@ -395,7 +888,7 @@ function RowMenu({ person, isSelf, isAdmin, isLastAdmin, busy, onRemove, onPromo
         label={`Actions for ${person.display_name}`}
         className="w-44"
       >
-        {isAdmin && !isSelf && person.role === 'member' && (
+        {isAdmin && !isSelf && person.role === "member" && (
           <MenuItem
             label="Make admin"
             onClick={() => {
@@ -404,11 +897,13 @@ function RowMenu({ person, isSelf, isAdmin, isLastAdmin, busy, onRemove, onPromo
             }}
           />
         )}
-        {isAdmin && !isSelf && person.role === 'admin' && (
+        {isAdmin && !isSelf && person.role === "admin" && (
           <MenuItem
             label="Remove admin"
             disabled={isLastAdmin}
-            title={isLastAdmin ? 'A room must keep at least one admin' : undefined}
+            title={
+              isLastAdmin ? "A room must keep at least one admin" : undefined
+            }
             onClick={() => {
               setOpen(false);
               onDemote(person);
@@ -416,10 +911,12 @@ function RowMenu({ person, isSelf, isAdmin, isLastAdmin, busy, onRemove, onPromo
           />
         )}
         <MenuItem
-          label={isSelf ? 'Leave room' : 'Remove from room'}
+          label={isSelf ? "Leave room" : "Remove from room"}
           danger
           disabled={isLastAdmin}
-          title={isLastAdmin ? 'A room must keep at least one admin' : undefined}
+          title={
+            isLastAdmin ? "A room must keep at least one admin" : undefined
+          }
           onClick={() => {
             setOpen(false);
             onRemove(person, isSelf);
@@ -439,7 +936,7 @@ function MenuItem({ label, onClick, danger, disabled, title }) {
       title={title}
       onClick={onClick}
       className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body transition-colors hover:bg-canvas disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent ${
-        danger ? 'text-error' : 'text-ink'
+        danger ? "text-error" : "text-ink"
       }`}
     >
       {label}

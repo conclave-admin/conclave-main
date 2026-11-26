@@ -7,16 +7,18 @@
  * another.
  */
 
-/**
- * The server's reaction allowlist, in its order.
- *
- * Mirrors `REACTION_EMOJI` in backend/src/services/reaction.service.js and the
- * CHECK constraint in migration 013 — all three must stay in step. A heart is
- * deliberately absent: ❤️ has two encodings (U+2764 and U+2764 U+FE0F) and
- * Postgres treats them as different strings, so it would either be rejected or
- * stack twice against the unique constraint. These four have one encoding each.
- */
-export const REACTION_EMOJI = ['👍', '👎', '🎉', '✅'];
+/** Human-readable fallback for attachment-only messages in reply and pin quotes. */
+export function messageSummary(message) {
+  if (!message) return "Message";
+  if (message.is_deleted || message.deleted_at) return "Deleted message";
+  if (message.content) return message.content;
+  const type =
+    message.attachments?.[0]?.mime_type || message.attachment_type || "";
+  if (type.startsWith("image/")) return "Photo";
+  if (type.startsWith("video/")) return "Video";
+  if (type.startsWith("audio/")) return "Voice message";
+  return message.attachments?.length ? "Document" : "Message";
+}
 
 function startOfDay(value) {
   const date = new Date(value);
@@ -31,27 +33,27 @@ export function isSameDay(a, b) {
 
 /** "Today", "Yesterday", "October 8", or "October 8, 2024" — never a raw ISO. */
 export function daySeparatorLabel(value, now = new Date()) {
-  if (!value) return '';
+  if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
+  if (Number.isNaN(date.getTime())) return "";
 
   const daysAgo = Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000);
-  if (daysAgo === 0) return 'Today';
-  if (daysAgo === 1) return 'Yesterday';
+  if (daysAgo === 0) return "Today";
+  if (daysAgo === 1) return "Yesterday";
 
   const options =
     date.getFullYear() === now.getFullYear()
-      ? { month: 'long', day: 'numeric' }
-      : { month: 'long', day: 'numeric', year: 'numeric' };
-  return date.toLocaleDateString('en-US', options);
+      ? { month: "long", day: "numeric" }
+      : { month: "long", day: "numeric", year: "numeric" };
+  return date.toLocaleDateString("en-US", options);
 }
 
 /** The clock time shown beside a message and in a grouping run's last row. */
 export function formatClockTime(value) {
-  if (!value) return '';
+  if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 /**
@@ -92,32 +94,35 @@ export function annotateMessages(messages = []) {
   });
 }
 
-/**
- * Delivery status for one of the caller's own messages.
- *
- * `pending` the send has not been acknowledged yet
- * `failed`  it errored and the composer surfaced it
- * `sent`    the server stored it
- * `read`    at least one other member's read pointer has reached it
- *
- * The read tick is derived, not stored per message. `room_members.last_seen_at`
- * is a pointer per member per room, so "has U read M" is a comparison rather
- * than a row — which is exactly why it survives a reload. The tick means
- * somebody has caught up, not everybody: in a room of forty people waiting for
- * unanimous catch-up would mean a tick that almost never appears.
- *
- * @returns {'pending'|'failed'|'sent'|'read'|null} null when not the viewer's message
- */
-export function readStatus(message, members = [], viewerId, pendingIds = new Set(), failedIds = new Set()) {
+/** Sent means server-stored; group delivered/read requires every send-time
+ * recipient. Empty recipient lists and incomplete historical lists stay sent. */
+export function newerReceipt(current, incoming) {
+  if (!incoming) return current;
+  return current && Number(current.version || 0) > Number(incoming.version || 0)
+    ? current
+    : incoming;
+}
+export function readStatus(
+  message,
+  members = [],
+  viewerId,
+  pendingIds = new Set(),
+  failedIds = new Set(),
+  queuedIds = new Set(),
+) {
   if (!message || message.sender_id !== viewerId) return null;
-  if (failedIds.has(message.id)) return 'failed';
-  if (pendingIds.has(message.id)) return 'pending';
+  if (failedIds.has(message.id)) return "failed";
+  if (queuedIds.has(message.id)) return "queued";
+  if (pendingIds.has(message.id)) return "pending";
 
-  const created = new Date(message.created_at).getTime();
-  const others = members.filter((member) => member.id !== viewerId);
-  const hasReader = others.some(
-    (member) => new Date(member.last_seen_at).getTime() >= created,
-  );
-
-  return hasReader ? 'read' : 'sent';
+  const summary = message.receipt_summary;
+  if (summary) {
+    if (!summary.history_complete || !summary.recipient_count) return "sent";
+    if (summary.read_count === summary.recipient_count) return "read";
+    return summary.delivered_count === summary.recipient_count
+      ? "delivered"
+      : "sent";
+  }
+  // Old caches have no reliable send-time audience. Wait for server metadata.
+  return "sent";
 }

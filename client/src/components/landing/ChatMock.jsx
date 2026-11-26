@@ -1,96 +1,279 @@
-import Avatar from '@/components/ui/Avatar';
-import IconSend from '@/assets/icons/send.svg?react';
+import { useId, useLayoutEffect, useRef, useState } from "react";
+import { gsap } from "gsap";
+import IconSend from "@/assets/icons/send.svg?react";
+import IconDecisions from "@/assets/icons/decisions.svg?react";
+import IconTasks from "@/assets/icons/tasks.svg?react";
+import IconSuccess from "@/assets/icons/success.svg?react";
+import coast from "@/assets/landing/conclave-coast-v2-768.webp";
 
-/**
- * The hero's chat mock.
- *
- * Not a screenshot and not an iframe: real markup, so it inherits dark mode,
- * respects the type scale, and costs no image bytes. It cannot be interacted
- * with and is labelled as such, because a mock that looks tappable and is not
- * is a small daily insult.
- *
- * Bubbles arrive in sequence on first paint rather than rendering finished.
- * That is the one piece of motion here that earns its place — a static
- * screenshot of a chat says nothing about a chat, and the arrival is the whole
- * point. Driven by CSS with a staggered delay rather than GSAP, because it
- * needs to run once on mount and never again; pulling in a scroll library for
- * that would be the wrong tool.
- *
- * `motion-safe:` gates every one of them, so with reduced motion the mock is
- * simply already there.
- */
-const MESSAGES = [
-  { id: 1, from: 'them', name: 'Amara Okafor', initials: 'AO', text: 'Can we ship the digest on Friday?' },
-  { id: 2, from: 'me', text: 'Yes — catch-up is done, just needs your review.' },
-  { id: 3, from: 'them', name: 'Amara Okafor', initials: 'AO', text: 'Reviewed. Marking it decided.', decided: true },
-];
+const TABS = ["Conversations", "Decisions", "Tasks"];
 
 export default function ChatMock() {
+  const [tab, setTab] = useState(0);
+  const id = useId();
+  const tabRefs = useRef([]);
+  const demoRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const media = gsap.matchMedia();
+    media.add(
+      "(prefers-reduced-motion: no-preference)",
+      () => {
+        const panel = demoRef.current?.querySelector(
+          ".cl-demo-panel:not([hidden])",
+        );
+        if (!panel) return;
+        const parts = panel.querySelectorAll(
+          [
+            ".cl-demo-message",
+            ".cl-demo-outgoing",
+            ".cl-demo-composer",
+            ".cl-organized-icon",
+            ".cl-demo-organized > .cl-eyebrow",
+            ".cl-demo-organized > h4",
+            ".cl-demo-organized > p:not(.cl-eyebrow)",
+            ".cl-demo-decision",
+            ".cl-demo-task-list > div",
+          ].join(", "),
+        );
+        gsap.from(parts, {
+          y: 12,
+          opacity: 0,
+          duration: 0.42,
+          stagger: 0.045,
+          ease: "power2.out",
+          clearProps: "transform,opacity",
+        });
+      },
+      demoRef,
+    );
+    return () => media.revert();
+  }, [tab]);
+
+  function moveTab(event) {
+    let next;
+    if (event.key === "ArrowRight") next = (tab + 1) % TABS.length;
+    if (event.key === "ArrowLeft") next = (tab + TABS.length - 1) % TABS.length;
+    if (event.key === "Home") next = 0;
+    if (event.key === "End") next = TABS.length - 1;
+    if (next === undefined) return;
+    event.preventDefault();
+    setTab(next);
+    tabRefs.current[next]?.focus();
+  }
+
   return (
-    <div
-      className="overflow-hidden rounded-xl border border-line bg-surface shadow-modal"
-      aria-hidden="true"
-    >
-      <div className="flex items-center gap-3 border-b border-line px-4 py-3">
-        <Avatar name="Amara Okafor" size="sm" presence="online" />
-        <div className="min-w-0">
-          <p className="truncate text-label text-ink">Design decisions</p>
-          <p className="text-metadata text-muted">4 members</p>
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-3 px-4 py-5">
-        {MESSAGES.map((message, index) => (
-          <div
-            key={message.id}
-            className={`flex ${message.from === 'me' ? 'justify-end' : 'justify-start'} motion-safe:animate-message-in`}
-            style={{ animationDelay: `${180 + index * 220}ms` }}
-          >
-            <div className="flex max-w-[80%] items-end gap-2">
-              {message.from === 'them' && <Avatar name={message.name} size="sm" />}
-              <div
-                className={`rounded-2xl px-3.5 py-2.5 text-body ${
-                  message.from === 'me' ? 'bg-brand text-surface' : 'bg-canvas text-ink'
-                }`}
-              >
-                <p>{message.text}</p>
-                {message.decided && (
-                  <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-md bg-brand-soft px-2 py-1 text-metadata text-brand">
-                    Decision recorded
-                  </p>
-                )}
-              </div>
-            </div>
+    <section id="product-preview" className="cl-product">
+      <div className="cl-container">
+        <div className="cl-product-intro">
+          <div>
+            <p className="cl-eyebrow">A closer look at Conclave</p>
+            <h2>
+              In the chat.
+              <br />
+              <em>Out in the world.</em>
+            </h2>
           </div>
-        ))}
-
+          <p>
+            A plan for the weekend. A project taking shape. Keep the
+            conversation and what comes next in the same place.
+          </p>
+        </div>
         <div
-          className="flex justify-start motion-safe:animate-message-in"
-          style={{ animationDelay: '900ms' }}
+          className="cl-product-tabs"
+          role="tablist"
+          aria-label="Explore Conclave"
+          onKeyDown={moveTab}
         >
-          <div className="flex items-end gap-2">
-            <Avatar name="Amara Okafor" size="sm" />
-            <div className="flex items-center gap-1 rounded-2xl bg-canvas px-3.5 py-3">
-              {[0, 1, 2].map((dot) => (
-                <span
-                  key={dot}
-                  className="h-1.5 w-1.5 rounded-full bg-muted motion-safe:animate-typing-dot"
-                  style={{ animationDelay: `${dot * 160}ms` }}
-                />
+          {TABS.map((label, index) => (
+            <button
+              key={label}
+              type="button"
+              role="tab"
+              id={`${id}-tab-${index}`}
+              aria-selected={tab === index}
+              aria-controls={`${id}-panel-${index}`}
+              tabIndex={tab === index ? 0 : -1}
+              ref={(node) => {
+                tabRefs.current[index] = node;
+              }}
+              onClick={() => setTab(index)}
+            >
+              <span className="cl-tab-number">0{index + 1}</span>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="cl-product-window">
+          <div className="cl-window-bar">
+            <span>
+              <i />
+              <i />
+              <i />
+            </span>
+            <p>Conclave · A place for your people</p>
+            <span />
+          </div>
+          <div className="cl-product-layout">
+            <aside className="cl-demo-sidebar" aria-hidden="true">
+              <p className="cl-demo-brand">
+                c<span>Conclave</span>
+              </p>
+              <span className="cl-demo-category">YOUR ROOMS</span>
+              <p className="cl-demo-selected">
+                # The weekend crew <b>3</b>
+              </p>
+              <p># Studio collective</p>
+              <p># Ideas worth keeping</p>
+              <span className="cl-demo-category">DIRECT MESSAGES</span>
+              <p>
+                <span className="cl-person cl-person-peach">A</span> Amara
+                Okafor
+              </p>
+              <p>
+                <span className="cl-person">J</span> Jamie Lee
+              </p>
+              <div className="cl-demo-profile">
+                <span className="cl-person">Y</span>
+                <div>
+                  You<small>A little more connected.</small>
+                </div>
+                <span>↗</span>
+              </div>
+            </aside>
+            <div ref={demoRef} className="cl-demo-main">
+              <div className="cl-demo-header">
+                <div>
+                  <h3>
+                    The weekend crew <span>☀️</span>
+                  </h3>
+                  <p>Good people. Excellent plans.</p>
+                </div>
+                <span className="cl-member-stack" aria-hidden="true">
+                  <i>A</i>
+                  <i>J</i>
+                  <i>+2</i>
+                </span>
+              </div>
+              {TABS.map((label, index) => (
+                <div
+                  key={label}
+                  id={`${id}-panel-${index}`}
+                  role="tabpanel"
+                  aria-labelledby={`${id}-tab-${index}`}
+                  hidden={tab !== index}
+                  tabIndex={0}
+                  className="cl-demo-panel"
+                >
+                  {index === 0 && (
+                    <>
+                      <p className="cl-demo-day">
+                        Today · A new adventure in the making
+                      </p>
+                      <div className="cl-demo-message">
+                        <span
+                          className="cl-person cl-person-peach"
+                          aria-hidden="true"
+                        >
+                          A
+                        </span>
+                        <div>
+                          <p>
+                            <strong>Amara</strong>
+                            <small>10:24 AM</small>
+                          </p>
+                          <p>Found our spot for Saturday. Who’s in?</p>
+                          <img
+                            src={coast}
+                            width="768"
+                            height="512"
+                            loading="lazy"
+                            alt="A sunset picnic beside the sea, shared in the example conversation"
+                          />
+                          <span className="cl-demo-reaction">
+                            💜 3 &nbsp; ☀️ 2
+                          </span>
+                        </div>
+                      </div>
+                      <div className="cl-demo-outgoing">
+                        A view like that? Count me in.
+                        <small>You · 10:26 AM · ✓✓</small>
+                      </div>
+                      <div className="cl-demo-composer" aria-hidden="true">
+                        <span>+</span> Message the crew…
+                        <IconSend />
+                      </div>
+                    </>
+                  )}
+                  {index === 1 && (
+                    <div className="cl-demo-organized">
+                      <span className="cl-organized-icon">
+                        <IconDecisions aria-hidden="true" />
+                      </span>
+                      <p className="cl-eyebrow">
+                        Less searching. More knowing.
+                      </p>
+                      <h4>Everyone on the same page.</h4>
+                      <p>
+                        The important part of the conversation, saved for later.
+                      </p>
+                      <div className="cl-demo-decision">
+                        <span>
+                          <IconSuccess aria-hidden="true" /> Decision recorded
+                        </span>
+                        <h5>Saturday belongs to the coast.</h5>
+                        <p>
+                          Meet at 9, take the scenic route, bring something to
+                          share.
+                        </p>
+                        <footer>
+                          Saved by Amara <span>The weekend crew</span>
+                        </footer>
+                      </div>
+                    </div>
+                  )}
+                  {index === 2 && (
+                    <div className="cl-demo-organized">
+                      <span className="cl-organized-icon">
+                        <IconTasks aria-hidden="true" />
+                      </span>
+                      <p className="cl-eyebrow">Good plans have a next step.</p>
+                      <h4>From “we should” to “on it.”</h4>
+                      <p>
+                        Give the next step an owner, with the conversation
+                        attached.
+                      </p>
+                      <div className="cl-demo-task-list">
+                        {[
+                          ["Book the train tickets", "Jamie", "Friday"],
+                          ["Put together the playlist", "You", "Saturday"],
+                          ["Bring the picnic essentials", "Amara", "Saturday"],
+                        ].map(([task, person, day]) => (
+                          <div key={task}>
+                            <span
+                              className="cl-demo-check"
+                              aria-hidden="true"
+                            />
+                            <div>
+                              <strong>{task}</strong>
+                              <small>{person} · The weekend crew</small>
+                            </div>
+                            <span>{day}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           </div>
         </div>
+        <p className="cl-product-footnote">
+          An interactive illustration of Conclave. Your people, your
+          conversations, your next steps.
+        </p>
       </div>
-
-      <div className="flex items-center gap-3 border-t border-line px-4 py-3">
-        <div className="min-h-10 flex-1 rounded-full bg-canvas px-4 py-2.5 text-body text-muted">
-          Write a message…
-        </div>
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand text-surface">
-          <IconSend className="h-4 w-4" />
-        </span>
-      </div>
-    </div>
+    </section>
   );
 }

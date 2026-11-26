@@ -1,13 +1,13 @@
-import { useRef } from 'react';
-import IconMoon from '@/assets/icons/moon.svg?react';
-import IconSun from '@/assets/icons/sun.svg?react';
-import IconSystem from '@/assets/icons/system.svg?react';
-import { useTheme } from '@/contexts/ThemeContext';
+import { useRef } from "react";
+import IconMoon from "@/assets/icons/moon.svg?react";
+import IconSun from "@/assets/icons/sun.svg?react";
+import IconSystem from "@/assets/icons/system.svg?react";
+import { useTheme } from "@/contexts/ThemeContext";
 
 const OPTIONS = [
-  { value: 'light', label: 'Light', Icon: IconSun },
-  { value: 'dark', label: 'Dark', Icon: IconMoon },
-  { value: 'system', label: 'System', Icon: IconSystem },
+  { value: "light", label: "Light", Icon: IconSun },
+  { value: "dark", label: "Dark", Icon: IconMoon },
+  { value: "system", label: "System", Icon: IconSystem },
 ];
 
 /**
@@ -34,7 +34,7 @@ const OPTIONS = [
  *
  * @param {boolean} [compact] - tighter padding for the landing nav
  */
-export default function ThemeSwitch({ compact = false, className = '' }) {
+export default function ThemeSwitch({ compact = false, className = "" }) {
   const { theme, setTheme } = useTheme();
   const buttons = useRef({});
 
@@ -42,10 +42,12 @@ export default function ThemeSwitch({ compact = false, className = '' }) {
     const current = OPTIONS.findIndex((option) => option.value === theme);
     let next = null;
 
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (current + 1) % OPTIONS.length;
-    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (current - 1 + OPTIONS.length) % OPTIONS.length;
-    else if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = OPTIONS.length - 1;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown")
+      next = (current + 1) % OPTIONS.length;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp")
+      next = (current - 1 + OPTIONS.length) % OPTIONS.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = OPTIONS.length - 1;
 
     if (next === null) return;
     event.preventDefault();
@@ -53,8 +55,10 @@ export default function ThemeSwitch({ compact = false, className = '' }) {
     buttons.current[OPTIONS[next].value]?.focus();
   }
 
-  const sizing = compact ? 'px-2.5 py-1 text-metadata' : 'px-3.5 py-1.5 text-label';
-  const iconSizing = compact ? 'h-3 w-3 shrink-0' : 'h-3.5 w-3.5 shrink-0';
+  const sizing = compact
+    ? "px-2.5 py-1 text-metadata"
+    : "px-3.5 py-1.5 text-label";
+  const iconSizing = compact ? "h-3 w-3 shrink-0" : "h-3.5 w-3.5 shrink-0";
 
   return (
     <div
@@ -78,7 +82,9 @@ export default function ThemeSwitch({ compact = false, className = '' }) {
             tabIndex={selected ? 0 : -1}
             onClick={() => setTheme(value)}
             className={`inline-flex items-center gap-1.5 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${sizing} ${
-              selected ? 'bg-brand font-semibold text-surface' : 'text-muted hover:bg-surface hover:text-ink'
+              selected
+                ? "bg-brand font-semibold text-surface"
+                : "text-muted hover:bg-surface hover:text-ink"
             }`}
           >
             <Icon className={iconSizing} aria-hidden="true" />

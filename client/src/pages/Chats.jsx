@@ -1,6 +1,8 @@
-import { Outlet, useOutletContext, useParams } from 'react-router-dom';
-import ChatList from '@/components/chats/ChatList';
-import EmptyState from '@/components/ui/EmptyState';
+import { Suspense } from "react";
+import Spinner from "@/components/ui/Spinner";
+import ConversationWelcome from "@/components/chats/ConversationWelcome";
+import { Outlet, useOutletContext, useParams } from "react-router-dom";
+import ChatList from "@/components/chats/ChatList";
 
 /**
  * The chat shell: a list on the left, the open conversation on the right.
@@ -30,20 +32,19 @@ export default function Chats() {
   return (
     <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[var(--list-w)_1fr]">
       <section
-        className={`min-h-0 border-r border-line bg-surface ${roomId ? 'hidden md:block' : ''}`}
+        className={`min-h-0 border-r border-line bg-surface ${roomId ? "hidden md:block" : ""}`}
       >
         <ChatList />
       </section>
 
       <section className="min-h-0 min-w-0 bg-surface">
         {roomId ? (
-          <Outlet context={shellContext} />
+          <Suspense fallback={<Spinner label="Loading conversation" />}>
+            <Outlet context={shellContext} />
+          </Suspense>
         ) : (
-          <div className="hidden h-full items-center justify-center md:flex">
-            <EmptyState
-              title="Pick a chat"
-              description="Choose a conversation from the list to open it here."
-            />
+          <div className="hidden h-full md:block">
+            <ConversationWelcome />
           </div>
         )}
       </section>

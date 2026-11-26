@@ -12,25 +12,37 @@
     "seed": "node database/seed.js",
     "test": "node --test test/*.test.js",
     "test:db": "node --test tests/*.test.js",
-    "test:integration": "npm run test:db"
+    "test:integration": "npm run test:db",
+    "media:cleanup": "node scripts/media-cleanup.js",
+    "storage:report": "node scripts/storage-usage-report.js",
+    "storage:configure": "node scripts/storage-configure.js",
+    "team:recover-owner": "node scripts/recover-team-owner.js",
+    "platform:operator": "node scripts/provision-moderator.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "@aws-sdk/s3-request-presigner": "^3.1152.0",
+    "@emoji-mart/data": "1.2.1",
     "@socket.io/redis-adapter": "^8.3.0",
     "bcrypt": "^6.0.0",
     "cloudinary": "^2.4.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
+    "express": "^4.22.3",
+    "file-type": "^22.2.0",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
-    "multer": "^2.4.0",
+    "multer": "^2.5.0",
     "pg": "^8.12.0",
     "redis": "^4.7.0",
-    "socket.io": "^4.7.5"
+    "resend": "^6.34.1",
+    "socket.io": "^4.7.5",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "nodemon": "^3.1.4"
+    "nodemon": "3.1.11",
+    "socket.io-client": "^4.8.4"
   },
   "engines": {
     "node": ">=22 <23"

@@ -117,8 +117,8 @@ Existing facts: `GET /rooms` returns `slug, type, member_count, my_role, last_se
 - **`GET /decisions` is already cross-room.** No `roomId` is required; passing one narrows to a single room. `GET /tasks` and `GET /digest` are the same. The three top-level pages could therefore be built without any new endpoint.
 - **`GET /notifications` does return an `unreadCount` aggregate.** The controller counts unseen rows separately from the page, so the number is a true total rather than "unseen among the most recent page". An earlier note in this document said no aggregate existed and that the navbar badge had to show the room unread total instead; that was corrected in phase 6, and the badge now shows the notifications count.
 - **Notifications reach the client over the personal room `user:<id>`,** which `sockets/index.js` joins automatically on connect — no client-side join is needed. The events are `notification { notification }` and `notification:seen { updated }`. Both carry the presented shape `[{ id, type, reference_id, seen, created_at, context: { room_id, room_name, room_slug, actor_name, message_preview } }]`, so a live row is inserted with no translation and no refetch. **`notification:seen` carries a delta, and is echoed to the originating tab as well as to other tabs** — the client has to suppress its own echo or the badge double-subtracts.
-- **`task:updated` is emitted to the task's room only.** A viewer on the cross-room board has not joined those rooms, so the board cannot go live without a per-user subscription. This is the reason the Tasks page refreshes on reload rather than listening.
-- **`GET /digest` returns `{ items, summary }`,** each item `{ id, type, title, metadata, room_id, room_name, created_at }`. `metadata` is an actor name (`author_name` for a decision, `status · assignee_name` for a task, `sender_name` for a mention or file) and `null` for activity — not a formatted timestamp.
+- **`task:updated` reaches current room members through personal sockets.** The cross-room board refetches when it arrives and on focus.
+- **`GET /digest` returns `{ items, next_cursor, rooms, snapshot_at, summary }`.** Items are decision and task changes, direct mentions, shared files and room pins; routine message traffic does not create an item. Pages contain at most 50 items. Pass `next_cursor` as `cursor` to load older events from the same snapshot. `actor_name`, `action`, `preview`, room and time provide the card context; see `API_CONTRACTS.md` for the full shape.
 - **The one backend change phase 6 did make: `GET /decisions/:decisionId`.** Added to `decisions.controller.js` and `decisions.routes.js` (registered after `/room/...` so it cannot shadow it), with three integration tests in `tests/integration.test.js`. It returns the joined list shape with `pins` attached, and answers 403 for both "not in that room" and "does not exist" — deliberately not distinguishing them, since saying "not found" would confirm a UUID exists.
 
 Other existing facts that hold:
@@ -128,7 +128,7 @@ Other existing facts that hold:
 - **Verified, no backend change.** Find-or-create DM already works: `POST /rooms { name, memberIds: [userId] }` returns the existing 2-member DM rather than minting a second one. It only requires a `name`, which the client can take from `GET /users` results. (`POST /rooms/dm` is Victor's Item F and was deliberately left alone.)
 - `GET /rooms/:roomId` returns members as `[{ id, display_name, avatar_url, role, joined_at, last_seen_at }]` plus `my_role`.
 - `POST /rooms/:roomId/seen` is a POST, not a PATCH. Sending must use the `send-message` socket event — the REST path does not emit `receive-message` and would leave every other member's view stale.
-- Reaction allowlist is `👍 👎 🎉 ✅`. `MAX_ATTACHMENTS` is 10 and the upload cap is 25 MB per file; there is no video type.
+- Reaction allowlist is `👍 👎 🎉 ✅`. A message has one attachment; a multi-item send creates one message per item and groups them with an `albumId`. The uploader permits images, documents and videos (video limit 50 MB); media captions are per item.
 - All new responses go through the existing `apiResponse` util and `ApiError`.
 - Read receipts: shipped in phase 5 and made persistent — `message-read` writes `room_members.last_seen_at`.
 - Search: room search first. Global message search later, restricted to the caller's rooms.
@@ -214,9 +214,9 @@ Delivery style: code written in chat, one file at a time, grouped by phase. No f
 8. ~~**Scope:** one phase covering all four surfaces — Decisions, Tasks, Digest, Notifications.~~ **Answered: yes, all four.**
 9. ~~**Promote and flag:** wire both "Promote to decision" and "Flag as task" into the message actions menu.~~ **Answered: yes, both.** They live beside Reply/Edit/Delete because a decision is almost always remembered as "that message in #deployments", and finding it again in a board is the hard part.
 10. ~~**Pinned chip destination:** resolve to the decision detail view, not the board.~~ **Answered: yes.** This is what motivated the one backend addition.
-11. ~~**Tasks board:** cross-room, with live updates deferred.~~ **Answered: yes.** Documented as a known gap; `task:updated` is room-scoped and a cross-room viewer has not joined.
+11. **Tasks board:** cross-room with live refetch, role-aware task detail, progress notes, and cursor paging.
 12. ~~**In-room catch-up digest card:** remove it.~~ **Answered: remove.** Opening a room advances `last_seen_at`, and the digest filters on exactly that pointer, so the in-room card would always be empty. The cross-room card and page stay.
-13. ~~**Decisions "New decision" button:** navigate to `/chats`, since every decision in this build is promoted from a message and no standalone create form exists in the design.~~ **Answered: navigate to `/chats`.**
+13. **Decisions "New decision" button:** the board now opens a standalone creation form scoped to a server-readable conversation. Message promotion remains available from chat actions.
 
 Questions 5 and 6 are parked until the phases that need them (5 and 4 respectively). Questions 2 and 4 were needed for phase 3 and are now answered above.
 
@@ -244,11 +244,11 @@ Phase 5 left the following, and phase 7 should not re-litigate them:
 
 **Known gaps this phase does not close.** These are open, not oversights:
 
-- **No chat-list presence dots.** `room-presence` on join is a complete roster but `user-online` / `user-offline` are deltas with no initial roster, so a global presence map cannot be built without lying. `PresenceContext` is deliberately room-scoped and only draws dots in the open conversation.
+- **No chat-list presence dots.** Presence is intentionally room-scoped and is sent only to members subscribed to that room. `PresenceContext` draws presence only in the open conversation.
 - **Reply targets degrade when unloaded.** There is no `GET /messages/:id`, so a reply to a message outside the loaded window renders "an earlier message" rather than fetching.
 - **Room-level message search (`GET /messages/room/:roomId/search`) is unused.** The header search matches room names only, because that endpoint cannot search across rooms.
-- **The Tasks board does not update live for someone sitting on it.** `task:updated` is emitted to the task's room, and joining is per-room and on demand, so a cross-room viewer has not joined the rooms listed. Closing this needs a per-user subscription; the page refreshes on reload rather than pretending otherwise. Recorded in `tasks.controller.js` too.
-- **There is no standalone "create decision" form.** The endpoint accepts a decision with no source message, but every decision in this build is promoted from a message — the flow the design shows. "New decision" navigates to `/chats` for that reason.
+- **The Tasks board updates on personal `task:updated` events and on focus.** Members see the board; only the assignee changes progress, while creator/admin manage assignment and details.
+- **Standalone decisions are supported.** "New decision" opens a conversation-scoped form; message promotion links a decision to its source. See [DECISION_WORKFLOW.md](DECISION_WORKFLOW.md) for status, history, privacy and notification rules.
 - **The in-room catch-up digest card was removed, not deferred.** Opening a room advances that room's `last_seen_at`, and `getRoomDigest` filters against exactly that pointer — so a digest fetched in-room is always empty. Only the cross-room card and page read the pointer without moving it.
 
 **Bundle-size finding (DECIDED: leave alone).** Each file in `client/src/assets/icons/` is ~8 kB, of which ~97% is an embedded `<metadata>` C2PA provenance manifest; only ~270 bytes is the actual path. svgr carries that manifest into the bundle as a JSX string, so every distinct icon imported costs ~8 kB. Phases 4 and 5 went from 28 to 43 distinct icons, and the main chunk grew from 484 kB to 637 kB — roughly 116 kB of that is manifest text. Stripping `<metadata>` from the 90 icons would have cut the icon payload by ~92% (~665 kB of source), but it was considered and **explicitly declined** — the manifests stay. The practical consequence for later phases: every new icon import is a ~8 kB cost, so reuse existing glyphs rather than adding near-duplicates, and treat the chunk warning as expected rather than as a regression.
@@ -588,14 +588,153 @@ Notifications, Settings and DMs have no Penpot board, as DESIGN_QUESTIONS B1 and
 
 The icon sprite at `client/src/assets/icons/` covers almost everything the redesign calls for. The three below do not, and the repo rule is to stop and ask rather than draw a substitute, so they are listed here for Michael to supply.
 
-| File             | Needed for                                                   | Until it exists                                         |
-| ---------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
-| `sun.svg`        | Light theme indicator                                        | The switch uses the text label "Light" instead          |
-| `moon.svg`       | Dark theme indicator                                         | The switch uses the text label "Dark" instead           |
-| `arrow-down.svg` | The "jump to latest" pill in the conversation — section 6    | The pill has no glyph and cannot be built               |
+| File             | Needed for                                                | Until it exists                                |
+| ---------------- | --------------------------------------------------------- | ---------------------------------------------- |
+| `sun.svg`        | Light theme indicator                                     | The switch uses the text label "Light" instead |
+| `moon.svg`       | Dark theme indicator                                      | The switch uses the text label "Dark" instead  |
+| `arrow-down.svg` | The "jump to latest" pill in the conversation — section 6 | The pill has no glyph and cannot be built      |
 
 **Resolved without a new asset: the message Edit action.** The set has no pencil glyph, and rather than invent one that would break the 90-icon style contract, Edit reuses `compose.svg` — compose and edit are the same gesture, a pen writing on a surface. The row is built; no further action needed unless a dedicated `edit.svg` is supplied, in which case it swaps in at `MessageActions.jsx` and nothing else changes.
 
 **Separately, the logo.** Not a sprite entry. A brand asset for the slot currently drawn as an empty dashed box in `components/landing/Logo.jsx`, which appears in the landing nav, the auth screens and the footer. When it arrives it replaces that slot directly; nothing else in the component changes. There is no `og:image` on the landing either, for the same reason — pointing a share card at a missing image renders worse than shipping a text-only one, so that gets added at the same time.
 
 Everything else the remaining phases need already exists in the sprite: `sent` and `pending` ticks, `reaction`, `pin`, `attach`, `mention`, `reply`, `decisions`, `tasks`, `notify`, `compose`, `menu`, `close`, `chevron-*` and the rest.
+
+## Media outbox — 20 October 2026
+
+Media drafts and text now share `contexts/OutboxContext.jsx`. The account-level
+worker in `lib/outbox.js` survives route navigation and serializes uploads. The
+composer commits an entire selection to IndexedDB before closing the editor;
+`useMessages` derives local bubbles from these records and matches saved rows by
+`client_id`. Each media record has one Blob, caption, reply target, client ID and
+optional shared album ID. Files are retained in the outbox until acknowledgement
+or cancellation, independently of downloaded-media cache eviction.
+
+Upload success is checkpointed before the socket send. Lost acknowledgements
+retry the same client ID and attachment claim, without uploading again. Message-confirmation
+failures retry with bounded backoff; upload failures show the cause and require
+manual retry.
+Queued/uploading messages offer cancellation. An attempted delivery with an
+unknown outcome must be resolved before it can be discarded. IndexedDB write
+failures keep selected files in the editor or expose a send-progress error in
+the bubble. No file Blob or local object URL enters the socket payload.
+
+Session/profile and room metadata caches permit local history and pending media
+to open during a temporary API outage. The production service worker caches only
+the public shell and loaded `/assets/` modules. It does not cache API responses
+or private media. The account worker stops on logout or account changes; explicit
+logout clears device data under the existing logout policy. Uploads continue
+while the app is open and recover from persisted drafts on reopening.
+
+`media-outbox.spec.js` covers the editor, IndexedDB and message bubbles on desktop
+and mobile with mocked R2. `playwright.media-production.config.js` exercises the
+built application and its service worker with a real offline reload.
+
+### Media previews and receiving originals
+
+`mediaMetadata.js` generates bounded JPEG thumbnails (240 px maximum edge,
+12 KiB maximum bytes), image/video dimensions and available video duration before
+upload. The outbox checkpoints these display fields and includes them in the
+multipart `mediaMetadata` field. PDF first-page rendering is deferred.
+
+`useAttachmentImage` checks the sender's device copy, then a cached preview, then
+the inline thumbnail or an authorized Worker preview. Failed previews offer
+retry without downloading the original. The Worker allows credential-free CORS
+fetches of signed preview URLs; redeploy it to enable legacy preview caching.
+
+`useAttachmentDownload` uses the shared `mediaDownloads` controller for original
+bytes: available, downloading, downloaded and failed. Progress, cancel and retry
+are shared across consumers. Video players are mounted only after download.
+Manual opens/downloads always attempt to cache bytes independently of automatic
+download preferences. Photos, videos, documents and audio default to quiet
+background downloads, with two active transfers and per-type/network controls.
+Existing explicit device preferences are preserved.
+
+Media cache keys include the account and immutable file reference. Previews use
+a separate suffix and share a 250 MiB LRU budget with partial transfers.
+Completed originals remain until user removal or browser storage eviction.
+Clearing files invalidates active download indicators across tabs; account
+clearing also cancels queued/in-flight work for that account. Focus rechecks
+browser storage. Failed cache writes never claim offline availability; automatic
+transfers do not announce progress or success in message cards. These caches are separate from durable
+unsent Blobs; clearing downloaded media does not clear the outbox.
+
+Upload failures require explicit retry and display the cause in the bubble.
+Rate-limited retries respect the server's wait time. A connection event can start
+previously queued work, but cannot silently retry a failed upload. A completed
+upload followed by lost message acknowledgement still uses the safe automatic
+message retry path with its original client ID and uploaded reference.
+
+### Albums and resumable transfers
+
+`mediaAlbums` groups adjacent visual media from the same room, sender and album,
+respecting date/unread boundaries. Every tile retains its message identity and
+independent caption, actions and send state. `MediaViewerProvider` uses stable
+client IDs across acknowledgement replacement; it supports keyboard/swipe
+navigation, image zoom/pan and jump/highlight.
+
+`mediaUploads.service` reads upload capabilities. When direct uploads are enabled,
+`multipartUpload` checkpoints the server session before transferring bytes, skips
+server-confirmed parts on manual retry and finalizes before sending the message.
+R2 PUT requests use a separate client without the API bearer token. Failed uploads
+never retry automatically; cancelled sessions are also cancelled on the server.
+The server upload path remains available while direct uploads are disabled.
+
+`resumableDownload` stores completed 2 MiB chunks with their ETag in the account's
+cache. Range/If-Range requests resume missing chunks; an ETag change invalidates
+partial bytes. Legacy full responses remain supported. Partials share the 250 MiB
+cache budget and are removed after a successful full-cache write.
+
+Deployment and privacy rules are in [MEDIA_STORAGE.md](MEDIA_STORAGE.md).
+
+### Shared files
+
+`SharedMediaBrowser` on room/DM info pages browses Media, Documents and Audio
+using 24-item cursor pages. Loading, empty, failed-first-page and failed-next-page
+states are distinct; retrying a next page keeps existing rows. Switching sections
+or rooms cancels outstanding requests. A refresh starts a new first page.
+The device clear-history cutoff is also applied to shared files.
+
+Attachment previews and downloads use the existing private attachment components
+and account cache. Merely browsing does not force original downloads; existing
+explicit auto-download preferences continue to apply.
+
+Show message opens `/chats/:roomId?message=<id>`. `useMessages` requests a bounded
+history page ending at that anchor and the timeline scrolls/highlights it. Context
+views skip reconnect gap-filling and latest-history cache writes. Return to latest
+restores ordinary history; sending from a context view also returns to latest.
+Unavailable/deleted or locally cleared targets show a visible error.
+Migration 030 indexes attachment lookups for shared-file queries.
+
+The production service worker also claims clients during the ready-page asset
+handshake. This covers navigation during activation, when a ready worker may not
+have taken control of the newly opened document. Asset caching still accepts only
+same-origin `/assets/` URLs; private API responses remain outside the shell cache.
+
+### Media follow-up controls
+
+The attachment editor offers optional native video compression. It accepts videos
+up to 200 MiB for local processing, supports clips up to two minutes, caps the long
+edge at 1280 px and targets 2 Mbps video/128 kbps audio. Encoding runs in real time
+using canvas, MediaRecorder and Web Audio; audio is routed into the recording stream.
+MP4 or WebM is selected using codec support. The smaller result replaces the local
+file while retaining its caption. Unsupported/failed compression keeps the original;
+files above the 50 MiB send limit cannot be submitted. Cancelling or hiding the tab
+stops encoding. No transcoding service or encoding dependency is downloaded.
+
+`ForwardMessageDialog` queues reference-based forwards in the durable outbox.
+`forwardPreview` is device-only display metadata, separate from the socket payload's
+`forwardSource`. The server supplies the authoritative content and attachment fields.
+Forward destinations use saved conversation summaries so queued forwards can open
+while offline, including rooms not previously opened on the device.
+
+Settings controls automatic downloads by any connection, reported Wi-Fi/Ethernet,
+or a reported 4G-level speed estimate, and optionally respects Data Saver. Unknown
+connection details pause restricted automatic downloads. Network/preference changes
+cancel automatic transfers; a manual open promotes an active transfer to manual,
+so user-requested downloads remain available. Device copies and partial chunks keep
+the existing account scope and cache budget.
+
+Primary browser references: [canvas capture](https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/captureStream),
+[MediaRecorder codec support](https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder/isTypeSupported_static),
+[Data Saver](https://developer.mozilla.org/en-US/docs/Web/API/NetworkInformation/saveData).

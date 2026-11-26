@@ -1,5 +1,5 @@
 /**
- * A local, bounded copy of attachment bytes.
+ * Offline originals plus a bounded cache of previews and partial transfers.
  *
  * IndexedDB rather than localStorage. The two reasons are not decorative:
  * localStorage only stores strings, so every file would be base64'd and grow
@@ -12,216 +12,443 @@
  * and the URL is also the only key the sender has at upload time, before any
  * message row exists. One key, two callers, no reconciliation step.
  *
- * The store is capped by bytes, not by count: entries are `Blob`s of wildly
+ * Temporary previews and partial transfers are capped by bytes, not by count: entries are `Blob`s of wildly
  * different sizes, so a record limit would let a handful of videos occupy the
  * whole budget. Eviction is least-recently-*used* rather than oldest-inserted —
- * `lastUsedAt` is touched on every read, so a conversation the user scrolls
- * past daily keeps its images while a month-old PDF falls out.
+ * `lastUsedAt` is touched on every read. Completed originals are excluded from
+ * this eviction budget and remain until removal or browser storage eviction.
  *
  * Everything is best-effort. Private modes, storage pressure and quota errors
  * all degrade to "no cache", never to a failed render: a file the user can see
  * but not open is worse than one that re-downloads.
  */
 
-const DB_NAME = 'conclave-files';
-const DB_VERSION = 1;
-const STORE = 'files';
-
+const DB_NAME = "conclave-files";
 const MAX_BYTES = 250 * 1024 * 1024;
 
+// Blobs and their bookkeeping live in separate stores. Marking a file as
+// recently used then rewrites a few bytes of metadata, not the whole file.
 let dbPromise = null;
+let cacheEpoch = 0;
+const cacheChannel =
+  typeof window !== "undefined" && typeof BroadcastChannel === "function"
+    ? new BroadcastChannel("conclave-media-cache")
+    : null;
+cacheChannel?.addEventListener("message", (event) => {
+  const detail =
+    event.data && !Array.isArray(event.data)
+      ? event.data
+      : { keys: event.data };
+  if (detail.keys === null || detail.accountPrefix) cacheEpoch += 1;
+  window.dispatchEvent(
+    new CustomEvent("conclave:media-cache-removed", { detail }),
+  );
+});
+function cacheRemoved(keys = null, accountPrefix = null) {
+  const detail = { keys, accountPrefix };
+  cacheChannel?.postMessage(accountPrefix ? detail : keys);
+  if (typeof window !== "undefined")
+    window.dispatchEvent(
+      new CustomEvent("conclave:media-cache-removed", { detail }),
+    );
+}
 
-function openDb() {
-  if (dbPromise) return dbPromise;
-
-  dbPromise = new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') {
-      reject(new Error('IndexedDB unavailable'));
-      return;
-    }
-
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        const store = db.createObjectStore(STORE, { keyPath: 'url' });
-        store.createIndex('lastUsedAt', 'lastUsedAt');
-      }
-    };
-
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error('Could not open file cache'));
-    request.onblocked = () => reject(new Error('File cache blocked by another tab'));
-  }).catch((error) => {
-    // Cache the failure too: a browser without IndexedDB should not pay the
-    // open cost on every read.
-    dbPromise = null;
-    throw error;
-  });
-
+function open() {
+  if (typeof indexedDB === "undefined")
+    return Promise.reject(new Error("IndexedDB unavailable"));
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, 3);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains("files"))
+          db.createObjectStore("files", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("meta"))
+          db.createObjectStore("meta", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("roomMessages"))
+          db.createObjectStore("roomMessages", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("outbox"))
+          db.createObjectStore("outbox", { keyPath: "key" });
+        if (!db.objectStoreNames.contains("roomMetadata"))
+          db.createObjectStore("roomMetadata", { keyPath: "key" });
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onversionchange = () => {
+          db.close();
+          dbPromise = null;
+        };
+        resolve(db);
+      };
+      request.onerror = () => {
+        dbPromise = null;
+        reject(request.error);
+      };
+    });
+  }
   return dbPromise;
 }
 
-/**
- * Read every record's metadata (no blobs) to get the running total and an
- * eviction order.
- *
- * @returns {Promise<Array<{url: string, size: number, lastUsedAt: number}>>}
- */
-async function readMeta() {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readonly');
-    const request = tx.objectStore(STORE).getAll();
-    request.onsuccess = () => {
-      const rows = request.result || [];
-      resolve(
-        rows.map(({ url, size, lastUsedAt }) => ({
-          url,
-          size: Number(size) || 0,
-          lastUsedAt: Number(lastUsedAt) || 0,
-        })),
-      );
-    };
-    request.onerror = () => reject(request.error);
-  });
+function transact(stores, mode, work) {
+  return open().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const transaction = db.transaction(stores, mode);
+        let out;
+        transaction.oncomplete = () => {
+          resolve(out && "result" in out ? out.result : out);
+        };
+        transaction.onerror = () => {
+          reject(transaction.error);
+        };
+        transaction.onabort = () => {
+          reject(transaction.error);
+        };
+        try {
+          out = work(transaction);
+        } catch (error) {
+          // Synchronous failures must roll back earlier writes in the batch too.
+          transaction.abort();
+          reject(error);
+        }
+      }),
+  );
 }
 
-/**
- * Drop least-recently-used entries until `incoming` bytes fit under the cap.
- *
- * @param {number} incoming - size about to be written
- */
-async function evictToFit(incoming) {
-  let meta;
-  try {
-    meta = await readMeta();
-  } catch {
-    return;
-  }
-
-  let total = meta.reduce((sum, row) => sum + row.size, 0) + incoming;
-  if (total <= MAX_BYTES) return;
-
-  const oldestFirst = [...meta].sort((a, b) => a.lastUsedAt - b.lastUsedAt);
-
-  try {
-    const db = await openDb();
-    const tx = db.transaction(STORE, 'readwrite');
-    const store = tx.objectStore(STORE);
-    for (const row of oldestFirst) {
-      if (total <= MAX_BYTES) break;
-      store.delete(row.url);
-      total -= row.size;
-    }
-  } catch {
-    // Nothing to do: eviction is advisory.
-  }
+let persistAsked = false;
+function askToPersist() {
+  if (persistAsked) return;
+  persistAsked = true;
+  navigator.storage?.persist?.().catch(() => {});
 }
 
-/**
- * @param {string} url
- * @returns {Promise<Blob|null>} the cached bytes, or null on any miss
- */
-export async function getFile(url) {
-  if (!url) return null;
-
-  let db;
+/** The stored file for this key, or null. Never throws: the cache is best effort. */
+export async function readLocalFile(key) {
+  if (!key) return null;
   try {
-    db = await openDb();
-  } catch {
-    return null;
-  }
+    const record = await transact(["files"], "readonly", (t) =>
+      t.objectStore("files").get(key),
+    );
+    if (!record) return null;
 
-  try {
-    const row = await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readonly');
-      const request = tx.objectStore(STORE).get(url);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    // Touch so eviction drops what is untouched, not what is popular.
+    transact(["meta"], "readwrite", (t) => {
+      const store = t.objectStore("meta");
+      const request = store.get(key);
+      request.onsuccess = () => {
+        if (request.result)
+          store.put({ ...request.result, lastUsed: Date.now() });
+      };
+    }).catch(() => {});
 
-    if (!row?.blob) return null;
-
-    // Touch on read, not on insert, so "recently used" tracks the last time
-    // the user actually saw the file. Fire-and-forget: a failed touch must not
-    // fail the read it accompanies.
-    const touched = db.transaction(STORE, 'readwrite');
-    touched.objectStore(STORE).put({
-      ...row,
-      lastUsedAt: Date.now(),
-    });
-    touched.onerror = () => {};
-
-    return row.blob;
+    return record.blob;
   } catch {
     return null;
   }
 }
 
-/**
- * @param {string} url
- * @param {Blob|File} blob
- * @returns {Promise<boolean>} whether the file is now cached
- */
-export async function putFile(url, blob) {
-  if (!url || !blob) return false;
-
-  const size = blob.size || 0;
-  if (size > MAX_BYTES) return false;
-
+/** Store a file. Resolves once it is written, and swallows quota errors. */
+export async function saveLocalFile(key, blob, info = {}) {
+  if (!key || !blob) return false;
+  const epoch = cacheEpoch;
   try {
-    await evictToFit(size);
-
-    const db = await openDb();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put({ url, blob, size, lastUsedAt: Date.now() });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
+    askToPersist();
+    await transact(["files", "meta"], "readwrite", (t) => {
+      if (epoch !== cacheEpoch) throw new Error("Cache cleared");
+      t.objectStore("files").put({ key, blob });
+      t.objectStore("meta").put({
+        key,
+        size: blob.size,
+        filename: info.filename || null,
+        mime: info.mime || blob.type || null,
+        lastUsed: Date.now(),
+      });
     });
-    return true;
+    await trim();
+    return epoch === cacheEpoch && Boolean(await readLocalFile(key));
   } catch {
     return false;
   }
 }
 
-/**
- * Wipe everything.
- *
- * Called on sign-out. The cache is keyed by URL and URLs are per-account
- * signed or short-lived, and more to the point a shared device should not
- * still hold one user's conversation after another logs in — "cache" is a
- * performance detail, not a licence to retain.
- *
- * @returns {Promise<void>}
- */
-export async function clearLocalFiles() {
-  try {
-    const db = await openDb();
-    await new Promise((resolve) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).clear();
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
-    });
-  } catch {
-    // Nothing retained, or nothing to clear.
+async function trim(maxBytes = MAX_BYTES) {
+  const all = await transact(["meta"], "readonly", (t) =>
+    t.objectStore("meta").getAll(),
+  );
+  // Completed originals are retained until explicitly removed. Only disposable
+  // previews/transfer checkpoints use the automatic LRU budget.
+  const disposable = all.filter(
+    (entry) =>
+      entry.key.includes(":preview-v1:") || entry.key.includes(":part:"),
+  );
+  let total = disposable.reduce((sum, entry) => sum + (entry.size || 0), 0);
+  if (total <= maxBytes) return;
+
+  const oldestFirst = [...disposable].sort((a, b) => a.lastUsed - b.lastUsed);
+  const drop = [];
+  for (const entry of oldestFirst) {
+    if (total <= maxBytes) break;
+    drop.push(entry.key);
+    total -= entry.size || 0;
   }
 
-  try {
-    await new Promise((resolve) => {
-      const request = indexedDB.deleteDatabase(DB_NAME);
-      request.onsuccess = () => resolve();
-      request.onerror = () => resolve();
-      // Another tab may hold the DB open; the store is already empty, so this
-      // does not need to block sign-out.
-      request.onblocked = () => resolve();
+  await transact(["files", "meta"], "readwrite", (t) => {
+    drop.forEach((key) => {
+      t.objectStore("files").delete(key);
+      t.objectStore("meta").delete(key);
     });
+  });
+  cacheRemoved(drop);
+}
+
+export async function localFileUsage() {
+  try {
+    const all = await transact(["meta"], "readonly", (t) =>
+      t.objectStore("meta").getAll(),
+    );
+    return all.reduce((sum, entry) => sum + (entry.size || 0), 0);
   } catch {
-    // Ignore.
+    return 0;
   }
+}
+
+/** For logout and for a "clear downloaded media" button in Settings. */
+export async function clearLocalFiles() {
+  cacheEpoch += 1;
+  try {
+    await transact(["files", "meta"], "readwrite", (t) => {
+      t.objectStore("files").clear();
+      t.objectStore("meta").clear();
+    });
+    cacheRemoved();
+  } catch {
+    // Nothing stored, or storage unavailable.
+  }
+}
+
+export async function clearLocalData() {
+  cacheEpoch += 1;
+  try {
+    await transact(
+      ["files", "meta", "roomMessages", "outbox", "roomMetadata"],
+      "readwrite",
+      (t) => {
+        t.objectStore("files").clear();
+        t.objectStore("meta").clear();
+        t.objectStore("roomMessages").clear();
+        t.objectStore("outbox").clear();
+        t.objectStore("roomMetadata").clear();
+      },
+    );
+    cacheRemoved();
+  } catch {
+    /* local state is already unavailable */
+  }
+}
+
+export async function readRoomMessages(userId, roomId) {
+  if (!userId || !roomId) return [];
+  try {
+    return (
+      (
+        await transact(["roomMessages"], "readonly", (t) =>
+          t.objectStore("roomMessages").get(`${userId}:${roomId}`),
+        )
+      )?.messages || []
+    );
+  } catch {
+    return [];
+  }
+}
+
+export async function readRoomMetadata(userId, roomId) {
+  if (!userId || !roomId) return null;
+  try {
+    return (
+      (
+        await transact(["roomMetadata"], "readonly", (t) =>
+          t.objectStore("roomMetadata").get(`${userId}:${roomId}`),
+        )
+      )?.room || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function readChatList(userId) {
+  if (!userId) return [];
+  try {
+    return (
+      (
+        await transact(["roomMetadata"], "readonly", (t) =>
+          t.objectStore("roomMetadata").get(`chats:${userId}`),
+        )
+      )?.rooms || []
+    );
+  } catch {
+    return [];
+  }
+}
+
+export async function saveChatList(userId, rooms) {
+  if (!userId) return;
+  try {
+    await transact(["roomMetadata"], "readwrite", (t) =>
+      t.objectStore("roomMetadata").put({ key: `chats:${userId}`, rooms }),
+    );
+  } catch {
+    /* The last-known chat list is a cache, independent of the outbox. */
+  }
+}
+
+export async function saveRoomMetadata(userId, roomId, room) {
+  if (!userId || !roomId) return;
+  try {
+    await transact(["roomMetadata"], "readwrite", (t) =>
+      room
+        ? t
+            .objectStore("roomMetadata")
+            .put({ key: `${userId}:${roomId}`, room })
+        : t.objectStore("roomMetadata").delete(`${userId}:${roomId}`),
+    );
+  } catch {
+    /* Room metadata is a cache; the outbox is stored separately. */
+  }
+}
+
+export async function saveRoomMessages(userId, roomId, messages) {
+  if (!userId || !roomId) return;
+  try {
+    await transact(["roomMessages"], "readwrite", (t) =>
+      t.objectStore("roomMessages").put({
+        // Pending files belong to the durable outbox, never the evictable history.
+        key: `${userId}:${roomId}`,
+        messages: messages
+          .filter((message) => !message._optimistic)
+          .slice(-200),
+        savedAt: Date.now(),
+      }),
+    );
+  } catch {
+    /* local history is a best-effort cache */
+  }
+}
+
+export async function listOutbox(userId, roomId) {
+  if (!userId) return [];
+  const rows = await transact(["outbox"], "readonly", (t) =>
+    t.objectStore("outbox").getAll(),
+  );
+  return rows
+    .filter(
+      (row) => row.userId === userId && (!roomId || row.roomId === roomId),
+    )
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+export async function putOutbox(item) {
+  await putOutboxBatch([item]);
+}
+
+/** Commit the entire batch, including Blobs, before allowing any upload. */
+export async function putOutboxBatch(items) {
+  if (!items.length || items.some((item) => !item?.key || !item.userId))
+    throw new Error("Invalid message draft");
+  await transact(["outbox"], "readwrite", (t) => {
+    const store = t.objectStore("outbox");
+    items.forEach((item) => store.add(item));
+  });
+  askToPersist();
+}
+
+/** Checkpoints cannot resurrect a cancelled draft or a cleared account. */
+export async function updateOutbox(item) {
+  return transact(["outbox"], "readwrite", (t) => {
+    const result = { result: false };
+    const store = t.objectStore("outbox");
+    const request = store.get(item.key);
+    request.onsuccess = () => {
+      if (request.result?.userId !== item.userId) return;
+      store.put(item);
+      result.result = true;
+    };
+    return result;
+  });
+}
+
+/** Once delivery was attempted, its outcome must be resolved using clientId. */
+export async function cancelOutbox(key) {
+  return transact(["outbox"], "readwrite", (t) => {
+    const result = { result: false };
+    const store = t.objectStore("outbox");
+    const request = store.get(key);
+    request.onsuccess = () => {
+      if (!request.result || request.result.sendAttempted) return;
+      store.delete(key);
+      result.result = true;
+    };
+    return result;
+  });
+}
+
+export async function deleteOutbox(key) {
+  await transact(["outbox"], "readwrite", (t) =>
+    t.objectStore("outbox").delete(key),
+  );
+}
+
+/** Partial originals use the same bounded, evictable byte cache as full media. */
+export async function removeLocalFile(key) {
+  try {
+    await transact(["files", "meta"], "readwrite", (t) => {
+      t.objectStore("files").delete(key);
+      t.objectStore("meta").delete(key);
+    });
+    cacheRemoved([key]);
+  } catch {
+    /* Best effort. */
+  }
+}
+
+/** Account-scoped media usage; pending outbox Blobs are deliberately excluded. */
+export async function accountMediaUsage(userId) {
+  const rows = await transact(["meta"], "readonly", (t) =>
+    t.objectStore("meta").getAll(),
+  );
+  return rows
+    .filter((row) => row.key.startsWith(`media:${userId}:`))
+    .reduce((sum, row) => sum + (row.size || 0), 0);
+}
+export async function clearAccountMediaCache(userId) {
+  cacheEpoch += 1;
+  cacheRemoved(null, `media:${userId}:`);
+  const rows = await transact(["meta"], "readonly", (t) =>
+    t.objectStore("meta").getAll(),
+  );
+  const keys = rows
+    .filter((row) => row.key.startsWith(`media:${userId}:`))
+    .map((row) => row.key);
+  await transact(["files", "meta"], "readwrite", (t) =>
+    keys.forEach((key) => {
+      t.objectStore("files").delete(key);
+      t.objectStore("meta").delete(key);
+    }),
+  );
+  cacheRemoved(null, `media:${userId}:`);
+  return keys.length;
+}
+
+export async function listAccountDownloads(userId) {
+  const rows = await transact(["meta"], "readonly", (t) =>
+    t.objectStore("meta").getAll(),
+  );
+  return rows
+    .filter(
+      (row) =>
+        row.key.startsWith(`media:${userId}:`) &&
+        !row.key.includes(":preview-v1:") &&
+        !row.key.includes(":part:"),
+    )
+    .sort((a, b) => b.lastUsed - a.lastUsed);
 }

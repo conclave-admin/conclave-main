@@ -1,7 +1,9 @@
 # API Contracts
 
-Base URL: `http://localhost:5000/api`
-Auth: `Authorization: Bearer <accessToken>` on every route except `/auth/*` and `/health`.
+Base URL: `http://localhost:7000/api`
+Auth: `Authorization: Bearer <accessToken>` on protected routes. Public health,
+auth, and push configuration routes have their own rules; push renewal uses a
+scoped credential as documented below.
 
 Every response uses the same envelope, from `utils/apiResponse.js`:
 
@@ -20,46 +22,125 @@ on it.
 
 ---
 
+## Recoverable synchronization
+
+`GET /sync?after=<decimal cursor>` returns
+`{cursor, reset, changes, hasMore}`. Cursors are opaque decimal strings; retain
+their precision. Omit `after` for initial/full reconciliation. Invalid cursors
+return 400; expired/future cursors return `reset: true`. A page has up to 200
+authorized changes, each with `cursor`, `kind`, `operation`, `entity_id`,
+`room_id`, and `user_id`. Changes identify invalidated state and contain no body.
+Fetch current authorized state before persisting the returned cursor; continue
+while `hasMore` is true. Repeated changes and socket hints are safe to replay.
+
+`GET /messages/room/:roomId?ids=<comma-separated UUIDs>` returns
+`{messages, missingIds, nextCursor: null}` from an atomic per-viewer snapshot.
+Supply 1–200 IDs without another paging parameter. Current membership is required
+(403 after removal). Missing IDs are authoritative removals for this room.
+Message `sync_version` orders body/related-state updates; `sender_profile_version`
+separately orders sender metadata. Receipt summary versions retain their existing
+monotonic semantics. Preserve pending local outbox entries during reconciliation.
+
+`sync:changed {cursor}` on the personal socket channel is an invalidation hint,
+not an acknowledgement or message payload. Polling `/sync` recovers missed hints.
+
+## Browser push
+
+| Method | Route                 | Authorization / result                                                                  |
+| ------ | --------------------- | --------------------------------------------------------------------------------------- |
+| GET    | `/push/config`        | Public; `{configured, publicKey}`; no private key                                       |
+| POST   | `/push/subscriptions` | Bearer session; `{subscription}`; 201 with binding below                                |
+| DELETE | `/push/subscriptions` | Bearer session; `{endpoint}`; removes caller's endpoint                                 |
+| POST   | `/push/renew`         | `Authorization: PushRenew <renewalToken>`; `{subscription}`; rotates binding credential |
+
+Registration/renewal returns `{subscriptionId, bindingId, renewalToken, publicKey,
+sessionExpiresAt}`. Store the scoped renewal credential only for the current
+account/session. It cannot read messages or call authenticated APIs. Old tokens
+stop working after renewal; expired/revoked sessions cannot renew. Subscriptions
+must have a supported HTTPS provider endpoint and valid encryption keys.
+Unconfigured delivery returns 503. Registration and renewal are rate limited.
+
+Push payloads contain generic activity and a binding identifier. Current access,
+blocking, preferences, unread state, room mute and foreground presence are checked
+when dispatching. Notification socket events remain hints: clients refresh the
+authoritative list and unread total after delivery/seen events rather than
+subtracting `updated` deltas. See [setup and delivery guarantees](SYNC_AND_PUSH.md).
+
 ## Health
 
 | Method | Path      | Notes                                         |
 | ------ | --------- | --------------------------------------------- |
-| GET    | `/health` | Outside `/api`. No auth. → `{ status: 'ok' }` |
+| GET    | `/healthz` | Outside `/api`. No auth or Redis dependency. → `ok` |
+| GET    | `/health` | Backward-compatible liveness route. → `{ status: 'ok' }` |
 
 ## Auth
 
-Registration is open to everyone. Invitations control group collaboration, not
-account creation. Public group discovery/joining is not implemented; existing
-room reads require membership.
+Registration is open to everyone. Invitations control private-room
+collaboration, not account creation. Public rooms can be discovered and joined
+by signed-in users; room reads still require membership.
 
-| Method | Path           | Body                               | Returns                               | Notes                                                                                                                                                            |
-| ------ | -------------- | ---------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | /auth/register | `{ email, password, displayName }` | `{ user, accessToken, refreshToken }` | Validates email format, password 8–72 bytes. Email is stored lowercased.                                                                                         |
-| POST   | /auth/login    | `{ email, password }`              | `{ user, accessToken, refreshToken }` | Case-insensitive on email. Same 401 for unknown, soft-deleted, and wrong password.                                                                               |
-| POST   | /auth/refresh  | `{ refreshToken }`                 | `{ accessToken, refreshToken }`       | ⚠️ **Rotates.** The old token is revoked and a new one issued. **You must persist the returned `refreshToken`** or the user is signed out on the _next_ refresh. |
-| POST   | /auth/logout   | `{ refreshToken }`                 | `{ message }`                         | Revokes. Always returns success, so it cannot be used to probe a token.                                                                                          |
+| Method | Path           | Body                               | Returns                               | Notes                                                                                                                                                                        |
+| ------ | -------------- | ---------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | /auth/register | `{ email, password, displayName }` | `{ user, accessToken, refreshToken }` | Validates email format, password 8–72 bytes. Email is stored lowercased.                                                                                                     |
+| POST   | /auth/login    | `{ email, password }`              | `{ user, accessToken, refreshToken }` | Case-insensitive on email. Same 401 for unknown, soft-deleted, and wrong password.                                                                                           |
+| POST   | /auth/refresh  | `{ refreshToken }`                 | `{ accessToken, refreshToken }`       | ⚠️ **Rotates.** The old token is revoked and a new one issued. **You must persist the returned `refreshToken`** or the user is signed out on the _next_ refresh.             |
+| POST   | /auth/logout   | `{ refreshToken }`                 | `{ message }`                         | Revokes the stable session and all rotated refresh tokens, disconnecting its sockets on every API instance. Unknown tokens also return success; cluster failures return 503. |
 
 ⚠️ `user` is the same shape from register and login:
 `{ id, email, display_name, avatar_url, bio, created_at }`.
 
+### Durable sessions and realtime access
+
+Access and refresh JWTs contain `sid`, the stable `auth_sessions.id`. Every
+protected REST request, socket handshake and inbound socket action checks the
+session and account in PostgreSQL. Refresh rotates the token while preserving
+`sid`; logout revokes that session across devices sharing its tokens. Other
+independent logins remain active. Account deletion revokes all sessions.
+
+- `session:revoked { sessionId? }`: sign out and stop reconnecting.
+- `session:expired { sessionId }`: the server disconnects even idle sockets at
+  access-token expiry. Refresh the active session and reconnect.
+- Handshake error `data.code`: `AUTH_INVALID`, `ACCESS_EXPIRED`,
+  `SESSION_REVOKED`, or `AUTH_UNAVAILABLE`. Only temporary failures retry.
+- `room:members { roomId, userId, action, actorId, role? }`: `removed` / `left`
+  invalidate local room access; `joined` / `role` refresh membership controls.
+  Affected users receive changes through their personal channel after eviction.
+- `room:resync { roomId }`: rejoin/refetch after a failed removal rolled back.
+
+Room removal holds a database lock until every Redis-adapter peer acknowledges
+local socket eviction and presence/typing cleanup completes. Joining and typing
+use the same room lock so in-flight actions cannot restore revoked access.
+A failed acknowledgement rolls membership back and returns 503.
+
 ## Users
 
-| Method | Path      | Body                                       | Returns                              | Notes                                                                                                                                                          |
-| ------ | --------- | ------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | /users/me | —                                          | user                                 | 404 if soft-deleted.                                                                                                                                           |
-| PATCH  | /users/me | any of `display_name`, `avatar_url`, `bio` | user                                 | Whitelist-only. Per-field limits: 100 / 2048 / 1000 chars.                                                                                                     |
-| DELETE | /users/me | —                                          | `{ message }`                        | **Soft delete.** Anonymises the row, revokes all sessions, removes room memberships. Messages, decisions and tasks are preserved and render as "Deleted user". |
-| GET    | /users    | `?q=&page=`                                | `{ users, page, pageSize, hasMore }` | Directory for "add member" pickers. ⚠️ Soft-deleted users are excluded, but this currently returns every live user's email to any authenticated caller.        |
+| Method | Path                                  | Body                                       | Returns                              | Notes                                                                                                                                                              |
+| ------ | ------------------------------------- | ------------------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| GET    | /users/me                             | —                                          | user                                 | 404 if soft-deleted.                                                                                                                                               |
+| PATCH  | /users/me                             | any of `display_name`, `avatar_url`, `bio` | user                                 | Whitelist-only. Per-field limits: 100 / 2048 / 1000 chars.                                                                                                         |
+| GET    | /users/avatar-url?url=<opaque R2 key> | —                                          | `{ url, expiresAt }`                 | Authenticated. Signs an image only while it is an active user avatar or a room avatar visible to the caller.                                                       |
+| DELETE | /users/me                             | —                                          | `{ message }`                        | **Soft delete.** Anonymises the row, revokes all sessions, removes room memberships. Messages, decisions and tasks are preserved and render as "Deleted user".     |
+| GET    | /users                                | `?q=&page=`                                | `{ users, page, pageSize, hasMore }` | Authenticated directory; searches may match email, but responses never expose email addresses. Soft-deleted users are excluded.                                    |
+| GET    | /users/:userId/shared-rooms           | —                                          | `{ rooms }`                          | Lists rooms shared by the caller and target, excluding DMs. Used by the DM info page's “Groups in common” section.                                                 |
+| GET    | /users/:userId/block                  | —                                          | `{ blocked }`                        | Whether the caller has blocked the target.                                                                                                                         |
+| POST   | /users/:userId/block                  | —                                          | `{ userId, blocked }`                | Idempotent. Prevents new and existing direct messages between the pair.                                                                                            |
+| DELETE | /users/:userId/block                  | —                                          | `{ userId, blocked: false }`         | Removes the caller's block.                                                                                                                                        |
+| POST   | /users/:userId/report                 | `{ reason, details?, roomId? }`            | report                               | Records an open report. Reasons: `spam`, `harassment`, `inappropriate_content`, `impersonation`, `other`. When `roomId` is supplied, both users must belong to it. |
 
 ## Rooms
 
-| Method | Path                   | Body                          | Returns                                 | Notes                                                                                                                                                                                                                               |
-| ------ | ---------------------- | ----------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | /rooms                 | `{ name, type?, memberIds? }` | room + `members[]`                      | `type` ∈ `dm, group, public, private, department`. Caller becomes admin. A DM between the same pair is **not** duplicated — the existing one is returned with `existing: true`. Slug is derived server-side and cannot be supplied. |
-| GET    | /rooms                 | —                             | room[]                                  | Everything the sidebar needs in one round trip. Includes `slug`, `type`, `member_count`, `my_role`, `last_seen_at`, plus **`display_name`** and **`display_avatar`** (a DM returns the *other* member's identity, not the room title), **`has_message`**, **`last_message`** and **`unread_count`**. Ordered by last activity, then creation. |
-| GET    | /rooms/:roomId         | —                             | room + `members[]`                      | Membership required.                                                                                                                                                                                                                |
-| POST   | /rooms/:roomId/members | `{ userId }`                  | `{ roomId, userId, displayName, role }` | Admin only. 404 if the target is soft-deleted. Writes a `room_invite` notification row but does **not** emit it on the socket.                                                                                                      |
-| POST   | /rooms/:roomId/seen    | —                             | `{ roomId, lastSeenAt }`                | **Call this when a room is opened.** It is the only thing that advances `room_members.last_seen_at` apart from socket `leave-room`, and the entire digest depends on it.                                                            |
+| Method | Path                           | Body                                   | Returns                                 | Notes                                                                                                                                                                                                                                                                                                                                                                         |
+| ------ | ------------------------------ | -------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | /rooms                         | `{ name, type?, memberIds? }`          | room + `members[]`                      | `type` ∈ `dm, group, public, private, department`. Caller becomes admin. A DM between the same pair is **not** duplicated — the existing one is returned with `existing: true`. Slug is derived server-side and cannot be supplied.                                                                                                                                           |
+| GET    | /rooms                         | —                                      | room[]                                  | Everything the sidebar needs in one round trip. Includes `slug`, `type`, `member_count`, `my_role`, `last_seen_at`, plus **`display_name`** and **`display_avatar`** (a DM returns the _other_ member's identity, not the room title; groups return their room photo), **`has_message`**, **`last_message`** and **`unread_count`**. Ordered by last activity, then creation. |
+| GET    | /rooms/discover                | `?q=&page=`                            | `{ rooms, page, hasMore }`              | Authenticated directory of public rooms the caller has not joined. Search matches room name or description; page size is 25.                                                                                                                                                                                                                                                  |
+| POST   | /rooms/:roomId/join            | —                                      | `{ roomId, joined, existing }`          | Joins a public room. Idempotent; private rooms return 403. Membership is required before reading messages.                                                                                                                                                                                                                                                                    |
+| GET    | /rooms/:roomId                 | —                                      | room + `members[]`                      | Membership required. Member profiles include `bio` and `account_created_at` alongside room role, join time, and room-scoped last-seen/read pointers. Email addresses are never included.                                                                                                                                                                                      |
+| POST   | /rooms/:roomId/members         | `{ userId }`                           | `{ roomId, userId, displayName, role }` | Admin only. 404 if the target is soft-deleted. Writes a `room_invite` notification row but does **not** emit it on the socket.                                                                                                                                                                                                                                                |
+| POST   | /rooms/:roomId/seen            | —                                      | `{ roomId, lastSeenAt }`                | **Explicit mark-all-read action only.** Marks existing recipient receipts read and delivered, advances the room pointer, and emits receipt and room-seen updates. Automatic timeline reads use message-read; opening or leaving a room does not mark it all read.                                                                                                             |
+| PATCH  | /rooms/:roomId                 | `{ name?, description?, avatar_url? }` | room                                    | Admin only; DMs cannot be edited as rooms. Group avatar uploads are selected from the room info page.                                                                                                                                                                                                                                                                         |
+| DELETE | /rooms/:roomId/members/:userId | —                                      | `{ roomId, userId, removed }`           | Members may remove themselves to leave. Only admins may remove another member; a room must retain an admin.                                                                                                                                                                                                                                                                   |
+| PATCH  | /rooms/:roomId/members/:userId | `{ role: "admin"                       | "member" }`                             | `{ roomId, userId, role }`                                                                                                                                                                                                                                                                                                                                                    | Admin only. DMs have no member roles. |
 
 ### The chat-list row
 
@@ -84,22 +165,28 @@ room reads require membership.
 }
 ```
 
-`unread_count` counts messages sent **after `last_seen_at`** that are neither
-your own nor tombstones — a badge pointing at deleted content would open into
+`unread_count` counts messages beyond the contiguous `last_seen_sequence`
+that are neither your own nor tombstones, excluding individually acknowledged
+read receipts even when an earlier unread gap remains — a badge pointing at deleted content would open into
 nothing. It is computed by the same SQL as `chat:updated`, so a row and its
 badge can never disagree.
 
 ## Messages
 
-| Method | Path                          | Body                                             | Returns                    | Notes                                                                                                                                                                                                                                                                                                                |
-| ------ | ----------------------------- | ------------------------------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | /messages                     | `{ roomId, content?, replyToId?, attachments?, mentionedUserIds? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. `attachments[]` is `{ url }` only, max 10 files. Send the `url` returned by `POST /upload`; `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. `mentionedUserIds[]` is the ids of users the message mentions — see below. |
-| GET    | /messages/room/:roomId        | `?before=<cursor>`                               | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. Feed it into "load older"; it is currently discarded client-side.                                                                                                                                                         |
-| GET    | /messages/room/:roomId/search | `?q=`                                            | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns the **same message shape** as `listMessages`, plus a `rank`.                                                                                                                                                                                          |
-| PATCH  | /messages/:messageId          | `{ content }`                                   | message                    | Author only, no time limit. Sets `edited_at`. Empty content is a 400 unless the message has an attachment. Mentions and notifications are **not** affected.                                                                                                                                        |
-| DELETE | /messages/:messageId          | —                                                | message                    | Author **or room admin**. Soft delete: sets `deleted_at` and overwrites `content` to NULL. Returns the tombstone (`is_deleted: true`).                                                                                                                                                                   |
-| PUT    | /messages/:messageId/reactions | `{ emoji }`                                    | message                    | Idempotent — reacting twice does not stack. `emoji` ∈ `👍 👎 🎉 ✅`; anything else is a 400.                                                                                                                                                                          |
-| DELETE | /messages/:messageId/reactions/:emoji | —                                    | message                    | Removes your own reaction. `emoji` must be URL-encoded. Removing an absent reaction succeeds.                                                                                                                                                                          |
+| Method | Path                                  | Body                                                                                     | Returns                    | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------ | ------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | /messages                             | `{ roomId, clientId?, content?, replyToId?, attachments?, albumId?, mentionedUserIds? }` | message                    | ⚠️ `content` may be **empty if `attachments` is non-empty** — a file-only message is valid. Both empty is a 400. Each message may attach at most one `{ url }` returned by `POST /upload`; a multi-item send creates one message per item and shares a UUID `albumId`. `filename`, `mime_type` and `size` are read from the upload record and any values you send are ignored. `mentionedUserIds[]` is the ids of users the message mentions — see below. |
+| GET    | /messages/room/:roomId                | `before?, afterSeq?, around?`                                                            | `{ messages, nextCursor }` | Newest first. ⚠️ `nextCursor` is an **opaque string** — pass it straight back as `before`. The client uses it to load older history. `around` opens a bounded shared-message context; see below.                                                                                                                                                                                                                                                          |
+| GET    | /messages/room/:roomId/search         | `?q=`                                                                                    | `{ messages, query }`      | Full-text, room-scoped. Excludes deleted messages. Returns the **same message shape** as `listMessages`, plus a `rank`.                                                                                                                                                                                                                                                                                                                                   |
+| GET    | /messages/room/:roomId/media          | `kind?, cursor?, limit?, after?`                                                         | `{ media, nextCursor }`    | Membership required. Bounded shared-file pages; see below.                                                                                                                                                                                                                                                                                                                                                                                                |
+| PATCH  | /messages/:messageId                  | `{ content }`                                                                            | message                    | Author only, no time limit. Sets `edited_at`. Empty content is a 400 unless the message has an attachment. Mentions and notifications are **not** affected.                                                                                                                                                                                                                                                                                               |
+| DELETE | /messages/:messageId                  | —                                                                                        | message                    | Author **or room admin**. Soft delete: sets `deleted_at` and overwrites `content` to NULL. Returns the tombstone (`is_deleted: true`).                                                                                                                                                                                                                                                                                                                    |
+| PUT    | /messages/:messageId/reactions        | `{ emoji }`                                                                              | message                    | Idempotent — reacting twice does not stack. `emoji` ∈ `👍 👎 🎉 ✅`; anything else is a 400.                                                                                                                                                                                                                                                                                                                                                              |
+| DELETE | /messages/:messageId/reactions/:emoji | —                                                                                        | message                    | Removes your own reaction. `emoji` must be URL-encoded. Removing an absent reaction succeeds.                                                                                                                                                                                                                                                                                                                                                             |
+
+“Clear messages for me” is client-side and per signed-in user/device: it hides
+messages at or before the local clear time while leaving shared room history
+untouched. New messages remain visible.
 
 A message row is:
 
@@ -162,11 +249,16 @@ The socket `receive-message` event returns this **same shape** — including fla
 
 | Method | Path                           | Body                                               | Returns                     | Notes                                                                                                              |
 | ------ | ------------------------------ | -------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| POST   | /decisions                     | `{ roomId, title, body, tags?, sourceMessageId? }` | decision                    | Membership required. Returns the **same shape as the list**, including `room_name`, `room_slug` and `author_name`. |
-| GET    | /decisions                     | `?roomId=&before=`                                 | `{ decisions, nextCursor }` | Cross-room by default. Omit `roomId` for every room the caller is in.                                              |
-| GET    | /decisions/search              | `?q=`                                              | `{ decisions, query }`      | Cross-room search. ⚠️ A tag-only hit **matches but does not rank** — it sorts by date.                             |
-| GET    | /decisions/room/:roomId        | —                                                  | `{ decisions, nextCursor }` | Room-scoped, kept for compatibility.                                                                               |
-| GET    | /decisions/room/:roomId/search | `?q=`                                              | `{ decisions, query }`      | Room-scoped search.                                                                                                |
+| POST   | /decisions                     | `{ roomId, title, body, tags?, sourceMessageId?, clientId? }` | decision | Membership required. A repeated `clientId` from the same author returns the original record. |
+| GET    | /decisions                     | `?roomId=&before=&status=&pinned=`                 | `{ decisions, nextCursor }` | Cross-room by default. Status is `all`, `active` or `retracted`. |
+| GET    | /decisions/overview            | — | `{ active, retracted, with_open_tasks, follow_ups_done }` | Counts across current conversations. |
+| GET    | /decisions/search              | `?q=&roomId=&after=&status=`                       | `{ decisions, query, nextCursor }` | Ranked search with stable cursor pagination. Tag-only hits match with rank zero. |
+| GET    | /decisions/room/:roomId        | `?before=&status=&pinned=`                          | `{ decisions, nextCursor }` | Room-scoped, kept for compatibility. |
+| GET    | /decisions/room/:roomId/search | `?q=&after=&status=`                                | `{ decisions, query, nextCursor }` | Room-scoped search. |
+| GET    | /decisions/:decisionId         | —                                                  | decision                    | Current members only. |
+| PATCH  | /decisions/:decisionId         | `{ version, title, body, tags }`                    | decision                    | Author or room admin; version conflict returns 409. |
+| POST   | /decisions/:decisionId/retract | `{ version, reason }`                               | decision                    | Keeps revision history and removes the room pin. |
+| GET    | /decisions/:decisionId/history | `?before=`                                         | `{ revisions, nextCursor }` | 20 revisions per page, newest first. |
 
 A decision row:
 
@@ -182,7 +274,12 @@ A decision row:
   "tags": ["urgent"],
   "created_by": "uuid",
   "author_name": "Victor",
-  "created_at": "ISO"
+  "created_at": "ISO",
+  "updated_at": "ISO",
+  "status": "active",
+  "version": 1,
+  "follow_up": { "total": 2, "done": 1 },
+  "capabilities": { "canManage": true, "canUnpinRoom": false }
 }
 ```
 
@@ -190,28 +287,59 @@ A decision row:
 
 | Method | Path                 | Returns              | Notes                                                                                                      |
 | ------ | -------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------- |
-| GET    | /digest              | `{ items, summary }` | Cross-room. Each room is filtered by **its own** `last_seen_at`, so one unread room does not hide another. |
-| GET    | /digest/room/:roomId | `{ items, summary }` | Room-scoped.                                                                                               |
+| GET    | /digest              | `{ items, next_cursor, rooms, snapshot_at, summary }` | Cross-room. Each room is filtered by its own `digest_seen_at`. Accepts `cursor` to load older events. |
+| GET    | /digest/room/:roomId | `{ items, next_cursor, rooms, snapshot_at, summary }` | Room-scoped. Accepts `cursor`. |
+| POST   | /digest/read         | `{ rooms, digestSeenAt }` | Accepts `{ roomId?, roomIds?, observedAt? }`. Clears the selected room(s) through the observed snapshot. |
 
 ```json
 {
   "items": [
     {
       "id": "uuid",
-      "type": "decision | task | mention | file | activity",
+      "type": "decision | task | mention | file | pin",
+      "event_id": "stable event identifier",
+      "action": "recorded | edited | retracted | assigned | reassigned | progress | completed | reopened | note | created | mentioned | shared | pinned",
       "title": "…",
-      "metadata": "… or null",
+      "preview": "… or null",
+      "actor_name": "… or null",
+      "message_id": "uuid or null",
       "room_id": "uuid",
       "room_name": "Product & Engineering",
-      "created_at": "ISO"
+      "created_at": "ISO",
+      "sort_at": "ISO timestamp with microseconds",
+      "priority": 1
     }
   ],
-  "summary": { "headline": "5 meaningful updates", "summary": "…" }
+  "rooms": [{ "room_id": "uuid", "room_name": "Product & Engineering" }],
+  "snapshot_at": "ISO",
+  "next_cursor": "opaque cursor or null",
+  "summary": { "headline": "5 updates worth a look", "summary": "…" }
 }
 ```
 
-⚠️ `type` is the only display hint the backend sends. The type→label/colour
-mapping belongs in the client. **Handle an unknown `type` without throwing** — a
+Decision revisions and task creation/updates appear as separate events. Task
+progress notes are visible to every current room member. Opening an item does
+not mark the digest as read. The client sends `snapshot_at` as `observedAt` when
+clearing, so events timestamped after the view loaded remain in the digest.
+The digest contains direct mentions, decision and task changes, shared files,
+and room-wide pins made since that room's digest pointer. A file in a message
+that directly mentions the viewer appears through the mention, once. Ordinary message
+traffic stays in the chat list and does not create a digest item. The summary
+and chat-list catch-up card count these same items.
+The viewer's own actions are excluded from catch-up items.
+Responses are capped at 50 items, ordered by priority and then newest first. The cursor carries
+the first page's snapshot and the last event position; use it to load older
+items without moving the snapshot. When `next_cursor` is present, the summary
+describes the latest page and the headline uses a `+` suffix. Within a loaded
+page, the client groups by room and puts direct mentions and assignments first.
+Each response reads all categories in one repeatable database snapshot.
+Task edit events preserve the title, assignment and due-date changes recorded
+at edit time, and status and note events snapshot the title shown at their creation.
+Older task updates created before the digest history migration
+have only their previously stored fields.
+
+`type` and `action` describe the event. Display copy and colours belong in the
+client. **Handle an unknown `type` or `action` without throwing** — a
 single unrecognised value should not take the page down.
 
 `type: "mention"` items come from the `message_mentions` table, joined by id —
@@ -223,9 +351,9 @@ rows, where a name may have changed since the message was sent.
 
 ## File upload
 
-| Method | Path    | Status | Body             | Returns                              |
-| ------ | ------- | ------ | ---------------- | ------------------------------------ |
-| POST   | /upload | 201    | multipart `file` | `{ filename, url, mime_type, size }` |
+| Method | Path    | Status | Body             | Returns                                                          |
+| ------ | ------- | ------ | ---------------- | ---------------------------------------------------------------- |
+| POST   | /upload | 201    | multipart `file` | `{ filename, url, mime_type, size, width, height, preview_url }` |
 
 Auth required. 25MB maximum. The response is wrapped in the standard
 `{ success, data }` envelope, so read it from `data`.
@@ -235,15 +363,25 @@ Auth required. 25MB maximum. The response is wrapped in the standard
   "success": true,
   "data": {
     "filename": "checklist.pdf",
-    "url": "https://res.cloudinary.com/…/checklist_abc123.pdf",
+    "url": "r2://conclave-uploads/conclave/attachments/<opaque-key>",
     "mime_type": "application/pdf",
     "size": 4096
   }
 }
 ```
 
-Errors: **400** no file · **413** over 25MB · **415** disallowed type · **502**
-Cloudinary unavailable · **503** not configured on this server.
+Errors: **400** no file · **413** over the type-specific limit (25MB, or 50MB
+for video) · **415** disallowed type · **502** storage unavailable · **503**
+R2 is not configured. Upload bytes are stored server-side in Cloudflare R2; the
+opaque `url` is only an attachment claim key. Downloads use the authenticated
+attachment proxy, which checks room membership. Existing Cloudinary attachments
+continue to use the legacy delivery path.
+
+For image attachments, `GET /attachments/:attachmentId/preview-url` checks room
+membership and returns a five-minute HMAC URL for the private image-preview
+Worker. The Worker transforms the R2 original into one fixed WebP preview and
+checks the token before consulting its edge cache. Legacy and unsupported image
+types return `url: null` and continue through the authenticated original path.
 
 **Send only `url` back.** `POST /messages` takes `attachments: [{ url }]` and
 resolves `filename`, `mime_type` and `size` from the upload record, so any
@@ -252,59 +390,39 @@ message**, by the user who uploaded it — a second use is a 400.
 
 Accepted types: images (`jpeg`, `png`, `gif`, `webp`, `svg`), documents (`pdf`,
 plain text, markdown, csv), Word, Excel and PowerPoint (both `.docx`-style and
-legacy), `zip`, `gzip`, and audio (`mpeg`, `ogg`, `wav`, `webm`, `mp4`).
-**Video is not accepted yet.**
+legacy), `zip`, `gzip`, audio (`mpeg`, `ogg`, `wav`, `webm`, `mp4`) and video
+(`mp4`, `webm`, `quicktime`, `3gpp`).
 
 ## Tasks
 
-| Method | Path                  | Status | Body / query                                                 | Returns     |
-| ------ | --------------------- | ------ | ------------------------------------------------------------ | ----------- |
-| POST   | /tasks                | 201    | `{ roomId, title, assigneeId?, dueDate?, sourceMessageId? }` | task        |
-| GET    | /tasks                | 200    | `?roomId=`, `?status=`, `?assigneeId=`                       | `{ tasks }` |
-| GET    | /tasks/room/:roomId   | 200    | same filters                                                 | `{ tasks }` |
-| PATCH  | /tasks/:taskId/status | 200    | `{ status }` ∈ `open \| in_progress \| done`                 | task        |
+| Method | Path | Body / query | Returns |
+| --- | --- | --- | --- |
+| POST | /tasks | `{ roomId, title, body?, assigneeId?, dueDate?, sourceMessageId?, decisionId?, clientId? }` | task (201) |
+| GET | /tasks | `?roomId=&status=&assigneeId=&decisionId=&before=` | `{ tasks, nextCursor }` |
+| GET | /tasks/room/:roomId | Same filters | `{ tasks, nextCursor }` |
+| GET | /tasks/:taskId | `?before=` for older activity | `{ task, updates, nextCursor }` |
+| PATCH | /tasks/:taskId | `{ title, body, assigneeId, dueDate }` | task |
+| PATCH | /tasks/:taskId/status | `{ status }` (`open`, `in_progress`, `done`) | task |
+| POST | /tasks/:taskId/updates | `{ body }` | task (201) |
 
-Auth required. `GET /tasks` is **cross-room** — the Tasks page is top-level — and
-scoped to rooms you are a member of. `GET /tasks/room/:roomId` delegates to the
-same handler. Every task row has the same shape from all three endpoints:
+Only current room members can read a task. A member who is neither its assignee,
+creator nor an admin can view its details and activity, but cannot change them.
+Only the current assignee can change status or add a progress note. The creator
+and room admins can edit the title, instructions, deadline and assignment. They
+cannot change progress unless assigned to the task. Unassigned tasks have no
+progress owner until assigned. Room membership is checked on every request.
+`decisionId` must name an active decision in the same conversation. Task payloads
+include `decision_id`, `decision_title`, and `decision_status` when linked.
 
-```json
-{
-  "id": "uuid",
-  "room_id": "uuid",
-  "room_name": "Product Engineering",
-  "source_message_id": null,
-  "title": "Confirm upload limits",
-  "assignee_id": "uuid",
-  "assignee_name": "Priya",
-  "status": "open",
-  "due_date": "2026-08-22",
-  "created_by": "uuid",
-  "created_at": "ISO",
-  "updated_at": "ISO"
-}
-```
-
-`assignee_name` is `null` for an unassigned task — those rows are still returned.
-`due_date` is a `YYYY-MM-DD` calendar-date string or null, independent of the
-server timezone. Create, list and status-update responses use the same shape.
-
-Ordering is `due_date` ascending with undated tasks **last**, then newest first.
-
-`POST /tasks` requires you to be in the room. `sourceMessageId`, if given, must be
-an undeleted message **in that room**, and `assigneeId` must be a member of it —
-assigning to a non-member produces a task that assignee can never see, since their
-digest filters on `assignee_id` within a room they cannot open.
-
-`PATCH` returns **404** for a task in a room you are not in, rather than 403, so
-it does not confirm the id exists.
-
-Creating or updating a task emits **`task:updated`** to the task's room.
-
-⚠️ That event only reaches sockets that have joined that room, and joining is
-on-demand — so the **top-level cross-room Tasks page will not update live**, only
-on reload. The response body carries the updated task, so the client that made the
-change is not left stale.
+Source messages must be visible, undeleted messages
+in the same room. Assignees must be current room members. Due dates are calendar
+strings (`YYYY-MM-DD`), and list pages are sorted by due date, with undated tasks
+last. Each page contains at most 50 tasks. Activity pages contain at most 20
+entries. Repeating a create with the same `clientId` from the same creator returns
+the original task without another assignment notification. Apply migrations 045
+and 046 before deploying this client. `task:updated` sends identifiers to current room members' personal
+sockets; the client refetches with its own permissions. New assignments notify
+the assignee. A removed member receives neither task data nor updates.
 
 ## Notifications
 
@@ -353,9 +471,9 @@ from your badge. A repeated `all: true` returns `0`.
 Errors: **400** neither `notificationId` nor `all: true` · **404** no such
 notification of yours.
 
-Types currently written: `room_invite` (on being added to a room) and `mention`.
-`new_message`, `file_uploaded` and `member_joined` are accepted by the service but
-nothing writes them yet.
+Types currently written: `room_invite` (on being added to a room), `member_joined`
+(on joining a public room), and `mention`. `new_message` and `file_uploaded` are
+accepted by the service but nothing writes them yet.
 
 ## Not built yet
 
@@ -368,13 +486,11 @@ an existing DM by user id, home summary, or a global cross-room search. See
 ## Socket events
 
 Server → client, as documented at the top of `backend/src/sockets/index.js`:
-`receive-message`, `chat:updated`, `user-online`, `user-offline`,
-`room-presence`, `room-typing`, `typing`, `stop-typing`, `message-read`,
+`receive-message`, `chat:updated`, `room-presence`, `room:members`, `room-typing`, `typing`, `stop-typing`, `start-recording`, `stop-recording`, `privacy:changed`, `message-read`, `message-delivered`, `message:receipts`,
 `task:updated`, `message:updated`, `message:deleted`, `message:reaction`,
 `notification`, `notification:seen`, and `error:message`.
 
-`chat:updated { roomId, lastMessage, unreadCount }` is the **only** event that
-is not broadcast to the chat room: it goes to each member's personal channel
+`chat:updated { roomId, lastMessage, unreadCount }` goes to each member's personal channel
 (`user:<id>`), because `unreadCount` is one person's number. It fires after every
 message create, edit and delete, so a sidebar row updates without being opened.
 `lastMessage` is `null` for a room with nothing in it, and carries
@@ -389,10 +505,352 @@ Errors are emitted on **`error:message`**, not `error` — Socket.IO reserves
 `error` for its own internals.
 
 Client → server payloads: `join-room { roomId }`, `leave-room { roomId }`,
-`send-message { roomId, content, replyToId?, attachments?, mentionedUserIds? }`,
-`typing { roomId }`, `stop-typing { roomId }`, `message-read { roomId, messageId }`,
-`heartbeat {}`.
+`send-message { roomId, clientId?, content?, replyToId?, attachments?, albumId?, mentionedUserIds? }`,
+`typing { roomId }`, `stop-typing { roomId }`, `start-recording { roomId }`,
+`stop-recording { roomId }`, `message-read { roomId, messageId }`,
+`message-delivered { roomId, messageId }`,
+`heartbeat { foreground?, roomId?, revision? }`.
+
+### Presence and foreground attention
+
+`room-presence` carries a complete, membership-scoped snapshot:
+
+```json
+{
+  "roomId": "uuid",
+  "available": true,
+  "onlineUserIds": [],
+  "viewingUserIds": [],
+  "typingUserIds": [],
+  "recordingUserIds": [],
+  "hiddenUserIds": [],
+  "activity": [],
+  "activityVersion": 12,
+  "checkedAt": 1792670400000
+}
+```
+
+- **Online** means at least one authenticated device has a fresh socket lease,
+  including a connected device elsewhere in Conclave or in a background tab.
+- **Viewing this conversation** additionally requires a visible, focused chat
+  timeline. Subscribing to a room or opening its info page does not imply viewing.
+- **Typing** is temporary; the presence label expires it after five seconds.
+- **Offline** comes from an available, fresh snapshot with no live device.
+- **Unknown** is shown as “Presence unavailable” while disconnected, after resume
+  pending a new snapshot, during a storage outage, or after 45 seconds without a
+  fresh snapshot. Read pointers are never presented as last-seen presence.
+
+Clients send a heartbeat every 15 seconds and immediately on route, focus,
+visibility, online, and page-resume changes. `foreground` is a boolean, `roomId`
+is the active timeline UUID or null, and `revision` increases per device update.
+Delayed older revisions cannot restore an outdated foreground state. The server
+checks room membership before accepting a viewing claim. Legacy empty heartbeats
+renew connectivity without claiming foreground attention.
+
+Heartbeat acknowledgements return `{ ok: true, data: { available, checkedAt } }`.
+`presence:unavailable` invalidates cached snapshots; `presence:resync` asks clients
+to send a fresh heartbeat. Room subscriptions receive full snapshots on join and
+heartbeat. Online/viewing changes are broadcast only to rooms the user belongs to.
+
+Each device lease lasts 45 seconds. A sweep runs every 10 seconds, atomically
+removing expired device, room, typing, and reverse-index records without removing
+another device's renewed lease. Index reconciliation runs approximately once per
+minute. Heartbeats rebuild indexes after Redis data loss using current socket
+subscriptions and locked database membership checks. Redis outages report
+unknown presence; they do not manufacture offline snapshots.
+
+### Typing, recording, and activity privacy
+
+The composer emits typing at most once every 2.5 seconds while text changes,
+with a stop after three idle seconds. Recording pulses every 2.5 seconds only
+while capture is active. Blur, blank input, sending, navigation, disconnect,
+and background transitions stop typing. Blur, navigation, disconnect, and
+background transitions also stop recording indicators. Backgrounding finishes active
+microphone capture; late permission grants after navigation release their tracks.
+Recorder errors and ended microphone tracks stop recording indicators and release
+the microphone.
+
+The server requires membership, a room subscription, a fresh device lease, and
+foreground viewing before accepting a positive activity event. It limits each
+socket to 24 indicator events per 10 seconds before session verification and
+limits positive events to 120 per minute per account across Redis-backed instances.
+Negative events skip the account start limit. Activity acknowledgements return
+`{ ok: true, data: { roomId, accepted } }`; invalid membership or subscription
+returns 403, throttling returns 429, and unavailable activity storage rejects
+positive events with 503.
+
+Activity is stored per device for five seconds. A stop, send, leave, or disconnect
+clears that device; other devices remain active. Event ordering prevents delayed
+starts from undoing newer stops or foreground changes. Full `room-presence` and
+`room-typing` snapshots include `activity` entries shaped as
+`{ userId, kind: "typing" | "recording", ttlMs }`. Clients expire both snapshots
+and incremental events using their remaining TTL. `activityVersion` is a shared,
+increasing room revision; clients reject older activity snapshots and deltas.
+Legacy deltas carry `{ roomId, userId, ttlMs, activityVersion }` and reflect the
+user's aggregate state rather than the originating device alone.
+
+Snapshots are filtered per subscribed member. A block in either direction hides
+online, viewing, typing, and recording between the two users, including in shared
+rooms. Other room members still receive their allowed activity. Block/unblock
+emits `privacy:changed { userId, hidden }` to both users' personal channels,
+invalidates client activity, and refreshes shared-room snapshots. Reverse blocks
+remain effective after one user unblocks. Hidden peers display unknown presence.
+Device IDs, audio content, and microphone permissions are not broadcast.
+These changes require no new migration or environment variables.
 
 `send-message` takes the same body as `POST /messages` and returns the same
 message row on `receive-message`. Pass `mentionedUserIds` — see the warning above
 for what omitting it costs.
+
+### Message receipts and send-time recipients
+
+Migration `033_message_receipts.sql` snapshots every message's recipients in the
+same transaction as insertion. This includes text, media, forwards and polls.
+The sender is excluded. Joining, leaving, removal, rejoining, and account deletion
+do not add or remove the original recipients. These rows never grant access to
+a conversation or its attachments.
+
+Message payloads on creation, history, search, pins, edits, deletions and reactions
+include `receipt_summary`:
+
+```json
+{
+  "recipient_count": 3,
+  "delivered_count": 3,
+  "read_count": 1,
+  "history_complete": true,
+  "version": 4
+}
+```
+
+- **Sent:** the server stored the message. A single recipient's acknowledgement
+  does not change a group's tick.
+- **Delivered:** every original recipient acknowledged the message on at least
+  one device. This acknowledges message metadata, not a media download.
+- **Read:** every original recipient acknowledged that specific message as read.
+  Reading also implies delivery. Partial reads remain delivered if everybody
+  received the message, otherwise sent.
+- With zero recipients, or incomplete historical recipient data, the tick stays
+  sent. Pending, queued and failed outbox states still take precedence.
+- A departed recipient's pending receipt stays pending; the information dialog
+  identifies them as no longer in the conversation. New members do not become
+  recipients of older messages.
+
+Automatic reads require a visible, focused, online timeline. The client checks
+intersection against the scrollport and viewport, including very tall messages,
+and suppresses reads behind modal dialogs. It rechecks unchanged intersections
+on focus, visibility, page resume, reconnection and foreground-heartbeat success.
+Only acknowledged reads are deduplicated; failed/offline attempts retry while
+visible. In-flight reads remain deduplicated across renders.
+
+The server checks current membership for all receipt events. Reads additionally
+require a room subscription and that originating device's unexpired Redis lease and foreground
+room claim; background read attempts return 409 and storage outages return 503.
+A read acknowledges only the specified message. The contiguous room pointer
+advances once earlier unread gaps close, rather than marking skipped messages
+read. Delivery works in background tabs and for metadata fetched before a subscription
+finishes. Reconnect retransmits delivery acknowledgements for cached messages,
+including anchored historical timelines. Explicit `POST /rooms/:roomId/seen`
+intentionally marks all existing messages read without a viewport claim.
+
+`message:receipts { roomId, receipts: [{ messageId, receipt_summary }] }` publishes
+aggregate changes to room subscribers. Summary versions increase per message;
+clients reject older summaries, including delayed history and send acknowledgements.
+Existing `message-read` and `message-delivered` events retain user and contiguous
+pointer fields. Per-recipient timestamps are first-ack times and do not change
+on duplicates or acknowledgements from another device.
+
+| Method | Path                                          | Returns                                      | Access                                                             |
+| ------ | --------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------ |
+| GET    | /messages/:messageId/receipts                 | `{ messageId, sentAt, summary, recipients }` | Sender who is still a room member; otherwise 404.                  |
+| GET    | /messages/room/:roomId/receipts?ids=uuid,uuid | `{ roomId, receipts }`                       | Current members; 1–200 valid IDs; other rooms' IDs return no data. |
+
+Each recipient detail includes `user_id`, `display_name`, `delivered`, `read`,
+`delivered_at`, `read_at`, and `current_member`. The sender's **Message info**
+action opens these details; receipt events and reconnects refresh an open dialog.
+Reconnection also refreshes summaries for all loaded messages, in batches of 200,
+so a message need not arrive again for its tick to recover.
+
+Older messages are explicitly marked `history_complete: false`: only surviving
+memberships present by the message's creation can be reconstructed. Known flags
+are backfilled from existing pointers, but acknowledgement times stay null.
+The UI explains missing history and shows unavailable times. Missing historical
+recipients and exact times cannot be recovered by this migration.
+
+### Durable media sends and album ownership
+
+The client saves selected file Blobs and captions in its account-scoped outbox
+before uploading. Each item has its own stable UUID `clientId`. After upload, the
+client sends the usual message payload with one attachment; file Blobs and local
+object URLs never enter that payload. Retrying a completed upload uses the same
+attachment claim and client ID. Creation, history, search and message updates
+return `client_id` and nullable `album_id`.
+
+`albumId` is a UUID shared by messages from the same selection. Each album item
+must have one attachment, and the server rejects reuse of an album ID by another
+sender or conversation. This check and message creation occur in one transaction.
+The album ID does not replace any membership or upload-ownership checks.
+
+Socket acknowledgements return `{ ok: true, data: message }` for a persisted send
+or `{ ok: false, error, status }` for a failure. The status distinguishes temporary
+server/rate-limit failures from permanent validation or access failures. A lost
+acknowledgement is resolved by retrying the same client ID. A send with an unknown
+outcome must not be discarded as though the server had definitely rejected it.
+
+### Media display metadata (migration 027)
+
+`POST /upload` accepts one `file` and an optional multipart text field
+`mediaMetadata`, a JSON object with optional `width`, `height`, `preview_url`
+and `duration`. Width/height must be paired positive integers no greater than 32768. `preview_url` accepts only a JPEG data URL capped at 12 KiB decoded;
+external URLs and SVG thumbnails are rejected. Duration is video-only, in seconds,
+greater than zero and no greater than 604800. These are device-supplied display
+hints, not authoritative file-signature or security metadata.
+
+The upload record owns these fields; attachment claims ignore message-supplied
+metadata. Upload responses and live/history/search/shared-media attachment shapes
+include `width`, `height`, `preview_url` and nullable `duration`. Legacy rows may
+have null display metadata. New inline thumbnails are included only in authorized
+message responses and do not require a public thumbnail object.
+
+Original delivery continues through authenticated attachment endpoints. Browser
+caching is local and account-scoped; it does not make R2 objects public. Previously
+cached bytes can remain on a device independently of remote access changes.
+
+### Resumable uploads and Range delivery (migrations 028–029)
+
+- `GET /upload/capabilities`: `{ multipart, partSize }`; authenticated and safe to
+  cache for the current app session. `multipart` requires the deployment flag.
+- `POST /upload/sessions`: `{ roomId, clientId, filename, mime_type, size,
+metadata?, restart? }` returns 201 with `{ id, partSize, parts, expiresAt? }` or
+  a completed `attachment`. Reusing an account/client ID is idempotent; changing
+  its file identity is a 409. Membership and upload ownership are enforced.
+- `GET /upload/sessions/:sessionId`: resumes from actual R2 parts. Each part has
+  `{ partNumber, size, etag }`. Expired/cancelled sessions return 410.
+- `POST /upload/sessions/:sessionId/parts`: `{ partNumber }` returns
+  `{ url, size, expiresIn: 300 }`. Browser PUTs bytes directly to that URL.
+- `POST /upload/sessions/:sessionId/complete`: validates actual bytes and returns
+  the attachment descriptor. Idempotent after a lost response.
+- `DELETE /upload/sessions/:sessionId`: retires an unclaimed upload and queues
+  abort/deletion. An attached file returns 409.
+
+`GET /attachments/:attachmentId` accepts single Range/If-Range requests for R2.
+206 exposes Content-Range, Content-Length, Accept-Ranges and ETag. Invalid ranges
+return 416 with `Content-Range: bytes */<size>`. Membership/deleted checks run
+before storage access. Originals use private, no-store HTTP caching; local
+account-scoped chunks and originals support offline reopening.
+
+See [media operations](MEDIA_STORAGE.md) for rollout, retention, expiry and cleanup.
+
+### Shared-file browsing
+
+`GET /messages/room/:roomId/media` returns `{ media, nextCursor }`.
+`kind` is `media` (photos/videos, default), `documents` (other non-audio files)
+or `audio`. `limit` defaults to 24 and must be an integer from 1 to 100.
+Each item includes the existing authorized attachment fields plus `message_id`,
+`room_sequence`, `sender_id`, `sender_name` and `created_at`. Deleted messages
+are excluded. Non-members receive 404.
+
+Pass the opaque `nextCursor` back as `cursor` for older items. Ordering uses
+room sequence and attachment UUID descending, so legacy messages with several
+attachments page without omissions and new inserts do not shift older pages.
+Cursors are bound to room, section and the optional `after` ISO timestamp.
+`after` filters messages strictly newer than that date and lets the client honor
+its existing device-specific clear-history cutoff. It does not change server
+history or grant access. Invalid filters/cursors return 400.
+
+`GET /messages/room/:roomId?around=<message UUID>` returns up to 50 history
+messages ending at that message, in the usual newest-first message shape.
+The ordinary `nextCursor` continues toward older history. It cannot be combined
+with `before` or `afterSeq`. The anchor must be undeleted and in the same room;
+a missing/deleted/cross-room anchor returns 404 after the normal membership check.
+This bounded lookup avoids downloading every intervening page to follow a
+shared-file link. The client offers Return to latest, keeps the context window
+out of its latest-history cache, and resumes normal history when leaving it.
+
+### Reference-based forwarding
+
+`POST /messages` and `send-message` accept optional
+`forwardSource: { messageId, attachmentId? }`. Include a stable `clientId` for retry.
+The caller must currently belong to the source and destination conversations.
+Destination DM blocks apply. Source deletion, lost membership, polls and invalid
+attachment choices are rejected. Forward requests cannot mix upload claims or replies.
+When a legacy source has several attachments, specify one `attachmentId` per new
+message; these messages may share a new `albumId`.
+
+Source content and attachment metadata are copied by the server, without copying
+storage bytes or firing mentions from the old text. A new attachment ID authorizes
+each destination independently. Public payloads include `forwarded: true`; internal
+source identifiers are not exposed to recipients. An idempotent retry of an already
+created destination message returns that message even if the source later disappears.
+Migration 031 adds the forwarded marker.
+
+## Phase 5 privacy, recovery, and devices
+
+See [privacy/encryption policy](PRIVACY_AND_ENCRYPTION.md) for scope and limits.
+`GET /users/me` and auth responses include `email_verified_at`. Profile/photo
+fields in authenticated responses are personalized; do not reuse one viewer's
+payload for another. Presence snapshots include only permitted online/last-seen
+information. DM receipt summaries include `reads_visible`; hidden reads are not
+an assertion that a recipient has not read the message.
+
+### Account security routes (`/security`)
+
+| Method/path                   | Access and payload                                                                                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /recovery`              | Public, rate limited; `{email}`. Generic eligible/unknown response.                                                                                                                                                      |
+| `POST /reset`                 | Public, rate limited; `{token,password}`. Single use, 30-minute token; password 12+ characters, max 72 UTF-8 bytes. Revokes every session.                                                                               |
+| `POST /verify`                | Public, rate limited; `{token}`. Single use verification.                                                                                                                                                                |
+| `POST /verification`          | Authenticated; requests verification for current account's email.                                                                                                                                                        |
+| `GET /privacy`                | Current preference object.                                                                                                                                                                                               |
+| `PATCH /privacy`              | Partial preferences: `online_visibility`, `last_seen_visibility`, `photo_visibility`, `about_visibility` (`everyone/connections/nobody`), `read_receipts` boolean, `dm_policy` (`everyone/requests/connections/nobody`). |
+| `GET /sessions`               | `{sessions}`: current flag, device label, user agent, expiry, creation/last activity.                                                                                                                                    |
+| `PATCH /session`              | `{label}` (1–80 characters), renames current session.                                                                                                                                                                    |
+| `DELETE /sessions/:sessionId` | `{password}`; UUID or `others`. Durable revocation and cluster eviction.                                                                                                                                                 |
+| `GET /requests`               | `{requests}` pending incoming DM requests, maximum 100.                                                                                                                                                                  |
+| `POST /requests/:roomId`      | `{status: 'accepted'                                                                                                                                                                                                     | 'declined'}` by recipient only. |
+
+Mail configuration missing returns 503. An eviction failure may return 503 after
+durable revocation; this never means the session was restored.
+
+Message content and attachments are server-readable. Migration 061 removes the former message encryption endpoints and purges encrypted conversations. Room lifecycle retains `superseded_by`.
+
+### Room lifecycle and personal history (migration 038)
+
+See [Rooms and personal history](ROOMS_AND_PERSONAL_HISTORY.md) for the endpoint
+contracts, invitation/approval rules, participant permission matrix, history policy, and account versus device clearing semantics. Apply migration
+038 before deploying this API/client. Existing public join clients must handle a
+`pending` result without opening the room. Room detail responses include
+`my_role`, `join_approval`, `member_can_send`, `member_can_invite`,
+`cleared_sequence`, and `cleared_at`; room list responses include personal clear
+state. Sequences must be handled as decimal strings without losing precision.
+# Connected work (first release)
+
+All `/work` routes require an access token. Project and brief content is
+server readable. A room belongs to at most one project. Project creation and room
+attachment require room admin access; only the project creator can change its
+details, milestones, or automation rules. Project views include only rooms in
+which the caller is currently a member. Task organization requires the task
+creator or a room admin.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET / POST | `/work/projects` | List visible projects or, for a team owner/admin, create one with `name`, `description`, and 1–20 team `roomIds` the actor administers. This uses the same creation policy as `POST /teams/:teamId/projects`. |
+| GET / PATCH | `/work/projects/:projectId` | Read project, visible rooms, milestone progress, tasks, decisions, dependencies, and exact task counts; or, for a team owner/admin, update `name`, `description`, `status`. Task and decision lists are capped at 200 and 50; `truncated` signals the cap. |
+| POST / DELETE | `/work/projects/:projectId/rooms[/:roomId]` | A team owner/admin may attach an administered room from the same team or detach a room. A project must retain one room. Detaching clears task milestone links and dependencies involving that room. |
+| POST / PATCH | `/work/projects/:projectId/milestones[/:milestoneId]` | Create or update a milestone using `title`, `dueDate`, and, on update, `completed`. |
+| PATCH | `/work/tasks/:taskId/milestone` | Set `milestoneId` or `null`. |
+| POST / DELETE | `/work/tasks/:taskId/dependencies[/:dependsOnId]` | Add `dependsOnId` or remove it. Dependencies require both tasks in the same project and reject cycles. A blocked task cannot be completed. |
+| GET / PUT | `/work/rooms/:roomId/brief` | Read current brief and its 20 newest revisions; room admins save `body`, optional `sourceMessageId`, and current `version` for conflict detection. |
+| GET | `/work/search?q=` | Search accessible messages, files, tasks, decisions, rooms, and shared room members. At least two characters; at most 50 combined results. |
+| GET / PATCH | `/work/inbox` and `/work/inbox/state` | Read up to 100 actionable assignments, mentions, blocked and overdue tasks; mark an `eventKey` done or snoozed with `until` within 30 days. |
+| GET / POST / PATCH | `/work/projects/:projectId/automations[/:ruleId]` | List, create, or enable/pause a rule. One rule per trigger per project. `decision_recorded` creates an unassigned follow-up task; `task_overdue` notifies the assignee once per due date. Runs are recorded durably. |
+
+
+### Member profile reads
+
+`GET /users/:userId` requires authentication and a UUID. Returns
+`{ id, display_name, avatar_url, bio }` only for the caller or an active user
+sharing a room with the caller. `avatar_url` and `bio` honor existing photo/about
+visibility and block rules. Email and account security fields are never selected.
+Deleted users, unknown IDs, and users without shared membership return the same
+404. Existing `GET /users/me` remains the caller's editable account record.

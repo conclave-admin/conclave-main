@@ -2,6 +2,8 @@ const { pool, query } = require("../config/db");
 const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/apiResponse");
 const ApiError = require("../utils/ApiError");
+const presence = require("../services/presence.service");
+const { revokeRoomAccess } = require("../services/realtimeAccess.service");
 const {
   createNotification,
   presentNotification,
@@ -55,7 +57,7 @@ async function findExistingDm(userA, userB) {
        FROM rooms r
        INNER JOIN room_members a ON a.room_id = r.id AND a.user_id = $1
        INNER JOIN room_members b ON b.room_id = r.id AND b.user_id = $2
-      WHERE r.type = 'dm'
+      WHERE r.type = 'dm' AND r.superseded_by IS NULL
         AND (SELECT COUNT(*) FROM room_members c WHERE c.room_id = r.id) = 2
       LIMIT 1`,
     [userA, userB],
@@ -67,6 +69,8 @@ async function findExistingDm(userA, userB) {
 // Creates a room and inserts the creator as an admin member in one transaction.
 const createRoom = asyncHandler(async (req, res) => {
   const { name, type, memberIds } = req.body;
+  if (req.body.encryptionMode && req.body.encryptionMode !== 'none')
+    throw new ApiError(400, 'Encrypted conversations are unavailable');
 
   const roomType = type || (memberIds?.length === 1 ? "dm" : "group"); // Default to "dm" if exactly 1 other member, else "group"
   if (!VALID_TYPES.includes(roomType)) {
@@ -113,9 +117,9 @@ const createRoom = asyncHandler(async (req, res) => {
   }
 
   const client = await pool.connect();
+  let requiresRequest = false;
   try {
     await client.query("BEGIN");
-
     // 1. Resolve the invitees before touching rooms. Previously an unknown id
     //    reached the INSERT and came back as a foreign-key error surfaced as a
     //    500; soft-deleted users are rejected here too. display_name is read
@@ -138,6 +142,21 @@ const createRoom = asyncHandler(async (req, res) => {
       }
     }
 
+    if (roomType === "dm") {
+      const blocked = await client.query(
+        `SELECT 1 FROM user_blocks
+          WHERE (blocker_id = $1 AND blocked_id = $2)
+             OR (blocker_id = $2 AND blocked_id = $1)
+          LIMIT 1`,
+        [req.user.id, requested[0]],
+      );
+      if (blocked.rows.length)
+        throw new ApiError(
+          403,
+          "You cannot start a conversation with this user",
+        );
+    }
+
     // 2. DMs are unique per pair — return the existing room rather than
     //    creating another one.
     if (roomType === "dm") {
@@ -151,6 +170,14 @@ const createRoom = asyncHandler(async (req, res) => {
         return ok(res, { ...rows[0], existing: true });
       }
     }
+
+    if (roomType === "dm")
+      requiresRequest =
+        await require("../services/privacy.service").assertCanStartDm(
+          client,
+          req.user.id,
+          requested[0],
+        );
 
     // 3. A DM with no name takes the other person's. `display_name` is NOT NULL, so
     //    this resolves; the "Direct message" fallback only exists so a future
@@ -166,7 +193,12 @@ const createRoom = asyncHandler(async (req, res) => {
       `INSERT INTO rooms (name, type, created_by, slug)
        VALUES ($1, $2, $3, $4)
        RETURNING id, name, type, created_by, slug, created_at`,
-      [effectiveName, roomType, req.user.id, slug],
+      [
+        effectiveName,
+        roomType,
+        req.user.id,
+        slug,
+      ],
     );
     const room = roomResult.rows[0];
 
@@ -187,6 +219,12 @@ const createRoom = asyncHandler(async (req, res) => {
         [room.id, requested],
       );
     }
+
+    if (requiresRequest)
+      await client.query(
+        "INSERT INTO dm_requests(room_id,sender_id,recipient_id) VALUES($1,$2,$3)",
+        [room.id, req.user.id, requested[0]],
+      );
 
     // 7. Read the real membership back. The response used to be built from the
     //    request body, so it could advertise members that ON CONFLICT skipped.
@@ -225,38 +263,43 @@ const listRooms = asyncHandler(async (req, res) => {
     `SELECT
        r.id,
        r.name,
-       r.type,
+       r.type, r.superseded_by, r.team_id,
        r.slug,
+       r.avatar_url,
        r.created_by,
        r.created_at,
        rm.role AS my_role,
        rm.joined_at,
        rm.last_seen_at,
+       rm.last_seen_sequence, rm.cleared_sequence,rm.cleared_at,
+       COALESCE(rmp.pinned, FALSE) AS is_pinned,
+       (COALESCE(rmp.muted, FALSE) OR COALESCE(rmp.mute_until>NOW(),FALSE) OR COALESCE(rmp.notification_level,'all')='none') AS is_muted,
+       COALESCE(rmp.archived, FALSE) AS is_archived,
        (SELECT COUNT(*) FROM room_members am WHERE am.room_id = r.id)::int
          AS member_count,
 
        -- A DM is named after the other person, not the two-word title
        -- createRoom gave it. Groups keep their own name.
        CASE
-         WHEN r.type = 'dm' THEN (
+         WHEN r.type = 'dm' THEN COALESCE((
            SELECT u.display_name
              FROM room_members o
              INNER JOIN users u ON u.id = o.user_id
             WHERE o.room_id = r.id AND o.user_id <> $1
             LIMIT 1
-         )
+         ), 'Deleted user')
          ELSE r.name
        END AS display_name,
 
        CASE
          WHEN r.type = 'dm' THEN (
-           SELECT u.avatar_url
+           SELECT CASE WHEN privacy_allowed(u.id,$1,'photo') THEN u.avatar_url ELSE NULL END
              FROM room_members o
              INNER JOIN users u ON u.id = o.user_id
             WHERE o.room_id = r.id AND o.user_id <> $1
             LIMIT 1
          )
-         ELSE NULL
+         ELSE r.avatar_url
        END AS display_avatar,
 
        -- LEFT JOIN LATERAL, not CROSS: an empty room returns NULL here rather
@@ -274,7 +317,10 @@ const listRooms = asyncHandler(async (req, res) => {
            'sender_id',      lm.sender_id,
            'sender_name',    lm.sender_name,
            'sender_avatar',  lm.sender_avatar,
+           'room_sequence',  lm.room_sequence,
+           'has_mention',    lm.has_mention,
            'has_attachment', lm.has_attachment,
+           'attachment_type', lm.attachment_type,
            'is_deleted',     lm.deleted_at IS NOT NULL,
            'created_at',     lm.created_at
          )
@@ -291,23 +337,217 @@ const listRooms = asyncHandler(async (req, res) => {
      INNER JOIN room_members rm
        ON rm.room_id = r.id
       AND rm.user_id = $1
+     LEFT JOIN room_member_preferences rmp ON rmp.room_id = r.id AND rmp.user_id = $1
      LEFT JOIN LATERAL (
-       SELECT m.id, m.content, m.sender_id, m.created_at, m.deleted_at,
+       SELECT m.id, m.content, m.sender_id, m.created_at, m.deleted_at, m.room_sequence,
               u.display_name AS sender_name,
               u.avatar_url   AS sender_avatar,
               EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id)
-                AS has_attachment
+                AS has_attachment,
+              (SELECT a.file_type FROM attachments a WHERE a.message_id = m.id ORDER BY a.id LIMIT 1)
+                AS attachment_type,
+              EXISTS (SELECT 1 FROM message_mentions mm WHERE mm.message_id = m.id AND mm.user_id = $1)
+                AS has_mention
          FROM messages m
          INNER JOIN users u ON u.id = m.sender_id
-        WHERE m.room_id = r.id
-        ORDER BY m.created_at DESC, m.id DESC
+        WHERE m.room_id = r.id AND message_visible(m.id,$1)
+        ORDER BY m.room_sequence DESC
         LIMIT 1
      ) lm ON TRUE
+     WHERE rmp.hidden_sequence IS NULL OR r.message_sequence > rmp.hidden_sequence
      ORDER BY COALESCE(lm.created_at, r.created_at) DESC, r.id DESC`,
     [req.user.id],
   );
 
-  return ok(res, result.rows);
+  const ownPreviews = result.rows
+    .map((room) => room.last_message)
+    .filter((message) => message?.sender_id === req.user.id);
+  const summaries =
+    await require("../services/messageReceipt.service").attachReceiptSummaries(
+      ownPreviews,
+    );
+  const byId = new Map(summaries.map((message) => [message.id, message]));
+  return ok(
+    res,
+    result.rows.map((room) => ({
+      ...room,
+      last_message: byId.get(room.last_message?.id) || room.last_message,
+    })),
+  );
+});
+
+// Public rooms are discoverable to signed-in users who are not members.
+// Membership remains required for message/history access; visibility does not
+// imply read access. Numeric pages are capped to keep directory queries bounded.
+const discoverRooms = asyncHandler(async (req, res) => {
+  const page = Math.max(
+    1,
+    Math.min(1000, Number.parseInt(req.query.page, 10) || 1),
+  );
+  const offset = (page - 1) * 25;
+  const term = String(req.query.q || "")
+    .trim()
+    .slice(0, 100);
+  const values = [req.user.id];
+  let search = "";
+  if (term) {
+    values.push(`%${term}%`);
+    search = `AND (r.name ILIKE $2 OR COALESCE(r.description, '') ILIKE $2)`;
+  }
+  values.push(26, offset);
+  const result = await query(
+    `SELECT r.id, r.name, r.description, r.slug, r.created_at, r.team_id,
+            (SELECT COUNT(*)::int FROM room_members rm WHERE rm.room_id = r.id) AS member_count
+       FROM rooms r
+      WHERE r.type = 'public' AND (r.team_id IS NULL OR r.team_discoverable)
+        AND NOT EXISTS (SELECT 1 FROM room_members mine WHERE mine.room_id = r.id AND mine.user_id = $1)
+        ${search}
+      ORDER BY member_count DESC, r.created_at DESC, r.id DESC
+      LIMIT $${values.length - 1} OFFSET $${values.length}`,
+    values,
+  );
+  return ok(res, {
+    rooms: result.rows.slice(0, 25),
+    page,
+    hasMore: result.rows.length > 25,
+  });
+});
+
+// Joining an open room and resolving a concurrent duplicate request are one
+// transaction. Locking the room row serializes joins with visibility edits.
+const joinPublicRoom = asyncHandler(async (req, res) => {
+  const approval = (
+    await query("SELECT join_approval,team_id FROM rooms WHERE id=$1", [
+      req.params.roomId,
+    ])
+  ).rows[0];
+  if(approval?.team_id) throw new ApiError(409,'Request team membership to join this room');
+  if (approval?.join_approval)
+    return ok(
+      res,
+      await require("../services/roomLifecycle.service").enter({
+        roomId: req.params.roomId,
+        userId: req.user.id,
+      }),
+    );
+  const { roomId } = req.params;
+  const client = await pool.connect();
+  let admins = [];
+  let joined = false;
+  let notifications = [];
+  try {
+    await client.query("BEGIN");
+    const roomResult = await client.query(
+      "SELECT id, type, join_approval FROM rooms WHERE id = $1 FOR UPDATE",
+      [roomId],
+    );
+    const room = roomResult.rows[0];
+    if (!room) throw new ApiError(404, "Room not found");
+    if (room.type !== "public")
+      throw new ApiError(403, "This room is not open to join");
+
+    if (room.join_approval) {
+      await client.query("ROLLBACK");
+      // Return the promise without awaiting here: finally releases this client
+      // before the lifecycle transaction needs another pool connection.
+      return require("../services/roomLifecycle.service")
+        .enter({ roomId, userId: req.user.id })
+        .then((result) => ok(res, result));
+    }
+    const insert = await client.query(
+      `INSERT INTO room_members (room_id, user_id, role)
+       VALUES ($1, $2, 'member') ON CONFLICT (room_id, user_id) DO NOTHING RETURNING user_id`,
+      [roomId, req.user.id],
+    );
+    joined = insert.rowCount > 0;
+    if (joined)
+      await client.query(
+        "UPDATE room_join_requests SET status='approved',updated_at=NOW() WHERE room_id=$1 AND user_id=$2 AND status='pending'",
+        [roomId, req.user.id],
+      );
+    if (joined) {
+      const result = await client.query(
+        `SELECT user_id FROM room_members WHERE room_id = $1 AND role = 'admin' AND user_id <> $2`,
+        [roomId, req.user.id],
+      );
+      admins = result.rows.map((row) => row.user_id);
+      for (const adminId of admins) {
+        notifications.push(
+          await createNotification({
+            recipientId: adminId,
+            type: "member_joined",
+            referenceId: roomId,
+            actorId: req.user.id,
+            db: client,
+          }),
+        );
+      }
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const io = req.app.get("io");
+  if (joined && io) {
+    io.to(roomId).emit("room:members", {
+      roomId,
+      action: "joined",
+      userId: req.user.id,
+      actorId: req.user.id,
+    });
+    for (let index = 0; index < admins.length; index += 1) {
+      emitNotification(
+        io,
+        admins[index],
+        await presentNotification(notifications[index]),
+      );
+    }
+  }
+  return ok(res, { roomId, joined, existing: !joined }, joined ? 201 : 200);
+});
+
+const updateRoomPreferences = asyncHandler(async (req, res) => {
+  const { roomId } = req.params;
+  const allowed = ["pinned", "muted", "archived"];
+  const updates = Object.fromEntries(
+    Object.entries(req.body || {}).filter(([key]) => allowed.includes(key)),
+  );
+  if (
+    !Object.keys(updates).length ||
+    Object.values(updates).some((value) => typeof value !== "boolean")
+  ) {
+    throw new ApiError(400, "Provide pinned, muted, or archived as a boolean");
+  }
+  const membership = await query(
+    "SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2",
+    [roomId, req.user.id],
+  );
+  if (!membership.rows.length) throw new ApiError(404, "Room not found");
+  const values = [
+    roomId,
+    req.user.id,
+    updates.pinned ?? false,
+    updates.muted ?? false,
+    updates.archived ?? false,
+  ];
+  const result = await query(
+    `INSERT INTO room_member_preferences (room_id, user_id, pinned, muted, archived)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (room_id, user_id) DO UPDATE SET
+       pinned = CASE WHEN $6::boolean THEN $3 ELSE room_member_preferences.pinned END,
+       muted = CASE WHEN $7::boolean THEN $4 ELSE room_member_preferences.muted END,
+       archived = CASE WHEN $8::boolean THEN $5 ELSE room_member_preferences.archived END,
+       mute_until = CASE WHEN $7::boolean THEN NULL ELSE room_member_preferences.mute_until END,
+       notification_level = CASE WHEN $7::boolean AND NOT $4::boolean THEN 'all' ELSE room_member_preferences.notification_level END,
+       updated_at = NOW()
+     RETURNING pinned, muted, archived`,
+    [...values, "pinned" in updates, "muted" in updates, "archived" in updates],
+  );
+  return ok(res, result.rows[0]);
 });
 
 // ---------- getRoom ----------
@@ -322,8 +562,9 @@ const getRoom = asyncHandler(async (req, res) => {
        r.id,
        r.name,
        r.description,
-       r.type,
+       r.type, r.superseded_by,
        r.slug,
+       r.avatar_url,
        r.created_by,
        r.created_at,
        -- The same derivation listRooms applies, and it was missing here. That
@@ -332,13 +573,13 @@ const getRoom = asyncHandler(async (req, res) => {
        -- by id so nothing routes on this, but the two screens should not
        -- disagree about what a room is called.
        CASE
-         WHEN r.type = 'dm' THEN (
+         WHEN r.type = 'dm' THEN COALESCE((
            SELECT u.display_name
              FROM room_members o
              INNER JOIN users u ON u.id = o.user_id
             WHERE o.room_id = r.id AND o.user_id <> $2
              LIMIT 1
-         )
+         ), 'Deleted user')
          ELSE r.name
        END AS display_name,
        (
@@ -353,9 +594,14 @@ const getRoom = asyncHandler(async (req, res) => {
                'id', u.id,
                'display_name', u.display_name,
                'avatar_url', u.avatar_url,
+               'bio', u.bio,
+               'custom_status', CASE WHEN u.status_until>NOW() THEN u.custom_status ELSE NULL END,
+               'account_created_at', u.created_at,
                'role', rm2.role,
                'joined_at', rm2.joined_at,
-               'last_seen_at', rm2.last_seen_at
+               'last_seen_at', CASE WHEN u.id=$2 OR share_dm_reads(r.id) THEN rm2.last_seen_at ELSE NULL END,
+               'last_seen_sequence', CASE WHEN u.id=$2 OR share_dm_reads(r.id) THEN rm2.last_seen_sequence ELSE NULL END,
+               'last_delivered_sequence', rm2.last_delivered_sequence
              )
              ORDER BY rm2.role = 'admin' DESC,
                       rm2.joined_at ASC,
@@ -384,7 +630,33 @@ const getRoom = asyncHandler(async (req, res) => {
   }
 
   // 4. Return the room details and its member list.
-  return ok(res, { ...room, members });
+  const request =
+    (
+      await query(
+        "SELECT sender_id,recipient_id,status FROM dm_requests WHERE room_id=$1",
+        [roomId],
+      )
+    ).rows[0] || null;
+  const personal = (
+    await query(
+      "SELECT cleared_sequence,cleared_at FROM room_members WHERE room_id=$1 AND user_id=$2",
+      [roomId, req.user.id],
+    )
+  ).rows[0];
+  const settings = (
+    await query(
+      "SELECT join_approval,member_can_send,member_can_invite FROM rooms WHERE id=$1",
+      [roomId],
+    )
+  ).rows[0];
+  return ok(res, {
+    ...room,
+    ...personal,
+    ...settings,
+    my_role,
+    members,
+    message_request: request,
+  });
 });
 
 // ---------- addMember ----------
@@ -397,34 +669,40 @@ const addMember = asyncHandler(async (req, res) => {
     throw new ApiError(400, "userId is required");
   }
 
-  // 1. Validate room exists, target user exists and is not soft-deleted,
-  //    and the caller is an admin.
-  const check = await query(
-    `SELECT
-       (SELECT type FROM rooms WHERE id = $1) AS room_type,
-       (SELECT display_name FROM users WHERE id = $2 AND deleted_at IS NULL) AS display_name,
-       (SELECT role FROM room_members WHERE room_id = $1 AND user_id = $3) AS caller_role`,
-    [roomId, userId, req.user.id],
-  );
-
-  const { room_type, display_name, caller_role } = check.rows[0];
-
-  if (!room_type) throw new ApiError(404, "Room not found");
-  // A soft-deleted user still has a row, so without the deleted_at check they
-  // could be added to rooms and show up as "Deleted user" members.
-  if (!display_name)
-    throw new ApiError(404, "User not found or has been deleted");
-  if (!caller_role)
-    throw new ApiError(403, "You are not a member of this room");
-  if (caller_role !== "admin")
-    throw new ApiError(403, "Only room admins can add members");
-
-  // 2. Insert the member + create notification in a single transaction.
+  // Lock the room before checking permissions. Membership and role mutations
+  // use the same lock, preventing a removed/demoted admin from winning a race
+  // between their permission check and the write.
   const client = await pool.connect();
   let inviteRow;
   let joinedRows;
+  let display_name;
   try {
     await client.query("BEGIN");
+
+    const room = await client.query(
+      "SELECT id, type FROM rooms WHERE id = $1 FOR UPDATE",
+      [roomId],
+    );
+    if (!room.rows.length) throw new ApiError(404, "Room not found");
+    if (room.rows[0].type === "dm")
+      throw new ApiError(
+        409,
+        "Direct messages are one-to-one conversations; create a group to add more people",
+      );
+    const check = await client.query(
+      `SELECT
+         (SELECT display_name FROM users WHERE id = $2 AND deleted_at IS NULL) AS display_name,
+         (SELECT role FROM room_members WHERE room_id = $1 AND user_id = $3) AS caller_role`,
+      [roomId, userId, req.user.id],
+    );
+    ({ display_name } = check.rows[0]);
+    const { caller_role } = check.rows[0];
+    if (!display_name)
+      throw new ApiError(404, "User not found or has been deleted");
+    if (!caller_role)
+      throw new ApiError(403, "You are not a member of this room");
+    if (caller_role !== "admin")
+      throw new ApiError(403, "Only room admins can add members");
 
     const insertResult = await client.query(
       `INSERT INTO room_members (room_id, user_id, role)
@@ -498,6 +776,11 @@ const addMember = asyncHandler(async (req, res) => {
   // tell the invitee about a membership that could still roll back — and this row
   // sat unreachable for the whole of item A, so actually sending it is the point.
   const io = req.app.get("io");
+  if (io) {
+    const event = { roomId, action: "joined", userId, actorId: req.user.id };
+    io.to(roomId).emit("room:members", event);
+    io.to(`user:${userId}`).emit("room:members", event);
+  }
   const presented = await presentNotification(inviteRow);
   emitNotification(io, userId, presented);
   for (const row of joinedRows) {
@@ -517,38 +800,33 @@ const addMember = asyncHandler(async (req, res) => {
 });
 
 // ---------- markRoomSeen ----------
-// Stamps room_members.last_seen_at for the caller. This is the only REST
-// writer of that column, and the digest depends on it: until it moves, every
-// digest reports everything since the user joined the room (BACKEND_TASKS.md
-// Bug 2). Called by the client when a room is opened, and by the socket on
-// leave-room.
-//
-// It now emits `room-seen` to the room. Without this there were two writers of
-// last_seen_at — this route and the message-read socket event — and only one
-// of them told anybody. A read tick on another member's screen would therefore
-// update when they scrolled a room live and stay stale when they opened it,
-// which is the same bug from two directions.
+// Explicit mark-all-read command. Opening and leaving a timeline do not call
+// this endpoint; automatic reads acknowledge individual visible messages.
 const markRoomSeen = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
 
-  const result = await query(
-    `UPDATE room_members
-        SET last_seen_at = NOW()
-      WHERE room_id = $1 AND user_id = $2
-      RETURNING last_seen_at`,
-    [roomId, req.user.id],
-  );
-
-  if (result.rows.length === 0) {
-    throw new ApiError(403, "You are not a member of this room");
-  }
-
-  const lastSeenAt = result.rows[0].last_seen_at;
-
-  const io = req.app.get('io');
-  if (io) io.to(roomId).emit('room-seen', { roomId, userId: req.user.id, lastSeenAt });
-
-  return ok(res, { roomId, lastSeenAt });
+  // An explicit “mark read” command, independent of automatic viewport reads.
+  const result =
+    await require("../services/messageReceipt.service").acknowledge({
+      roomId,
+      userId: req.user.id,
+      read: true,
+      all: true,
+      io: req.app.get("io"),
+    });
+  const io = req.app.get("io");
+  if (
+    io &&
+    (await query("SELECT share_dm_reads($1) AS allowed", [roomId])).rows[0]
+      .allowed
+  )
+    io.to(roomId).emit("room-seen", {
+      roomId,
+      userId: req.user.id,
+      lastSeenAt: result.last_seen_at,
+      lastSeenSequence: result.last_seen_sequence,
+    });
+  return ok(res, { roomId, lastSeenAt: result.last_seen_at });
 });
 
 // ---------- updateRoom ----------
@@ -563,8 +841,8 @@ const markRoomSeen = asyncHandler(async (req, res) => {
 // routing key — rooms are addressed by UUID everywhere — so a rename leaves it
 // alone rather than minting a second handle and risking a -2 collision on a
 // value nothing links by.
-const ROOM_UPDATABLE_FIELDS = ["name", "description"];
-const ROOM_FIELD_LIMITS = { name: 100, description: 1000 };
+const ROOM_UPDATABLE_FIELDS = ["name", "description", "avatar_url"];
+const ROOM_FIELD_LIMITS = { name: 100, description: 1000, avatar_url: 2048 };
 
 const updateRoom = asyncHandler(async (req, res) => {
   const { roomId } = req.params;
@@ -601,8 +879,15 @@ const updateRoom = asyncHandler(async (req, res) => {
   const { room_type, caller_role } = check.rows[0];
 
   if (!room_type) throw new ApiError(404, "Room not found");
-  if (!caller_role) throw new ApiError(403, "You are not a member of this room");
-  if (caller_role !== "admin") throw new ApiError(403, "Only room admins can edit this room");
+  if (!caller_role)
+    throw new ApiError(403, "You are not a member of this room");
+  if (room_type === "dm")
+    throw new ApiError(
+      400,
+      "Direct message details cannot be edited as a room",
+    );
+  if (caller_role !== "admin")
+    throw new ApiError(403, "Only room admins can edit this room");
 
   // Column names come from the constant list above; only values are bound.
   const setClauses = [];
@@ -617,12 +902,17 @@ const updateRoom = asyncHandler(async (req, res) => {
 
   const result = await query(
     `UPDATE rooms SET ${setClauses.join(", ")} WHERE id = $${i}
-     RETURNING id, name, description, type, slug`,
+     RETURNING id, name, description, avatar_url, type, slug`,
     values,
   );
 
   const io = req.app.get("io");
-  if (io) io.to(roomId).emit("room:updated", { roomId, room: result.rows[0], actorId: req.user.id });
+  if (io)
+    io.to(roomId).emit("room:updated", {
+      roomId,
+      room: result.rows[0],
+      actorId: req.user.id,
+    });
 
   return ok(res, result.rows[0]);
 });
@@ -640,47 +930,77 @@ const updateRoom = asyncHandler(async (req, res) => {
 const removeMember = asyncHandler(async (req, res) => {
   const { roomId, userId } = req.params;
   const isSelf = userId === req.user.id;
-
-  const check = await query(
-    `SELECT
+  const io = req.app.get("io");
+  let revocationStarted = false;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const room = await client.query(
+      "SELECT id FROM rooms WHERE id = $1 FOR UPDATE",
+      [roomId],
+    );
+    if (!room.rows.length) throw new ApiError(404, "Room not found");
+    const check = await client.query(
+      `SELECT
        (SELECT type FROM rooms WHERE id = $1) AS room_type,
        (SELECT role FROM room_members WHERE room_id = $1 AND user_id = $2) AS target_role,
        (SELECT role FROM room_members WHERE room_id = $1 AND user_id = $3) AS caller_role,
        (SELECT COUNT(*)::int FROM room_members WHERE room_id = $1 AND role = 'admin') AS admin_count`,
-    [roomId, userId, req.user.id]
-  );
+      [roomId, userId, req.user.id],
+    );
 
-  const { room_type, target_role, caller_role, admin_count } = check.rows[0];
+    const { room_type, target_role, caller_role, admin_count } = check.rows[0];
 
-  if (!room_type) throw new ApiError(404, "Room not found");
-  // An unknown member and a room you are not in are the same answer: saying
-  // "not a member" separately would confirm the id is real to a stranger.
-  if (!target_role) throw new ApiError(403, "That user is not a member of this room");
-  if (!caller_role) throw new ApiError(403, "You are not a member of this room");
+    if (!room_type) throw new ApiError(404, "Room not found");
+    if (room_type === "dm")
+      throw new ApiError(
+        409,
+        "A direct message is a one-to-one conversation and cannot lose a participant",
+      );
+    // An unknown member and a room you are not in are the same answer: saying
+    // "not a member" separately would confirm the id is real to a stranger.
+    if (!target_role)
+      throw new ApiError(403, "That user is not a member of this room");
+    if (!caller_role)
+      throw new ApiError(403, "You are not a member of this room");
 
-  // Removing yourself needs no privilege. Removing somebody else does, and an
-  // admin cannot remove another admin — that is a role change, and routing it
-  // through removal would silently skip setMemberRole's last-admin check.
-  if (!isSelf && caller_role !== "admin") {
-    throw new ApiError(403, "Only room admins can remove members");
+    // Removing yourself needs no privilege. Removing somebody else does, and an
+    // admin cannot remove another admin — that is a role change, and routing it
+    // through removal would silently skip setMemberRole's last-admin check.
+    if (!isSelf && caller_role !== "admin") {
+      throw new ApiError(403, "Only room admins can remove members");
+    }
+    if (!isSelf && target_role === "admin") {
+      throw new ApiError(
+        403,
+        "Use the role endpoint to change an admin, not remove",
+      );
+    }
+    if (target_role === "admin" && admin_count <= 1) {
+      throw new ApiError(409, "A room must keep at least one admin");
+    }
+
+    await client.query(
+      "DELETE FROM room_members WHERE room_id = $1 AND user_id = $2",
+      [roomId, userId],
+    );
+    revocationStarted = true;
+    await revokeRoomAccess(io, roomId, userId);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (revocationStarted && io)
+      io.to(`user:${userId}`).emit("room:resync", { roomId });
+    throw err;
+  } finally {
+    client.release();
   }
-  if (!isSelf && target_role === "admin") {
-    throw new ApiError(403, "Use the role endpoint to change an admin, not remove");
-  }
-  if (target_role === "admin" && admin_count <= 1) {
-    throw new ApiError(409, "A room must keep at least one admin");
-  }
-
-  await query('DELETE FROM room_members WHERE room_id = $1 AND user_id = $2', [
-    roomId,
-    userId,
-  ]);
 
   // After the delete, not inside it: a member removed here is told over the same
   // channel every other membership change goes out on, so an open room in their
   // client does not keep showing them as a member until they refresh.
-  const io = req.app.get("io");
   if (io) {
+    await presence.publishRoomPresence(io, roomId);
     io.to(roomId).emit("room:members", {
       roomId,
       action: isSelf ? "left" : "removed",
@@ -710,46 +1030,76 @@ const removeMember = asyncHandler(async (req, res) => {
 const setMemberRole = asyncHandler(async (req, res) => {
   const { roomId, userId } = req.params;
   const { role } = req.body;
-
+ 
   if (role !== "admin" && role !== "member") {
     throw new ApiError(400, 'role must be either "admin" or "member"');
   }
 
-  const check = await query(
-    `SELECT
+  const client = await pool.connect();
+  let target_role;
+  try {
+    await client.query("BEGIN");
+    const room = await client.query(
+      "SELECT id, type FROM rooms WHERE id = $1 FOR UPDATE",
+      [roomId],
+    );
+    if (!room.rows.length) throw new ApiError(404, "Room not found");
+    if (room.rows[0].type === "dm")
+      throw new ApiError(
+        409,
+        "Direct message participants do not have room roles",
+      );
+    const check = await client.query(
+      `SELECT
        (SELECT type FROM rooms WHERE id = $1) AS room_type,
        (SELECT display_name FROM users WHERE id = $2 AND deleted_at IS NULL) AS display_name,
        (SELECT role FROM room_members WHERE room_id = $1 AND user_id = $2) AS target_role,
        (SELECT role FROM room_members WHERE room_id = $1 AND user_id = $3) AS caller_role,
        (SELECT COUNT(*)::int FROM room_members WHERE room_id = $1 AND role = 'admin') AS admin_count`,
-    [roomId, userId, req.user.id]
-  );
+      [roomId, userId, req.user.id],
+    );
 
-  const { room_type, target_role, caller_role, admin_count } = check.rows[0];
+    ({ target_role } = check.rows[0]);
+    const { caller_role, admin_count } = check.rows[0];
+    if (!target_role)
+      throw new ApiError(403, "That user is not a member of this room");
+    if (!caller_role)
+      throw new ApiError(403, "You are not a member of this room");
+    if (caller_role !== "admin")
+      throw new ApiError(403, "Only room admins can change roles");
 
-  if (!room_type) throw new ApiError(404, "Room not found");
-  if (!target_role) throw new ApiError(403, "That user is not a member of this room");
-  if (!caller_role) throw new ApiError(403, "You are not a member of this room");
-  if (caller_role !== "admin") throw new ApiError(403, "Only room admins can change roles");
+    if (target_role === role) {
+      await client.query("COMMIT");
+      return ok(res, { roomId, userId, role });
+    }
 
-  if (target_role === role) {
-    return ok(res, { roomId, userId, role });
+    // Same invariant removeMember protects: a demotion that empties the admin set
+    // would leave the room permanently unadministrable.
+    if (target_role === "admin" && role === "member" && admin_count <= 1) {
+      throw new ApiError(409, "A room must keep at least one admin");
+    }
+
+    await client.query(
+      "UPDATE room_members SET role = $3 WHERE room_id = $1 AND user_id = $2",
+      [roomId, userId, role],
+    );
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
-
-  // Same invariant removeMember protects: a demotion that empties the admin set
-  // would leave the room permanently unadministrable.
-  if (target_role === "admin" && role === "member" && admin_count <= 1) {
-    throw new ApiError(409, "A room must keep at least one admin");
-  }
-
-  await query('UPDATE room_members SET role = $3 WHERE room_id = $1 AND user_id = $2', [
-    roomId,
-    userId,
-    role,
-  ]);
 
   const io = req.app.get("io");
-  if (io) io.to(roomId).emit("room:members", { roomId, action: "role", userId, role, actorId: req.user.id });
+  if (io)
+    io.to(roomId).emit("room:members", {
+      roomId,
+      action: "role",
+      userId,
+      role,
+      actorId: req.user.id,
+    });
 
   return ok(res, { roomId, userId, role });
 });
@@ -757,10 +1107,13 @@ const setMemberRole = asyncHandler(async (req, res) => {
 module.exports = {
   createRoom,
   listRooms,
+  discoverRooms,
+  joinPublicRoom,
   getRoom,
   updateRoom,
   addMember,
   removeMember,
   setMemberRole,
   markRoomSeen,
+  updateRoomPreferences,
 };

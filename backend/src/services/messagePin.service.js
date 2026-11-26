@@ -1,8 +1,11 @@
-const { query } = require('../config/db');
-const ApiError = require('../utils/ApiError');
+const { query } = require("../config/db");
+const ApiError = require("../utils/ApiError");
 // Top-level rather than lazily: poll.service imports nothing from this module,
 // so unlike reaction.service there is no cycle to defer around.
-const { attachPolls } = require('./poll.service');
+const { attachPolls } = require("./poll.service");
+const { attachReceiptSummaries } = require("./messageReceipt.service");
+const attachPollsAndReceipts = async (rows) =>
+  attachReceiptSummaries(await attachPolls(rows));
 
 // Message pins — the same two scopes and the same rules as decisionPin.service,
 // applied to messages. Deliberately a near-copy rather than a shared abstraction:
@@ -24,7 +27,7 @@ const { attachPolls } = require('./poll.service');
 // `room` is shared truth and `mine` is per viewer, for the same reason as
 // decisions: a client knows what it pinned but cannot know anyone else's.
 
-const PIN_SCOPES = new Set(['user', 'room']);
+const PIN_SCOPES = new Set(["user", "room"]);
 
 function assertScope(scope) {
   if (!PIN_SCOPES.has(scope)) {
@@ -61,22 +64,24 @@ async function attachPins(messages, viewerId, { db } = {}) {
   const byMessage = new Map();
   for (const row of rows) {
     const entry = byMessage.get(row.message_id) || { room: null, mine: [] };
-    if (row.scope === 'room') {
+    if (row.scope === "room") {
       entry.room = {
         user_id: row.user_id,
         display_name: row.display_name,
         pinned_at: row.pinned_at,
       };
-      if (row.user_id === viewerId) entry.mine.push('room');
+      if (row.user_id === viewerId) entry.mine.push("room");
     } else if (row.user_id === viewerId) {
-      entry.mine.push('user');
+      entry.mine.push("user");
     }
     byMessage.set(row.message_id, entry);
   }
 
   for (const message of messages) {
     const entry = byMessage.get(message.id);
-    message.pins = entry ? { room: entry.room, mine: entry.mine } : { room: null, mine: [] };
+    message.pins = entry
+      ? { room: entry.room, mine: entry.mine }
+      : { room: null, mine: [] };
   }
 
   return messages;
@@ -96,15 +101,17 @@ async function getMessageWithPins(messageId, viewerId) {
        FROM messages m
        INNER JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
        INNER JOIN users u ON u.id = m.sender_id
-      WHERE m.id = $1`,
+      WHERE m.id = $1 AND message_visible(m.id,$2)`,
     [messageId, viewerId],
   );
 
   if (result.rows.length === 0) {
-    throw new ApiError(404, 'Message not found');
+    throw new ApiError(404, "Message not found");
   }
 
-  const [message] = await attachPolls(await attachPins(result.rows, viewerId));
+  const [message] = await attachPollsAndReceipts(
+    await attachPins(result.rows, viewerId),
+  );
   return message;
 }
 
@@ -114,19 +121,22 @@ async function getMessageWithPins(messageId, viewerId) {
 async function pinMessage({ messageId, userId, scope, io }) {
   assertScope(scope);
 
-  const room = await query(`SELECT room_id FROM messages WHERE id = $1`, [messageId]);
+  const room = await query(`SELECT room_id FROM messages WHERE id = $1`, [
+    messageId,
+  ]);
   const roomId = room.rows[0]?.room_id;
-  if (!roomId) throw new ApiError(404, 'Message not found');
+  if (!roomId) throw new ApiError(404, "Message not found");
 
   const membership = await query(
     `SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2`,
     [roomId, userId],
   );
   if (membership.rows.length === 0) {
-    throw new ApiError(403, 'You are not a member of this room');
+    throw new ApiError(403, "You are not a member of this room");
   }
 
-  if (scope === 'room') {
+  await getMessageWithPins(messageId, userId);
+  if (scope === "room") {
     const existing = await query(
       `SELECT mp.user_id, u.display_name
          FROM message_pins mp
@@ -136,7 +146,10 @@ async function pinMessage({ messageId, userId, scope, io }) {
     );
     const held = existing.rows[0];
     if (held && held.user_id !== userId) {
-      throw new ApiError(409, `Already pinned to the room by ${held.display_name}`);
+      throw new ApiError(
+        409,
+        `Already pinned to the room by ${held.display_name}`,
+      );
     }
   }
 
@@ -149,7 +162,7 @@ async function pinMessage({ messageId, userId, scope, io }) {
   );
 
   const message = await getMessageWithPins(messageId, userId);
-  if (io) io.to(roomId).emit('message:pinned', { message, scope, userId });
+  if (io) io.to(roomId).emit("message:pinned", { message, scope, userId });
 
   return message;
 }
@@ -164,9 +177,11 @@ async function pinMessage({ messageId, userId, scope, io }) {
 async function unpinMessage({ messageId, userId, scope, io }) {
   assertScope(scope);
 
-  const room = await query(`SELECT room_id FROM messages WHERE id = $1`, [messageId]);
+  const room = await query(`SELECT room_id FROM messages WHERE id = $1`, [
+    messageId,
+  ]);
   const roomId = room.rows[0]?.room_id;
-  if (!roomId) throw new ApiError(404, 'Message not found');
+  if (!roomId) throw new ApiError(404, "Message not found");
 
   const existing = await query(
     `SELECT user_id FROM message_pins WHERE message_id = $1 AND scope = $2`,
@@ -175,17 +190,17 @@ async function unpinMessage({ messageId, userId, scope, io }) {
   const held = existing.rows[0];
   if (!held) return null;
 
-  if (scope === 'user') {
+  if (scope === "user") {
     if (held.user_id !== userId) {
-      throw new ApiError(403, 'That is not your bookmark');
+      throw new ApiError(403, "That is not your bookmark");
     }
   } else if (held.user_id !== userId) {
     const role = await query(
       `SELECT role FROM room_members WHERE room_id = $1 AND user_id = $2`,
       [roomId, userId],
     );
-    if (role.rows[0]?.role !== 'admin') {
-      throw new ApiError(403, 'Only the pinner or a room admin can unpin this');
+    if (role.rows[0]?.role !== "admin") {
+      throw new ApiError(403, "Only the pinner or a room admin can unpin this");
     }
   }
 
@@ -195,7 +210,7 @@ async function unpinMessage({ messageId, userId, scope, io }) {
   );
 
   const message = await getMessageWithPins(messageId, userId);
-  if (io) io.to(roomId).emit('message:unpinned', { message, scope, userId });
+  if (io) io.to(roomId).emit("message:unpinned", { message, scope, userId });
 
   return message;
 }
@@ -212,13 +227,13 @@ async function unpinMessage({ messageId, userId, scope, io }) {
  */
 async function listRoomPins(roomId, viewerId) {
   const result = await query(
-    `SELECT m.id, m.room_id, m.sender_id, m.content, m.reply_to_id,
+    `SELECT m.id, m.room_id, m.sender_id, m.client_id, m.album_id, m.forwarded, m.room_sequence, m.content, m.reply_to_id,
             m.edited_at, m.deleted_at, m.created_at,
             u.display_name AS sender_name, u.avatar_url AS sender_avatar
        FROM message_pins mp
        INNER JOIN messages m ON m.id = mp.message_id
        INNER JOIN users u ON u.id = m.sender_id
-      WHERE mp.scope = 'room'
+      WHERE mp.scope = 'room' AND message_visible(m.id,$2)
         AND m.room_id = $1
         -- Deleting a message tombstones it rather than removing the row, so the
         -- pin would outlive the text it refers to and the panel would keep a
@@ -226,7 +241,7 @@ async function listRoomPins(roomId, viewerId) {
         -- the client so every consumer of this endpoint gets the same list.
         AND m.deleted_at IS NULL
       ORDER BY mp.pinned_at ASC`,
-    [roomId],
+    [roomId, viewerId],
   );
 
   if (result.rows.length === 0) return [];
@@ -234,10 +249,10 @@ async function listRoomPins(roomId, viewerId) {
   // Reactions come along so a pinned message renders identically to one in the
   // timeline. The membership check is the caller's; this is called only from a
   // route that has already done it.
-  const { attachReactions } = require('./reaction.service');
+  const { attachReactions } = require("./reaction.service");
   const messages = await attachReactions(result.rows, viewerId);
 
-  return attachPolls(await attachPins(messages, viewerId));
+  return attachPollsAndReceipts(await attachPins(messages, viewerId));
 }
 
 module.exports = {

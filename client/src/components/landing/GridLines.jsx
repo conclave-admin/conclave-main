@@ -24,9 +24,12 @@ function Columns({ count }) {
   );
 }
 
-export default function GridLines({ className = '' }) {
+export default function GridLines({ className = "" }) {
   return (
-    <div aria-hidden="true" className={`pointer-events-none absolute inset-0 overflow-hidden ${className}`}>
+    <div
+      aria-hidden="true"
+      className={`pointer-events-none absolute inset-0 overflow-hidden ${className}`}
+    >
       <div className="mx-auto flex h-full max-w-7xl px-6 md:px-10 lg:px-16">
         <div className="flex w-full md:hidden">
           <Columns count={BASE} />

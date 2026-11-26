@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import Avatar from '@/components/ui/Avatar';
+import { useEffect, useRef } from "react";
+import Avatar from "@/components/ui/Avatar";
 
 /**
  * Autocomplete for @mentions.
@@ -19,7 +19,12 @@ import Avatar from '@/components/ui/Avatar';
  * @param {(member: object) => void} onSelect
  * @param {() => void} onDismiss
  */
-export default function MentionPicker({ members = [], query = '', onSelect, onDismiss }) {
+export default function MentionPicker({
+  members = [],
+  query = "",
+  onSelect,
+  onDismiss,
+}) {
   const listRef = useRef(null);
 
   const needle = query.trim().toLowerCase();
@@ -29,10 +34,10 @@ export default function MentionPicker({ members = [], query = '', onSelect, onDi
 
   useEffect(() => {
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') onDismiss();
+      if (event.key === "Escape") onDismiss();
     };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
   }, [onDismiss]);
 
   if (matches.length === 0) return null;
@@ -58,10 +63,16 @@ export default function MentionPicker({ members = [], query = '', onSelect, onDi
           }}
           className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-canvas focus-visible:bg-canvas focus-visible:outline-none"
         >
-          <Avatar name={member.display_name} src={member.avatar_url} size="sm" />
+          <Avatar
+            name={member.display_name}
+            src={member.avatar_url}
+            size="sm"
+          />
           <span className="min-w-0">
-            <span className="block truncate text-body text-ink">{member.display_name}</span>
-            {member.role === 'admin' && (
+            <span className="block truncate text-body text-ink">
+              {member.display_name}
+            </span>
+            {member.role === "admin" && (
               <span className="block text-metadata text-muted">Admin</span>
             )}
           </span>

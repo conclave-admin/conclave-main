@@ -1,13 +1,41 @@
-import { useEffect, useRef, useState } from 'react';
-import IconClose from '@/assets/icons/close.svg?react';
-import IconMention from '@/assets/icons/mention.svg?react';
-import IconSend from '@/assets/icons/send.svg?react';
-import { uploadFile } from '@/services/messages.service';
-import { rememberUploadedFile } from '@/services/attachments.service';
-import { isAccepted, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES } from '@/lib/media';
-import AttachmentPicker from './AttachmentPicker';
-import AttachmentPreviewDialog from './AttachmentPreviewDialog';
-import MentionPicker from './MentionPicker';
+import IconPlay from "@/assets/icons/play-recording.svg?react";
+import { LiveRecordingWaveform } from "./AudioWaveform";
+import { recordingGesture } from "../../lib/waveform";
+import IconDelete from "@/assets/icons/delete.svg?react";
+import { ScheduleMessage } from "./MessageLater";
+import { useAuth } from "../../contexts/AuthContext";
+import { readDraft, writeDraft } from "../../lib/drafts";
+import { voiceRecordingFile, voiceRecorderOptions } from "@/lib/voiceRecording";
+import { createActivitySender } from "@/lib/conversationActivity";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import IconClose from "@/assets/icons/close.svg?react";
+import IconSend from "@/assets/icons/send.svg?react";
+import IconMic from "@/assets/icons/mic.svg?react";
+import IconReaction from "@/assets/icons/reaction.svg?react";
+import { createClientId } from "@/lib/outbox";
+import PopoverMenu from "@/components/ui/PopoverMenu";
+import {
+  isAccepted,
+  isImage,
+  isVideo,
+  limitFor,
+  MAX_ATTACHMENTS,
+  normaliseFile,
+} from "@/lib/media";
+import { MAX_VIDEO_INPUT_BYTES } from "@/lib/videoCompression";
+import AttachmentPicker from "./AttachmentPicker";
+import AttachmentPreviewDialog from "./AttachmentPreviewDialog";
+import MentionPicker from "./MentionPicker";
+import EmojiPicker from "./EmojiPicker";
+import LinkPreviewCard from "./LinkPreviewCard";
 
 const MAX_LINES = 5;
 
@@ -29,82 +57,223 @@ const MAX_LINES = 5;
  * the two are independent from that point — renaming the person later does not
  * rewrite history.
  *
- * Files are picked into a full-screen preview and only uploaded when Send is
- * pressed there, so the bytes are never on their way to storage before the user
- * has decided to send. A failed upload keeps the preview open with the files,
- * the caption and the reason intact — the text must survive the failure, which
- * is the one thing the earlier upload-on-pick design was right to insist on.
+ * Selected files and captions are saved to the account outbox before the
+ * editor closes. Upload progress and retry controls then live in the timeline.
  *
- * @param {boolean} disabled - no realtime connection
+ * @param {boolean} disabled - conversation permissions prevent sending
  * @param {(payload: object) => void} onSend
  * @param {Array} members - room members, for the mention picker
- * @param {() => void} onTyping - emits a typing event, throttled by the caller
+ * @param {() => void} onTyping - emits a typing event, throttled by this composer
  * @param {object|null} replyTo - message being replied to
  * @param {() => void} onCancelReply
  * @param {() => void} [onCreatePoll] - opens the poll dialog when supplied
  * @param {() => void} [onCreateDecision] - opens the decision dialog when supplied
  * @param {() => void} [onCreateTask] - opens the task dialog when supplied
  */
-export default function MessageComposer({
-  disabled,
-  onSend,
-  members = [],
-  onTyping,
-  replyTo,
-  onCancelReply,
-  onCreatePoll,
-  onCreateDecision,
-  onCreateTask,
-  // The room pane is a grid and addresses its rows explicitly, so the composer
-  // needs to accept the placement the parent decides rather than hardcoding one.
-  className = '',
-}) {
-  const [content, setContent] = useState('');
-  const [error, setError] = useState('');
+const MessageComposer = forwardRef(function MessageComposer(
+  {
+    disabled,
+    isOnline = true,
+    onSend,
+    onSendMedia,
+    members = [],
+    onTyping,
+    onStopTyping,
+    onRecording,
+    onStopRecording,
+    activityScope,
+    replyTo,
+    onCancelReply,
+    onCreatePoll,
+    onCreateDecision,
+    onCreateTask,
+    onEditLast,
+    // The room pane is a grid and addresses its rows explicitly, so the composer
+    // needs to accept the placement the parent decides rather than hardcoding one.
+    className = "",
+  },
+  ref,
+) {
+  const { user: draftUser } = useAuth();
+  const draftOwner = `${draftUser?.id}:${activityScope}`;
+  const [content, setContent] = useState(
+    () => readDraft(draftUser?.id, activityScope).text,
+  );
+  const draftSnapshot = useRef({
+    owner: draftOwner,
+    userId: draftUser?.id,
+    roomId: activityScope,
+    text: content,
+    reply: replyTo,
+  });
+  if (draftSnapshot.current.owner === draftOwner) {
+    draftSnapshot.current = {
+      owner: draftOwner,
+      userId: draftUser?.id,
+      roomId: activityScope,
+      text: content,
+      reply: replyTo,
+    };
+  }
+  const persistDraft = () => {
+    const { userId, roomId, text, reply } = draftSnapshot.current;
+    writeDraft(
+      userId,
+      roomId,
+      text,
+      reply
+        ? {
+            id: reply.id,
+            sender_name: reply.sender_name,
+            content: reply.content,
+            room_sequence: reply.room_sequence,
+            created_at: reply.created_at,
+            expires_at: reply.expires_at,
+          }
+        : null,
+    );
+  };
+  useLayoutEffect(() => {
+    const draft = readDraft(draftUser?.id, activityScope);
+    draftSnapshot.current = {
+      owner: draftOwner,
+      userId: draftUser?.id,
+      roomId: activityScope,
+      text: draft.text,
+      reply: draft.reply,
+    };
+    setContent(draft.text);
+    selectionRef.current = { start: draft.text.length, end: draft.text.length };
+    return () => {
+      persistDraft();
+    };
+  }, [draftOwner]);
+  useEffect(() => {
+    const saveOnExit = () => persistDraft();
+    window.addEventListener("pagehide", saveOnExit);
+    return () => window.removeEventListener("pagehide", saveOnExit);
+  }, [draftOwner]);
+  const [error, setError] = useState("");
   const [pendingFiles, setPendingFiles] = useState([]);
   const [sending, setSending] = useState(false);
   const [mentionQuery, setMentionQuery] = useState(null);
   const [mentionedIds, setMentionedIds] = useState([]);
+  const [recording, setRecording] = useState(false);
+  const [voicePaused, setVoicePaused] = useState(false);
+  const [voiceLocked, setVoiceLocked] = useState(false);
+  const voiceDisposition = useRef({});
+  const voicePointer = useRef(null);
+  const holdTimer = useRef(null);
+  const ignoreVoiceClick = useRef(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
 
   const textareaRef = useRef(null);
-  const typingTimer = useRef(null);
+  useEffect(() => {
+    // Desktop chat apps put typing one keystroke away. On touch screens,
+    // opening the keyboard immediately would hide the conversation instead.
+    if (
+      !disabled &&
+      window.matchMedia("(min-width: 768px) and (pointer: fine)").matches
+    )
+      textareaRef.current?.focus({ preventScroll: true });
+  }, [activityScope, disabled]);
+  const emojiTriggerRef = useRef(null);
+  const selectionRef = useRef({ start: content.length, end: content.length });
+  const callbacks = useMemo(() => ({ current: null }), [activityScope]);
+  callbacks.current = { onTyping, onStopTyping, onRecording, onStopRecording };
+  const activityRef = useRef(null);
+  const signalFlags = useRef({ disabled, isOnline });
+  signalFlags.current = { disabled, isOnline };
+  const captureVersion = useRef(0);
+  const acquiringMic = useRef(false);
+  const stopVoiceRef = useRef(null);
   // Bumped when the preview is abandoned so an upload still in flight knows its
   // result is no longer wanted and must not touch state that has moved on.
   const sendToken = useRef(0);
+  const textSendingRef = useRef(false);
+  const recorderRef = useRef(null);
+  const recordingStreamRef = useRef(null);
+  const recordingChunksRef = useRef([]);
+  // Photos picked through Photos or Camera are shrunk before upload. A WeakSet
+  // keeps that flag beside the File without changing the list the dialog gets.
+  const compressRef = useRef(new WeakSet());
 
   // Auto-grow. Reset to auto first so shrinking works, then clamp at five
   // lines — beyond that the box scrolls rather than eating the timeline.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
+    el.style.height = "auto";
     const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 20;
     el.style.height = `${Math.min(el.scrollHeight, lineHeight * MAX_LINES)}px`;
   }, [content]);
 
-  useEffect(
-    () => () => {
-      if (typingTimer.current) clearTimeout(typingTimer.current);
-    },
-    [],
-  );
-
-  const signalTyping = () => {
-    onTyping?.();
-    // Throttled: the server expires a typing state after a few seconds of
-    // silence, so re-announcing on a timer while the keys keep moving is what
-    // keeps the indicator honest without a packet per keystroke.
-    if (typingTimer.current) return;
-    typingTimer.current = setTimeout(() => {
-      typingTimer.current = null;
-    }, 2500);
-  };
+  useEffect(() => {
+    setRecording(false);
+    const sender = createActivitySender({
+      typing: () => callbacks.current.onTyping?.(),
+      stopTyping: () => callbacks.current.onStopTyping?.(),
+      recording: () => callbacks.current.onRecording?.(),
+      stopRecording: () => callbacks.current.onStopRecording?.(),
+      canSignal: () =>
+        !signalFlags.current.disabled &&
+        signalFlags.current.isOnline &&
+        document.visibilityState === "visible" &&
+        document.hasFocus(),
+    });
+    activityRef.current = sender;
+    const suspend = (event) => {
+      sender.stop();
+      if (recorderRef.current && recorderRef.current.state !== "inactive")
+        stopVoiceRef.current?.();
+      else if (
+        document.visibilityState !== "visible" ||
+        event?.type === "pagehide"
+      ) {
+        captureVersion.current++;
+        acquiringMic.current = false;
+      }
+    };
+    const visibility = () => {
+      if (document.visibilityState !== "visible") suspend();
+    };
+    window.addEventListener("blur", suspend);
+    window.addEventListener("pagehide", suspend);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      sender.dispose();
+      clearTimeout(holdTimer.current);
+      voicePointer.current = null;
+      captureVersion.current++;
+      acquiringMic.current = false;
+      if (recorderRef.current) {
+        recorderRef.current.onstop = null;
+        recorderRef.current.ondataavailable = null;
+        if (recorderRef.current.state !== "inactive")
+          recorderRef.current.stop();
+      }
+      recorderRef.current = null;
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recordingStreamRef.current = null;
+      window.removeEventListener("blur", suspend);
+      window.removeEventListener("pagehide", suspend);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+    // Capture callbacks for this conversation so cleanup targets the old room.
+  }, [activityScope, callbacks]);
+  useEffect(() => {
+    if (disabled && recording) stopVoiceRef.current?.();
+    if (disabled || !isOnline) activityRef.current?.stop();
+    else if (recording && !voicePaused) activityRef.current?.startRecording();
+    else if (voicePaused) activityRef.current?.endRecording();
+  }, [disabled, isOnline, recording, voicePaused]);
 
   const handleTextChange = (event) => {
-    const { value, selectionStart } = event.target;
+    const { value, selectionStart, selectionEnd } = event.target;
+    selectionRef.current = { start: selectionStart, end: selectionEnd };
     setContent(value);
-    setError('');
-    signalTyping();
+    setError("");
+    activityRef.current?.textChanged(value);
 
     // Reconcile the recorded ids against the text that is actually there.
     // mentionedIds only ever grew, so deleting "@Priya" after selecting her left
@@ -128,6 +297,30 @@ export default function MessageComposer({
     setMentionQuery(match ? match[1] : null);
   };
 
+  const insertEmoji = (emoji) => {
+    const { start, end } = selectionRef.current;
+    const next = `${content.slice(0, start)}${emoji}${content.slice(end)}`;
+    const caret = start + emoji.length;
+    selectionRef.current = { start: caret, end: caret };
+    setContent(next);
+    setError("");
+    setMentionQuery(null);
+    setMentionedIds((current) =>
+      current.filter((id) => {
+        const person = members.find((member) => member.id === id);
+        return person && next.includes(`@${person.display_name}`);
+      }),
+    );
+    activityRef.current?.textChanged(next);
+    setEmojiOpen(false);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(caret, caret);
+    });
+  };
+
+  useEffect(() => setEmojiOpen(false), [activityScope]);
+
   const applyMention = (member) => {
     const el = textareaRef.current;
     const caret = el?.selectionStart ?? content.length;
@@ -143,7 +336,9 @@ export default function MessageComposer({
     const insertion = `@${member.display_name} `;
     setContent(`${content.slice(0, start)}${insertion}${after}`);
     setMentionQuery(null);
-    setMentionedIds((prev) => (prev.includes(member.id) ? prev : [...prev, member.id]));
+    setMentionedIds((prev) =>
+      prev.includes(member.id) ? prev : [...prev, member.id],
+    );
 
     requestAnimationFrame(() => {
       const position = start + insertion.length;
@@ -166,147 +361,135 @@ export default function MessageComposer({
    *
    * @param {File[]} files
    */
-  const handleFiles = (files) => {
+  const handleFiles = (files, { compress = false, append = false } = {}) => {
     const rejected = [];
     const accepted = [];
 
-    for (const file of files) {
-      if (file.size > MAX_UPLOAD_BYTES) {
-        rejected.push(`"${file.name}" is larger than the 25MB limit.`);
+    for (const raw of files) {
+      const file = normaliseFile(raw);
+      const limit = limitFor(file);
+      const inputLimit = isVideo(file) ? MAX_VIDEO_INPUT_BYTES : limit;
+
+      if (file.size > inputLimit) {
+        rejected.push(
+          `"${file.name}" is larger than the ${inputLimit / (1024 * 1024)}MB selection limit. Trim or resize it before selecting.`,
+        );
       } else if (!isAccepted(file.type, file.name)) {
         rejected.push(`"${file.name}" is not a file type this app can store.`);
       } else {
+        if (compress && isImage(file)) compressRef.current.add(file);
         accepted.push(file);
       }
     }
 
-    if (accepted.length > MAX_ATTACHMENTS) {
+    const available = append
+      ? Math.max(0, MAX_ATTACHMENTS - pendingFiles.length)
+      : MAX_ATTACHMENTS;
+    if (accepted.length > available) {
       rejected.push(
-        `A message can hold at most ${MAX_ATTACHMENTS} files; the extra ${
-          accepted.length - MAX_ATTACHMENTS
+        `You can select at most ${MAX_ATTACHMENTS} files at once; the extra ${
+          accepted.length - available
         } were not added.`,
       );
-      accepted.length = MAX_ATTACHMENTS;
+      accepted.length = available;
     }
 
-    const note = rejected.join(' ');
+    const note = rejected.join(" ");
     setError(note);
 
     if (accepted.length > 0) {
-      setPendingFiles(accepted);
+      setPendingFiles(append ? [...pendingFiles, ...accepted] : accepted);
     }
   };
+
+  // Lets a drop zone outside this component (the conversation pane, in
+  // Room.jsx) reuse the exact same validation/compression/preview path a
+  // picked or pasted file goes through, instead of a second, divergent one.
+  useImperativeHandle(ref, () => ({
+    addFiles: (files, options) => handleFiles(files, options),
+  }));
 
   const removeFile = (index) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
-    // The remaining files stay, so a leftover rejection note about the file
-    // that is no longer there would be actively misleading.
-    setError('');
+    setError("");
   };
 
-  // Backing out of the preview discards the picked files and any caption typed
-  // into it, and leaves the composer untouched — the draft was only ever read
-  // from it, never moved out of it, so cancelling cannot lose text.
   const cancelPreview = () => {
+    if (sending) return;
     sendToken.current += 1;
-    setSending(false);
     setPendingFiles([]);
-    setError('');
+    setError("");
   };
 
-  /**
-   * Upload every pending file, then send the message they belong to.
-   *
-   * Sequential rather than parallel: an error has to name a file, and with
-   * requests in flight at once the one that failed is not knowable. Ten files
-   * is the ceiling, and each is a single small request.
-   *
-   * On failure nothing is cleared. The preview stays open with the files, the
-   * caption and the reason, so the retry costs one press and no typing — losing
-   * the message along with the file is the outcome this whole flow exists to
-   * avoid.
-   *
-   * @param {string} caption - what the user typed in the preview
-   */
-  const submitPreview = async (caption) => {
-    if (sending || pendingFiles.length === 0) return;
-
+  // Persist the whole selection before closing the editor. Upload work belongs
+  // to the account outbox, so offline sends and navigation cannot lose files.
+  const submitPreview = async (captions) => {
+    if (sending || !pendingFiles.length) return;
     const token = ++sendToken.current;
     setSending(true);
-    setError('');
-
-    let attachments;
+    setError("");
     try {
-      attachments = [];
-      for (const file of pendingFiles) {
-        const stored = await uploadFile(file);
-        if (sendToken.current !== token) return;
-        // Now, rather than when the message renders: at this instant the file
-        // has bytes and a URL and the message that will name it does not exist
-        // yet, and the URL is the cache key. This is the sender's half of the
-        // store — the receiver's half is the first open of the image.
-        await rememberUploadedFile(stored.url, file);
-        attachments.push({ url: stored.url });
-      }
-    } catch (err) {
-      if (sendToken.current !== token) return;
-      // The reason first — a server says something useful, a dropped connection
-      // does not, and axios's own "Network Error" explains nothing to the
-      // person reading it. The second half is the part that matters: it says
-      // out loud what the open preview already proves, so a failure does not
-      // look like a lost message.
-      const reason =
-        err?.response?.data?.message ||
-        (err?.code === 'ERR_NETWORK' || err?.message === 'Network Error'
-          ? 'Could not reach the server.'
-          : err?.message) ||
-        'Could not upload one of the files.';
-      const sentence = reason.endsWith('.') ? reason : `${reason}.`;
-      setSending(false);
-      setError(`${sentence} Nothing was sent — the files and caption are still here.`);
-      return;
-    }
-
-    try {
-      onSend({
-        content: caption.trim(),
-        replyToId: replyTo?.id,
-        attachments,
-        // Rebuilt from the caption rather than reused from the composer: the
-        // caption is editable here, so the ids have to follow the text that is
-        // actually going out — the same rule handleTextChange applies.
-        mentionedUserIds: members
-          .filter((person) => caption.includes(`@${person.display_name}`))
-          .map((person) => person.id),
+      const albumId = pendingFiles.length > 1 ? createClientId() : undefined;
+      const items = pendingFiles.map((file, index) => {
+        const caption = (captions[index] || "").trim();
+        return {
+          content: caption,
+          albumId,
+          replyToId: index === 0 ? replyTo?.id : undefined,
+          attachments: [],
+          mentionedUserIds: members
+            .filter((person) => caption.includes(`@${person.display_name}`))
+            .map((person) => person.id),
+          media: {
+            blob: file,
+            filename: file.name,
+            compress: compressRef.current.has(file),
+          },
+        };
       });
-    } catch (err) {
+      activityRef.current?.endTyping();
+      await onSendMedia(items);
       if (sendToken.current !== token) return;
-      setSending(false);
-      setError(err?.message || 'Could not send this message.');
-      return;
+      setPendingFiles([]);
+      reset();
+    } catch (err) {
+      if (sendToken.current === token)
+        setError(
+          err.message || "Could not save these files. They are still here.",
+        );
+    } finally {
+      if (sendToken.current === token) setSending(false);
     }
-
-    if (sendToken.current !== token) return;
-    setSending(false);
-    setPendingFiles([]);
-    reset();
   };
 
   const reset = () => {
-    setContent('');
+    activityRef.current?.endTyping();
+    draftSnapshot.current = {
+      owner: draftOwner,
+      userId: draftUser?.id,
+      roomId: activityScope,
+      text: "",
+      reply: null,
+    };
+    writeDraft(draftUser?.id, activityScope, "");
+    setContent("");
+    selectionRef.current = { start: 0, end: 0 };
     setMentionedIds([]);
     setMentionQuery(null);
     onCancelReply?.();
   };
 
-  const submit = (event) => {
+  const submit = async (event) => {
     event?.preventDefault();
     const text = content.trim();
-    if (!text || disabled) return;
+    if (!text || disabled || textSendingRef.current) return;
+    activityRef.current?.endTyping();
+    textSendingRef.current = true;
 
     try {
-      onSend({
+      await onSend({
         content: text,
+        broadcastMention: text.match(/(?:^|\s)@(here|channel)\b/)?.[1],
         replyToId: replyTo?.id,
         attachments: [],
         mentionedUserIds: mentionedIds,
@@ -314,7 +497,221 @@ export default function MessageComposer({
       reset();
     } catch (err) {
       setError(err.message);
+    } finally {
+      textSendingRef.current = false;
     }
+  };
+
+  const toggleVoiceRecording = async () => {
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      finishVoice();
+      return;
+    }
+    if (acquiringMic.current || disabled) return;
+    acquiringMic.current = true;
+    const version = ++captureVersion.current;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (version === captureVersion.current) acquiringMic.current = false;
+      if (
+        version !== captureVersion.current ||
+        signalFlags.current.disabled ||
+        document.visibilityState !== "visible"
+      ) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      voiceDisposition.current = {};
+      setVoicePaused(false);
+      recordingStreamRef.current = stream;
+      const chunks = [];
+      recordingChunksRef.current = chunks;
+      const recorder = new MediaRecorder(
+        stream,
+        voiceRecorderOptions(MediaRecorder),
+      );
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) chunks.push(event.data);
+        if (
+          chunks.reduce((size, chunk) => size + chunk.size, 0) >
+            25 * 1024 * 1024 &&
+          recorder.state !== "inactive"
+        ) {
+          failed = true;
+          recorder.stop();
+          setError(
+            "Voice note reached the 25 MB limit. Please record a shorter message.",
+          );
+        }
+      };
+      let failed = false;
+      recorder.onstop = () => {
+        if (version !== captureVersion.current) return;
+        activityRef.current?.endRecording();
+        setRecording(false);
+        if (recorderRef.current === recorder) recorderRef.current = null;
+        if (recordingStreamRef.current === stream) {
+          stream.getTracks().forEach((track) => track.stop());
+          recordingStreamRef.current = null;
+        }
+        recordingChunksRef.current = [];
+        setVoicePaused(false);
+        setVoiceLocked(false);
+        if (!failed && !voiceDisposition.current.cancel) {
+          try {
+            const file = voiceRecordingFile(chunks, recorder.mimeType);
+            if (file.size > limitFor(file)) {
+              setError("Voice note is too large. Record a shorter message.");
+              return;
+            }
+            if (file.size && voiceDisposition.current.send) {
+              setSending(true);
+              Promise.resolve()
+                .then(() =>
+                  onSendMedia([
+                    {
+                      content: "",
+                      replyToId: replyTo?.id,
+                      attachments: [],
+                      mentionedUserIds: [],
+                      media: {
+                        blob: file,
+                        filename: file.name,
+                        compress: false,
+                      },
+                    },
+                  ]),
+                )
+                .then(() => {
+                  if (version === captureVersion.current) onCancelReply?.();
+                })
+                .catch((error) => {
+                  if (version === captureVersion.current) {
+                    setPendingFiles([file]);
+                    setError(
+                      error.message ||
+                        "Could not send. Your voice note is ready to retry.",
+                    );
+                  }
+                })
+                .finally(() => {
+                  if (version === captureVersion.current) setSending(false);
+                });
+            } else if (file.size) setPendingFiles([file]);
+          } catch (error) {
+            setError(error.message);
+          }
+        }
+      };
+      recorder.onerror = () => {
+        if (version !== captureVersion.current) return;
+        failed = true;
+        if (recorder.state !== "inactive") recorder.stop();
+        else recorder.onstop();
+        activityRef.current?.endRecording();
+        setError(
+          "Voice recording stopped because the microphone or recorder became unavailable.",
+        );
+      };
+      for (const track of stream.getTracks())
+        track.addEventListener?.("ended", () => {
+          if (
+            version === captureVersion.current &&
+            recorder.state !== "inactive"
+          )
+            stopVoiceRef.current?.();
+        });
+      recorder.start(500);
+      activityRef.current?.startRecording();
+      setRecording(true);
+    } catch {
+      if (version !== captureVersion.current) return;
+      acquiringMic.current = false;
+      activityRef.current?.endRecording();
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recordingStreamRef.current = null;
+      setError(
+        "Microphone access is unavailable. Check your browser permission and try again.",
+      );
+    }
+  };
+
+  const finishVoice = ({ cancel = false, send = false } = {}) => {
+    voiceDisposition.current = { cancel, send };
+    clearTimeout(holdTimer.current);
+    if (acquiringMic.current && !recorderRef.current) {
+      captureVersion.current++;
+      acquiringMic.current = false;
+      setVoiceLocked(false);
+      return;
+    }
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    activityRef.current?.endRecording();
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+  };
+  const pauseVoice = () => {
+    const recorder = recorderRef.current;
+    if (recorder?.state === "recording") {
+      recorder.pause();
+      setVoicePaused(true);
+      activityRef.current?.endRecording();
+    } else if (recorder?.state === "paused") {
+      recorder.resume();
+      setVoicePaused(false);
+      activityRef.current?.startRecording();
+    }
+  };
+  const voicePointerDown = (event) => {
+    if (recording) {
+      ignoreVoiceClick.current = false;
+      return;
+    }
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    voicePointer.current = {
+      x: event.clientX,
+      y: event.clientY,
+      held: false,
+      locked: false,
+    };
+    ignoreVoiceClick.current = true;
+    holdTimer.current = setTimeout(() => {
+      if (!voicePointer.current) return;
+      voicePointer.current.held = true;
+      setVoiceLocked(false);
+      toggleVoiceRecording();
+    }, 220);
+  };
+  const voicePointerMove = (event) => {
+    const gesture = voicePointer.current;
+    if (!gesture?.held || gesture.locked) return;
+    const action = recordingGesture(
+      event.clientX - gesture.x,
+      event.clientY - gesture.y,
+    );
+    if (action === "cancel") {
+      voicePointer.current = null;
+      finishVoice({ cancel: true });
+    } else if (action === "lock") {
+      gesture.locked = true;
+      setVoiceLocked(true);
+    }
+  };
+  const voicePointerUp = () => {
+    clearTimeout(holdTimer.current);
+    const gesture = voicePointer.current;
+    voicePointer.current = null;
+    if (!gesture) return;
+    if (!gesture.held) {
+      setVoiceLocked(true);
+      toggleVoiceRecording();
+    } else if (!gesture.locked) finishVoice({ send: true });
+  };
+  stopVoiceRef.current = () => {
+    voicePointer.current = null;
+    finishVoice();
   };
 
   const handleKeyDown = (event) => {
@@ -322,49 +719,118 @@ export default function MessageComposer({
     // sending a message.
     if (event.nativeEvent?.isComposing || event.keyCode === 229) return;
 
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === "Escape" && replyTo) {
+      event.preventDefault();
+      onCancelReply?.();
+      return;
+    }
+    if (event.key === "ArrowUp" && !content && onEditLast) {
+      event.preventDefault();
+      onEditLast();
+      return;
+    }
+
+    const mobileInput = window.matchMedia?.(
+      "(max-width: 767px), (pointer: coarse)",
+    ).matches;
+    if (event.key === "Enter" && !event.shiftKey && !mobileInput) {
       event.preventDefault();
       submit();
     }
   };
 
+  const handlePaste = (event) => {
+    const items = Array.from(event.clipboardData?.items || []);
+    const pastedFiles = items
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    const files = (
+      pastedFiles.length
+        ? pastedFiles
+        : Array.from(event.clipboardData?.files || [])
+    ).map((file, index) =>
+      file.name
+        ? file
+        : new File(
+            [file],
+            `pasted-file-${index + 1}${file.type === "image/png" ? ".png" : ""}`,
+            { type: file.type },
+          ),
+    );
+    if (!files.length) return;
+    event.preventDefault();
+    if (disabled) return;
+    const text = event.clipboardData.getData("text/plain");
+    if (text) {
+      const { start, end } = selectionRef.current;
+      const next = `${content.slice(0, start)}${text}${content.slice(end)}`;
+      selectionRef.current = {
+        start: start + text.length,
+        end: start + text.length,
+      };
+      setContent(next);
+      activityRef.current?.textChanged(next);
+    }
+    handleFiles(files, { compress: true });
+  };
+
   return (
     <form
       onSubmit={submit}
-      className={`relative mx-auto w-full max-w-3xl shrink-0 bg-surface px-4 pb-6 pt-2 ${className}`}
+      onBlurCapture={(event) => {
+        const form = event.currentTarget;
+        if (form.contains(event.relatedTarget)) return;
+        requestAnimationFrame(() => {
+          if (!form.contains(document.activeElement)) persistDraft();
+        });
+      }}
+      className={`message-composer relative mx-auto w-full max-w-4xl shrink-0 px-0 py-0 ${className}`}
     >
       {replyTo && (
         <div className="mb-2 flex items-center gap-3 rounded-lg border-l-2 border-brand bg-canvas px-3 py-2">
           <div className="min-w-0 flex-1">
-            <p className="text-metadata text-brand">Replying to {replyTo.sender_name || 'a message'}</p>
+            <p className="text-metadata text-brand">
+              Replying to {replyTo.sender_name || "a message"}
+            </p>
             <p className="truncate text-metadata text-muted">
-              {replyTo.content || (replyTo.is_deleted ? 'deleted message' : 'attachment')}
+              {replyTo.content ||
+                (replyTo.is_deleted ? "deleted message" : "attachment")}
             </p>
           </div>
           <button
             type="button"
             onClick={onCancelReply}
             aria-label="Cancel reply"
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-ink"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-surface hover:text-ink"
           >
             <IconClose className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       )}
 
-      <div className="relative flex items-end gap-2 rounded-lg border border-line bg-surface px-3 py-2 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10">
-        <div className="flex shrink-0 gap-1 pb-1">
+      {!isOnline && (
+        <p
+          role="status"
+          className="mb-2 rounded-md bg-canvas px-2.5 py-1.5 text-metadata text-muted"
+        >
+          Connection unavailable. Messages will wait here until you reconnect.
+        </p>
+      )}
+
+      {content.trim() && <LinkPreviewCard text={content} compact />}
+
+      <div className="composer-pill relative flex items-end gap-1 rounded-[26px] border border-line bg-surface p-1.5 focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10">
+        <div
+          className={`${recording ? "hidden" : "flex"} shrink-0 items-center gap-0.5`}
+        >
           <AttachmentPicker
             onFiles={handleFiles}
             disabled={disabled}
             onPoll={onCreatePoll}
             onDecision={onCreateDecision}
             onTask={onCreateTask}
-          />
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => {
+            onMention={() => {
               const el = textareaRef.current;
               const caret = el?.selectionStart ?? content.length;
               const before = content.slice(0, caret);
@@ -380,7 +846,7 @@ export default function MessageComposer({
               // end in a mention keeps a second press from stacking `@`s, and
               // leaves an in-progress token (`@Pr`) alone to keep filtering on.
               if (!/@[^\s@]*$/.test(before)) {
-                const separator = before && !/\s$/.test(before) ? ' ' : '';
+                const separator = before && !/\s$/.test(before) ? " " : "";
                 const next = `${before}${separator}@${after}`;
                 setContent(next);
                 const position = caret + separator.length + 1;
@@ -391,34 +857,153 @@ export default function MessageComposer({
               }
 
               textareaRef.current?.focus();
-              setMentionQuery('');
+              setMentionQuery("");
             }}
-            aria-label="Mention someone"
-            className="grid h-8 w-8 place-items-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40"
+          />
+          <button
+            ref={emojiTriggerRef}
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              const input = textareaRef.current;
+              if (input)
+                selectionRef.current = {
+                  start: input.selectionStart,
+                  end: input.selectionEnd,
+                };
+              setEmojiOpen((open) => !open);
+            }}
+            aria-label="Insert emoji"
+            aria-haspopup="dialog"
+            aria-expanded={emojiOpen}
+            className="grid h-11 w-11 place-items-center rounded-full text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40"
           >
-            <IconMention className="h-5 w-5" aria-hidden="true" />
+            <IconReaction className="h-5 w-5" aria-hidden="true" />
           </button>
         </div>
 
         <textarea
+          disabled={disabled}
           ref={textareaRef}
           value={content}
           onChange={handleTextChange}
+          onSelect={(event) => {
+            selectionRef.current = {
+              start: event.target.selectionStart,
+              end: event.target.selectionEnd,
+            };
+          }}
+          onBlur={() => activityRef.current?.endTyping()}
+          onPaste={handlePaste}
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder="Message…"
           aria-label="Message"
-          className="block min-h-6 min-w-0 flex-1 resize-none border-0 bg-transparent py-1 text-body text-ink outline-none placeholder:text-muted"
+          className={`${recording ? "hidden" : "block"} min-h-10 min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-2 text-body text-ink outline-none placeholder:text-muted`}
         />
 
-        <button
-          type="submit"
-          disabled={disabled || !content.trim()}
-          aria-label="Send message"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand pb-0.5 text-surface transition-opacity disabled:opacity-40"
-        >
-          <IconSend className="h-5 w-5" aria-hidden="true" />
-        </button>
+        {recording && (
+          <div className="flex min-h-11 min-w-0 flex-1 items-center gap-1 px-1">
+            <button
+              type="button"
+              aria-label="Discard recording"
+              onClick={() => finishVoice({ cancel: true })}
+              className="voice-control text-error"
+            >
+              <IconDelete className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <LiveRecordingWaveform
+              stream={recordingStreamRef.current}
+              paused={voicePaused}
+            />
+            {voiceLocked && (
+              <>
+                <button
+                  type="button"
+                  aria-label={
+                    voicePaused ? "Resume recording" : "Pause recording"
+                  }
+                  onClick={pauseVoice}
+                  className="voice-control text-brand"
+                >
+                  {voicePaused ? (
+                    <IconPlay className="h-5 w-5" aria-hidden="true" />
+                  ) : (
+                    <span className="flex gap-1" aria-hidden="true">
+                      <span className="h-4 w-1 rounded-sm bg-current" />
+                      <span className="h-4 w-1 rounded-sm bg-current" />
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Send voice note"
+                  onClick={() => finishVoice({ send: true })}
+                  className="voice-control bg-brand text-white"
+                >
+                  <IconSend className="h-5 w-5" aria-hidden="true" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {recording && !voiceLocked && (
+          <span className="pointer-events-none absolute -top-8 right-2 rounded-full bg-surface px-3 py-1 text-xs text-muted shadow">
+            ← Cancel · ↑ Lock
+          </span>
+        )}
+        {content.trim() && !recording ? (
+          <button
+            type="submit"
+            disabled={disabled || sending || !content.trim()}
+            aria-label="Send message"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-brand pb-0.5 text-white transition-opacity disabled:opacity-40"
+          >
+            <IconSend className="h-5 w-5" aria-hidden="true" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onPointerDown={voicePointerDown}
+            onPointerMove={voicePointerMove}
+            onPointerUp={voicePointerUp}
+            onPointerCancel={() => {
+              clearTimeout(holdTimer.current);
+              const locked = voicePointer.current?.locked;
+              voicePointer.current = null;
+              if (!locked) finishVoice({ cancel: true });
+            }}
+            onClick={(event) => {
+              if (ignoreVoiceClick.current && event.detail !== 0) {
+                ignoreVoiceClick.current = false;
+                return;
+              }
+              ignoreVoiceClick.current = false;
+              if (!recording) setVoiceLocked(true);
+              toggleVoiceRecording();
+            }}
+            title={
+              recording
+                ? "Stop and preview"
+                : "Tap to record · Hold for a quick voice note"
+            }
+            style={{ touchAction: "none" }}
+            disabled={disabled || sending || pendingFiles.length > 0}
+            aria-label={
+              recording ? "Stop voice note recording" : "Record voice note"
+            }
+            className={`grid h-11 w-11 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 disabled:opacity-40 ${recording ? "bg-error/10 text-error" : "text-muted hover:bg-canvas hover:text-ink"}`}
+          >
+            {recording ? (
+              <span
+                className="h-3.5 w-3.5 rounded-sm bg-current"
+                aria-hidden="true"
+              />
+            ) : (
+              <IconMic className="h-5 w-5" aria-hidden="true" />
+            )}
+          </button>
+        )}
 
         {mentionQuery !== null && (
           <MentionPicker
@@ -430,6 +1015,29 @@ export default function MessageComposer({
         )}
       </div>
 
+      <PopoverMenu
+        open={emojiOpen}
+        onClose={() => setEmojiOpen(false)}
+        triggerRef={emojiTriggerRef}
+        side="top"
+        align="start"
+        label="Choose an emoji"
+        popupRole="dialog"
+        className="w-[min(352px,calc(100vw-16px))] max-h-[calc(100dvh-16px)] overflow-y-auto"
+      >
+        <EmojiPicker onPick={insertEmoji} />
+      </PopoverMenu>
+
+      {!disabled &&
+        !pendingFiles.length &&
+        /^[0-9a-f-]{36}$/i.test(activityScope || "") &&
+        content.trim() && (
+          <ScheduleMessage
+            room={{ id: activityScope }}
+            text={content}
+            onScheduled={reset}
+          />
+        )}
       {error && pendingFiles.length === 0 && (
         <p role="alert" className="mt-2 px-1 text-metadata text-error">
           {error}
@@ -441,11 +1049,22 @@ export default function MessageComposer({
         files={pendingFiles}
         initialCaption={content}
         sending={sending}
+        sendDisabled={disabled}
         error={error}
         onSend={submitPreview}
         onCancel={cancelPreview}
         onRemoveFile={removeFile}
+        onAddFiles={(files) =>
+          handleFiles(files, { compress: true, append: true })
+        }
+        onReplaceFile={(index, file) =>
+          setPendingFiles((current) =>
+            current.map((item, position) => (position === index ? file : item)),
+          )
+        }
       />
     </form>
   );
-}
+});
+
+export default MessageComposer;

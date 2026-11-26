@@ -1,59 +1,93 @@
-import { Link } from 'react-router-dom';
-import ChatMock from './ChatMock';
+import { Link } from "react-router-dom";
+import IconArrow from "@/assets/icons/arrow-right.svg?react";
+import IconMessage from "@/assets/icons/message.svg?react";
+import IconSuccess from "@/assets/icons/success.svg?react";
+import studio from "@/assets/landing/conclave-studio-v2-1536.webp";
+import studioSmall from "@/assets/landing/conclave-studio-v2-768.webp";
 
-/**
- * The hero.
- *
- * The tagline is italicised on "survives" — Instrument Serif's italic is the
- * reason that face was chosen over a second grotesque, and a display face with
- * an unused italic is half a typeface.
- *
- * Deliberately not `data-reveal` animated: everything above the fold should be
- * there on first paint. Scroll-triggered reveals that also fire for content
- * already on screen read as a page that failed to load, then recovered.
- */
 export default function LandingHero() {
   return (
-    <section className="relative overflow-hidden">
-      <div className="mx-auto max-w-7xl px-6 pb-24 pt-16 md:px-10 md:pb-32 md:pt-24 lg:px-16">
-        <div className="grid items-center gap-14 lg:grid-cols-12 lg:gap-16">
-          <div className="lg:col-span-7">
-            <p className="text-label uppercase tracking-widest text-brand">Private team messaging</p>
+    <section className="cl-hero cl-container">
+      <div className="cl-hero-copy">
+        <p className="cl-eyebrow">
+          <span /> A space for your kind of together
+        </p>
+        <h1>
+          <span className="cl-title-line">
+            <span className="cl-title-word">Good things</span>
+          </span>
+          <span className="cl-title-line">
+            <span className="cl-title-word">happen</span>
+          </span>
+          <span className="cl-title-line">
+            <em className="cl-title-word">together.</em>
+          </span>
+        </h1>
+        <p className="cl-hero-description">
+          The easy rhythm of a group chat. The clarity to turn an idea into a
+          plan. Bring your people and your possibilities together with Conclave.
+        </p>
+        <div className="cl-hero-actions">
+          <Link to="/register" className="cl-button cl-button-primary">
+            Find your people <IconArrow aria-hidden="true" />
+          </Link>
+          <a href="#product-preview" className="cl-text-link">
+            Meet Conclave <span aria-hidden="true">↗</span>
+          </a>
+        </div>
+        <div className="cl-hero-note">
+          <span className="cl-note-icon">
+            <IconMessage aria-hidden="true" />
+          </span>
+          <p>
+            For the everyday catch-up.
+            <br />
+            <strong>And the next big thing.</strong>
+          </p>
+        </div>
+      </div>
 
-            <h1 className="mt-5 font-display text-display-1 text-ink">
-              Messaging that <em className="italic text-brand">survives</em> the scroll
-            </h1>
-
-            <p className="mt-7 max-w-xl text-body leading-relaxed text-muted md:text-base">
-              Conclave keeps decisions, action items and the catch-up digest inside the
-              conversation, so the important part does not get pushed a thousand messages up
-              the list by lunchtime.
-            </p>
-
-            <div className="mt-9 flex flex-col gap-3 md:flex-row">
-              <Link
-                to="/register"
-                className="inline-flex min-h-12 w-full items-center justify-center rounded-lg bg-brand px-6 text-sm font-semibold text-surface transition-colors hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 md:w-auto"
-              >
-                Get started
-              </Link>
-              <a
-                href="#features"
-                className="inline-flex min-h-12 w-full items-center justify-center rounded-lg border border-line bg-surface px-6 text-sm font-semibold text-ink transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 md:w-auto"
-              >
-                See what it does
-              </a>
-            </div>
-
-            <p className="mt-6 text-metadata text-muted">
-              Free while in beta · No card, no trial timer
-            </p>
+      <div className="cl-hero-scene">
+        <div className="cl-photo-label">
+          <span /> The best ideas start here.
+        </div>
+        <img
+          src={studio}
+          srcSet={`${studioSmall} 768w, ${studio} 1536w`}
+          sizes="(min-width: 900px) 52vw, 100vw"
+          width="1536"
+          height="1024"
+          alt="Friends sharing ideas around a sunny studio table"
+          fetchPriority="high"
+          className="cl-hero-photo"
+        />
+        <div className="cl-scene-caption">
+          A little conversation.
+          <br />
+          <em>A world of possibility.</em>
+        </div>
+        <div className="cl-floating-message" aria-hidden="true">
+          <span className="cl-person cl-person-peach">A</span>
+          <div>
+            <strong>
+              Amara <small>just now</small>
+            </strong>
+            <p>What if we made it happen? ✨</p>
           </div>
-
-          <div className="lg:col-span-5">
-            <ChatMock />
+          <span className="cl-reaction">💜</span>
+        </div>
+        <div className="cl-floating-decision" aria-hidden="true">
+          <span>
+            <IconSuccess />
+          </span>
+          <div>
+            <strong>From an idea to a plan.</strong>
+            <p>Decision saved. Everyone in the loop.</p>
           </div>
         </div>
+        <span className="cl-hero-spark" aria-hidden="true">
+          ✳
+        </span>
       </div>
     </section>
   );

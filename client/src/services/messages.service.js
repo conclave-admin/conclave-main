@@ -1,10 +1,51 @@
-import { api } from '../lib/api';
-import { isDevAuthBypass, previewMessages, previewPinnedMessages } from '../config/devPreview';
+import {
+  conversationMessageVisible,
+  applyAccountClear,
+} from "../lib/clearedConversations";
+import { readRoomMessages } from "../lib/fileCache";
+import { getSessionUserId } from "../lib/session";
+import { api } from "../lib/api";
+import {
+  isDevAuthBypass,
+  previewMessages,
+  previewPinnedMessages,
+  makePreviewLargeMessages,
+} from "../config/devPreview";
 
-export async function listMessages(roomId, before) {
+const decode = (value) => value;
+
+let largePreviewMessages;
+function previewHistory(roomId) {
+  if (roomId !== "preview-large-room") return previewMessages;
+  largePreviewMessages ||= makePreviewLargeMessages();
+  return largePreviewMessages;
+}
+
+export async function listMessages(roomId, before, afterSeq, around) {
   if (isDevAuthBypass) {
+    if (roomId === "preview-large-room") {
+      const rows = previewHistory(roomId);
+      const anchorIndex = around ? rows.findIndex((row) => row.id === around) : -1;
+      if (around && anchorIndex < 0) throw new Error("Message no longer available");
+      return {
+        messages: around
+          ? rows.slice(Math.max(0, anchorIndex - 100), anchorIndex + 101)
+          : rows,
+        nextCursor: null,
+      };
+    }
+    const anchor = around
+      ? previewMessages.find(
+          (message) =>
+            message.id === around && !message.is_deleted && !message.deleted_at,
+        )
+      : null;
+    if (around && !anchor) throw new Error("Message no longer available");
+    const rows = anchor
+      ? previewMessages.slice(0, previewMessages.indexOf(anchor) + 1)
+      : previewMessages;
     return {
-      messages: [...previewMessages].reverse().map((message) => ({
+      messages: [...rows].reverse().map((message) => ({
         ...message,
         room_id: roomId,
       })),
@@ -12,9 +53,15 @@ export async function listMessages(roomId, before) {
     };
   }
   const { data } = await api.get(`/messages/room/${roomId}`, {
-    params: before ? { before } : undefined,
+    params: around
+      ? { around, context: "viewport" }
+      : afterSeq !== undefined
+        ? { afterSeq }
+        : before
+          ? { before }
+          : undefined,
   });
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -25,9 +72,10 @@ export async function listMessages(roomId, before) {
  * letting an edit rewrite them would change who was notified after the fact.
  * A 403 from someone else's message is the server enforcing that, not a bug.
  */
-export async function editMessage(messageId, content) {
-  const { data } = await api.patch(`/messages/${messageId}`, { content });
-  return data.data;
+export async function editMessage(messageId, content, message) {
+  const body = { content };
+  const { data } = await api.patch(`/messages/${messageId}`, body);
+  return decode(data.data);
 }
 
 /**
@@ -39,7 +87,7 @@ export async function editMessage(messageId, content) {
  */
 export async function deleteMessage(messageId) {
   const { data } = await api.delete(`/messages/${messageId}`);
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -50,7 +98,7 @@ export async function deleteMessage(messageId) {
  */
 export async function addReaction(messageId, emoji) {
   const { data } = await api.put(`/messages/${messageId}/reactions`, { emoji });
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -65,7 +113,7 @@ export async function removeReaction(messageId, emoji) {
   const { data } = await api.delete(
     `/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`,
   );
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -77,11 +125,20 @@ export async function removeReaction(messageId, emoji) {
  * read back from the upload record so a client cannot claim its own file is a
  * different size or type than the bytes it just sent.
  */
-export async function uploadFile(file) {
+export async function uploadFile(
+  file,
+  { onProgress, signal, filename, metadata } = {},
+) {
   const form = new FormData();
-  form.append('file', file);
-  const { data } = await api.post('/upload', form);
-  return data.data;
+  form.append("file", file, filename || file.name || "upload");
+  if (metadata) form.append("mediaMetadata", JSON.stringify(metadata));
+  const { data } = await api.post("/upload", form, {
+    signal,
+    onUploadProgress: (event) => {
+      if (event.total) onProgress?.(event.loaded / event.total);
+    },
+  });
+  return decode(data.data);
 }
 
 /**
@@ -96,9 +153,10 @@ export async function uploadFile(file) {
  * failing — which is why a double-tap on "Pin to room" is not a support ticket.
  */
 export async function pinMessage(messageId, scope) {
-  if (isDevAuthBypass) return { id: messageId, pins: { room: null, mine: [scope] } };
+  if (isDevAuthBypass)
+    return { id: messageId, pins: { room: null, mine: [scope] } };
   const { data } = await api.put(`/messages/${messageId}/pin`, { scope });
-  return data.data;
+  return decode(data.data);
 }
 
 /**
@@ -108,16 +166,157 @@ export async function pinMessage(messageId, scope) {
 export async function unpinMessage(messageId, scope) {
   if (isDevAuthBypass) return { id: messageId, pins: { room: null, mine: [] } };
   const { data } = await api.delete(`/messages/${messageId}/pin/${scope}`);
-  return data.data;
+  return decode(data.data);
 }
 
 /** Every room-wide pin in a room, oldest first. Personal bookmarks are not listed. */
 export async function listPinnedMessages(roomId) {
   if (isDevAuthBypass) {
+    if (roomId === "preview-large-room")
+      return previewHistory(roomId)
+        .filter((message) => message.id === "perf-300")
+        .map((message) => ({
+          ...message,
+          pins: {
+            room: {
+              user_id: "dev-preview-user",
+              display_name: "Amina Yusuf",
+              pinned_at: message.created_at,
+            },
+            mine: [],
+          },
+        }));
     return previewPinnedMessages
       .filter((message) => message.room_id === roomId)
       .map((message) => ({ ...message, room_id: roomId }));
   }
   const { data } = await api.get(`/messages/room/${roomId}/pinned`);
   return data.data.messages;
+}
+
+// Inspect only locally available history. While online, revalidate those IDs
+// so information views cannot continue showing a deleted/cleared cached body.
+export async function localConversationMessages(roomId) {
+  const userId = getSessionUserId();
+  let rows = await readRoomMessages(userId, roomId);
+  if (getSessionUserId() !== userId) throw new Error("Account changed");
+  if (navigator.onLine !== false && rows.length) {
+    const { data } = await api.get(`/messages/room/${roomId}`, {
+      params: {
+        ids: rows
+          .slice(-200)
+          .map((m) => m.id)
+          .join(","),
+      },
+    });
+    rows = data.data.messages;
+  }
+  if (getSessionUserId() !== userId) throw new Error("Account changed");
+  return rows.filter((m) => conversationMessageVisible(m, userId, roomId));
+}
+
+export async function listRoomMedia(
+  roomId,
+  { kind = "media", cursor, limit = 24, after, signal } = {},
+) {
+  if (!isDevAuthBypass) {
+    const room = (await api.get(`/rooms/${roomId}`, { signal })).data.data;
+    applyAccountClear(
+      getSessionUserId(),
+      roomId,
+      room.cleared_sequence,
+      room.cleared_at,
+    );
+
+  }
+  if (isDevAuthBypass) {
+    const rows = previewMessages
+      .filter(
+        (message) =>
+          !message.is_deleted &&
+          !message.deleted_at &&
+          (!after || new Date(message.created_at) > new Date(after)),
+      )
+      .flatMap((message) =>
+        (message.attachments || []).map((item, index) => ({
+          ...item,
+          id: item.id || `${message.id}-file-${index}`,
+          message_id: message.id,
+          created_at: message.created_at,
+          sender_name: message.sender_name,
+        })),
+      )
+      .filter((item) => {
+        const type = item.mime_type || "";
+        return kind === "media"
+          ? /^(image|video)\//.test(type)
+          : kind === "audio"
+            ? type.startsWith("audio/")
+            : !/^(image|video|audio)\//.test(type);
+      })
+      .reverse();
+    const start = cursor ? Number(cursor) : 0;
+    return {
+      media: rows.slice(start, start + limit),
+      nextCursor: start + limit < rows.length ? String(start + limit) : null,
+    };
+  }
+  const { data } = await api.get(`/messages/room/${roomId}/media`, {
+    params: { kind, cursor, limit, after },
+    signal,
+    timeout: 20000,
+  });
+  return decode(data.data);
+}
+
+export async function getMessageReceipts(messageId) {
+  if (isDevAuthBypass)
+    return {
+      messageId,
+      sentAt: previewMessages.find((m) => m.id === messageId)?.created_at,
+      summary: {
+        history_complete: false,
+        recipient_count: 1,
+        delivered_count: 0,
+        read_count: 0,
+      },
+      recipients: [
+        {
+          user_id: "dev-victor",
+          display_name: "Victor",
+          delivered: false,
+          read: false,
+          current_member: true,
+        },
+      ],
+    };
+  const { data } = await api.get(`/messages/${messageId}/receipts`);
+  return decode(data.data);
+}
+
+export async function getRoomReceiptSummaries(roomId, ids) {
+  if (isDevAuthBypass) return { roomId, receipts: [] };
+  const { data } = await api.get(`/messages/room/${roomId}/receipts`, {
+    params: { ids: ids.join(",") },
+  });
+  return decode(data.data);
+}
+
+export async function getMessageSnapshots(roomId, ids) {
+  if (isDevAuthBypass) {
+    const messages = previewHistory(roomId)
+      .filter((m) => ids.includes(m.id))
+      .map((m) => ({ ...m, room_id: roomId }));
+    return {
+      messages,
+      missingIds: ids.filter((id) => !messages.some((m) => m.id === id)),
+    };
+  }
+  return decode(
+    (
+      await api.get(`/messages/room/${roomId}`, {
+        params: { ids: ids.join(",") },
+      })
+    ).data.data,
+  );
 }

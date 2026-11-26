@@ -1,6 +1,15 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import Toast from '@/components/ui/Toast';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
+import Toast from "@/components/ui/Toast";
+import { createToastTimer } from "../lib/toastTimer";
 
 const ToastContext = createContext(null);
 
@@ -22,7 +31,7 @@ export function ToastProvider({ children }) {
   const timers = useRef(new Map());
 
   const dismiss = useCallback((id) => {
-    window.clearTimeout(timers.current.get(id));
+    timers.current.get(id)?.dispose();
     timers.current.delete(id);
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
@@ -30,7 +39,10 @@ export function ToastProvider({ children }) {
   const toast = useCallback(
     (options) => {
       const id = (nextId.current += 1);
-      timers.current.set(id, window.setTimeout(() => dismiss(id), AUTO_DISMISS_MS));
+      timers.current.set(
+        id,
+        createToastTimer(() => dismiss(id), AUTO_DISMISS_MS),
+      );
       setToasts((current) => [...current, { ...options, id }]);
       return id;
     },
@@ -39,7 +51,7 @@ export function ToastProvider({ children }) {
 
   useEffect(
     () => () => {
-      timers.current.forEach((timer) => window.clearTimeout(timer));
+      timers.current.forEach((timer) => timer.dispose());
       timers.current.clear();
     },
     [],
@@ -55,7 +67,17 @@ export function ToastProvider({ children }) {
         // at the bottom; top-right on desktop, out of the way of the composer.
         <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-2 p-4 md:inset-x-auto md:right-6 md:top-6 md:bottom-auto md:items-end">
           {toasts.map((item) => (
-            <div key={item.id} className="w-full max-w-sm motion-safe:animate-fade-in md:w-auto">
+            <div
+              key={item.id}
+              onMouseEnter={() => timers.current.get(item.id)?.pause("hover")}
+              onMouseLeave={() => timers.current.get(item.id)?.resume("hover")}
+              onFocusCapture={() => timers.current.get(item.id)?.pause("focus")}
+              onBlurCapture={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget))
+                  timers.current.get(item.id)?.resume("focus");
+              }}
+              className="w-full max-w-sm motion-safe:animate-fade-in md:w-auto"
+            >
               <Toast {...item} onDismiss={() => dismiss(item.id)} />
             </div>
           ))}
@@ -68,6 +90,6 @@ export function ToastProvider({ children }) {
 
 export function useToast() {
   const context = useContext(ToastContext);
-  if (!context) throw new Error('useToast must be used inside a ToastProvider');
+  if (!context) throw new Error("useToast must be used inside a ToastProvider");
   return context;
 }

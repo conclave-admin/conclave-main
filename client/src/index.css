@@ -19,52 +19,47 @@
 :root {
   color-scheme: light;
 
-  --color-canvas: 247 248 250; /* Color.Background  #f7f8fa */
-  --color-surface: 255 255 255; /* Color.Surface     #ffffff */
-  --color-ink: 17 24 39; /* Color.Text.Primary   #111827 */
-  --color-muted: 107 114 128; /* Color.Text.Secondary #6b7280 */
-  --color-line: 229 231 235; /* Color.Border        #e5e7eb */
-  --color-brand: 79 70 229; /* Color.Primary       #4f46e5 */
-  --color-brand-soft: 238 242 255; /* #eef2ff, not a Foundations token */
-  --color-success: 22 163 74; /* Color.Success       #16a34a */
-  --color-warning: 217 119 6; /* Color.Warning       #d97706 */
-  --color-error: 220 38 38; /* Color.Error         #dc2626 */
-
-  /* Elevation.Modal. Shadow is a token too, or a dark modal keeps a light
-     shadow and reads as a bright halo. */
-  --shadow-modal: 0 12px 28px 0 rgba(17, 24, 39, 0.14);
+  --color-canvas: 244 246 250; /* warm paper #f7f5f0 */
+  --color-surface: 255 255 255; /* soft white #fffefb */
+  --color-ink: 27 32 45;
+  --color-muted: 102 112 131;
+  --color-line: 229 233 241;
+  --color-brand: 79 70 229; /* Preserve the purple brand identity. */
+  --color-brand-soft: 238 235 255;
+  --color-success: 21 128 74;
+  --color-warning: 161 98 7;
+  --color-error: 185 28 28;
+  --shadow-modal: 0 16px 48px -12px rgba(37, 37, 43, 0.18);
 }
 
 /*
-  Dark palette. Same indigo identity, tuned for contrast on dark surfaces
-  rather than inverted mechanically: brand lightens to stay legible on a dark
-  field, and brand-soft becomes the dark-equivalent tint of the same hue.
+  Neutral dark surfaces retain the existing purple identity. Muted text and
+  semantic colours are tuned independently for readability in each theme.
 */
 html.dark {
   color-scheme: dark;
 
-  --color-canvas: 11 13 18;
-  --color-surface: 18 21 28;
-  --color-ink: 243 244 246;
-  --color-muted: 156 163 175;
-  --color-line: 36 42 54;
-  --color-brand: 129 140 248;
-  --color-brand-soft: 30 27 75;
-  --color-success: 74 222 128;
-  --color-warning: 251 191 36;
-  --color-error: 248 113 113;
-
-  --shadow-modal: 0 12px 28px 0 rgba(0, 0, 0, 0.5);
+  --color-canvas: 14 18 26; /* neutral charcoal #121214 */
+  --color-surface: 22 28 39;
+  --color-ink: 235 239 247;
+  --color-muted: 153 165 186;
+  --color-line: 42 52 69;
+  --color-brand: 129 140 248; /* Preserve the existing dark-mode brand. */
+  --color-brand-soft: 43 39 68;
+  --color-success: 110 211 155;
+  --color-warning: 235 190 104;
+  --color-error: 245 143 143;
+  --shadow-modal: 0 20px 56px -12px rgba(0, 0, 0, 0.6);
 }
 
 :root {
   --rail-w: 72px;
-  --list-w: 320px;
+  --list-w: clamp(300px, 30vw, 380px);
 }
 
 @media (min-width: 1280px) {
   :root {
-    --list-w: 360px;
+    --list-w: clamp(340px, 28vw, 420px);
   }
 }
 
@@ -82,58 +77,85 @@ html.dark {
   }
 
   html {
-    font-family: "Inter Tight", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family:
+      "Inter Tight",
+      Inter,
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      sans-serif;
     color: rgb(var(--color-ink));
-    line-height: 1.2;
+    line-height: 1.5;
   }
   body {
     margin: 0;
     min-width: 320px;
     background: rgb(var(--color-canvas));
   }
-  button, input, textarea { font: inherit; }
-  * { box-sizing: border-box; }
-  html, body, #root { height: 100%; }
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  :focus-visible:not([role="dialog"]) {
+    outline: 2px solid rgb(var(--color-brand));
+    outline-offset: 3px;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+}
+
+/* The dark brand token is deliberately light enough for links and focus rings.
+   Filled brand controls need the deeper companion shade to keep white labels
+   above WCAG AA contrast outside the authenticated shell as well. */
+html.dark .bg-brand {
+  background-color: #6555d9;
+  color: #fff;
 }
 
 @layer base {
   /*
-    Scrollbars, rebuilt rather than inherited.
-
-    The UA default is an opaque ~15px slab that reserves space inside every
-    pane it is attached to, so it steals width from the chat list, sits inside
-    the timeline instead of at the window's edge, and cannot be themed — a dark
-    surface would get a light track. Both properties are set at once because
-    Firefox reads only `scrollbar-*` and Chrome/WebKit reads only
-    `::-webkit-scrollbar`, and specifying one leaves the other browser on the
-    default. `auto` track rather than `transparent`: the thumb still needs a
-    rail to sit on.
+    Thin scrollbars stay quiet until the pointer is over a scroll area.
+    Standard properties cover current Chromium and Firefox; the WebKit rules
+    are for Safari versions without scrollbar-color support.
   */
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgb(var(--color-line)) auto;
+    scrollbar-color: transparent transparent;
   }
 
-  ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+  *:hover {
+    scrollbar-color: rgb(var(--color-muted) / 0.45) transparent;
   }
 
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
+  @supports not (scrollbar-color: auto) {
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
 
-  ::-webkit-scrollbar-thumb {
-    background: rgb(var(--color-line));
-    border-radius: 9999px;
-  }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
 
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgb(var(--color-muted));
-  }
+    ::-webkit-scrollbar-thumb {
+      background-color: rgb(var(--color-muted) / 0.4);
+      border-radius: 9999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
 
-  ::-webkit-scrollbar-corner {
-    background: transparent;
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
   }
 }
 
@@ -153,3 +175,482 @@ html.dark {
     display: none;
   }
 }
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+@keyframes message-jump-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(99 102 241 / 0%);
+  }
+  20%,
+  70% {
+    box-shadow: 0 0 0 5px rgb(99 102 241 / 30%);
+  }
+}
+.message-jump-highlight {
+  animation: message-jump-glow 1.8s ease-in-out;
+}
+
+/* A gathering pulse around the stationary brand mark, rather than a spinner. */
+.conclave-loading-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+  isolation: isolate;
+}
+.conclave-loading-mark img {
+  z-index: 1;
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgb(99 72 220 / 12%);
+  animation: conclave-mark-breathe 2.8s ease-in-out infinite;
+}
+.conclave-loading-halo {
+  position: absolute;
+  inset: 8px;
+  border: 1px solid rgb(123 95 240 / 35%);
+  border-radius: 28px;
+  background: rgb(123 95 240 / 4%);
+  animation: conclave-gather 2.8s ease-out infinite;
+}
+.conclave-loading-halo-delayed {
+  animation-delay: -1.4s;
+}
+.conclave-loading-spark {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-brand, #7955e9);
+  top: 10px;
+  right: 13px;
+  box-shadow: 0 0 14px rgb(123 95 240 / 45%);
+  animation: conclave-mark-breathe 2.8s ease-in-out infinite reverse;
+}
+.conclave-loading-track {
+  width: 72px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: rgb(123 95 240 / 12%);
+}
+.conclave-loading-track span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: inherit;
+  background: #7955e9;
+  animation: conclave-travel 1.8s ease-in-out infinite;
+}
+@keyframes conclave-gather {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.7;
+  }
+  85%,
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+@keyframes conclave-mark-breathe {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+@keyframes conclave-travel {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(360%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conclave-loading * {
+    animation: none !important;
+  }
+  .conclave-loading-halo-delayed {
+    display: none;
+  }
+}
+
+/* Messaging application surfaces. Public marketing keeps its own composition. */
+.app-shell {
+  --chat-canvas: 242 244 249;
+  --bubble-in: 255 255 255;
+  --bubble-out: 237 232 255;
+}
+.dark .app-shell {
+  --chat-canvas: 13 18 27;
+  --bubble-in: 29 38 53;
+  --bubble-out: 57 46 88;
+}
+.app-shell button,
+.app-shell a,
+.app-shell input,
+.app-shell textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+.app-shell :focus-visible {
+  outline-offset: 3px;
+}
+.app-shell ::selection {
+  background: rgb(var(--color-brand) / 0.22);
+}
+.app-rail {
+  background: rgb(var(--color-canvas));
+  border-right: 1px solid rgb(var(--color-line));
+}
+.app-rail-panel {
+  background: rgb(var(--color-canvas));
+  transition: width 180ms ease, box-shadow 180ms ease;
+}
+
+.app-page {
+  background: rgb(var(--color-canvas));
+}
+.app-page-content > h1,
+.app-page-content > header h1 {
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+}
+.app-page-content > section {
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.025);
+}
+.app-page-content > section,
+.app-page-content > details {
+  border-radius: 20px;
+}
+.app-page-content > section + section {
+  margin-top: 20px;
+}
+.app-page-content p {
+  overflow-wrap: anywhere;
+}
+.conversation-canvas {
+  background-color: rgb(var(--chat-canvas));
+  background-image: url("./assets/chat-wallpaper.svg");
+  background-size: 220px 220px;
+  background-attachment: local;
+}
+.app-shell select:not([multiple]) {
+  appearance: none;
+  padding-right: 2.35rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m5 7.5 5 5 5-5' stroke='%23716e86' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: 1rem;
+  background-position: right 0.8rem center;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+.app-shell select:not([multiple]):hover:not(:disabled) {
+  border-color: rgb(var(--color-brand) / 0.45);
+}
+.app-shell select:not([multiple]):focus-visible {
+  outline: 2px solid rgb(var(--color-brand) / 0.35);
+  outline-offset: 2px;
+}
+.dark .app-shell select:not([multiple]) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m5 7.5 5 5 5-5' stroke='%23aaa5c2' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.link-preview-card {
+  animation: link-preview-enter 180ms ease-out both;
+}
+@keyframes link-preview-enter {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.message-bubble {
+  border: 1px solid rgb(var(--color-line) / 0.55);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+  line-height: 1.55;
+}
+.message-bubble-in {
+  background: rgb(var(--bubble-in));
+}
+.message-bubble-out {
+  background: rgb(var(--bubble-out));
+  color: rgb(var(--color-ink));
+  border-color: rgb(var(--color-brand) / 0.08);
+}
+
+.chat-composer {
+  padding: 10px 20px max(10px, env(safe-area-inset-bottom));
+  background: rgb(var(--color-surface));
+  border-top: 1px solid rgb(var(--color-line));
+}
+.chat-row {
+  min-height: 72px;
+  border-bottom: 1px solid rgb(var(--color-line) / 0.55);
+}
+.chat-row[aria-current="page"] {
+  box-shadow: inset 3px 0 rgb(var(--color-brand));
+}
+.chat-inbox {
+  background: rgb(var(--color-surface));
+}
+.app-shell ::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.app-shell ::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-muted) / 0.25);
+  border-radius: 8px;
+}
+.auth-art {
+  background: #24203f;
+  color: #fff;
+  background-image:
+    radial-gradient(ellipse at 10% 20%, #6c54cf 0%, transparent 55%),
+    radial-gradient(ellipse at 100% 100%, #43408e 0%, transparent 60%);
+}
+@media (max-width: 767px) {
+  .chat-row {
+    min-height: 76px;
+  }
+  .chat-composer {
+    padding: 10px 12px max(10px, env(safe-area-inset-bottom));
+  }
+  .app-page-content > section {
+    border-radius: 16px;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .app-page-content {
+    animation: app-content-enter 0.18s ease-out;
+  }
+  @keyframes app-content-enter {
+    from {
+      opacity: 0.65;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .link-preview-card { animation: none; }
+  .app-shell select:not([multiple]) { transition: none; }
+}
+.dark .app-shell .bg-brand {
+  background-color: #6555d9;
+  color: #fff;
+}
+/* The composer pill is explicit; attachment menus and reply previews retain
+   their own geometry, regardless of which child renders last. */
+.message-column {
+  max-width: min(85%, calc(100% - 46px));
+}
+.message-meta [data-message-status] {
+  flex-shrink: 0;
+}
+.message-meta button {
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.message-bubble .message-meta {
+  margin-bottom: -3px;
+}
+.message-reactions {
+  filter: drop-shadow(0 1px 1px rgb(15 23 42 / 0.04));
+}
+.shared-media-tile > div {
+  max-width: none;
+}
+.shared-media-tile img {
+  transition: filter 160ms ease;
+}
+.settings-page > section,
+.settings-page > div > section {
+  border-radius: 16px;
+  box-shadow: none;
+  scroll-margin-top: 16px;
+}
+.settings-page input[type="checkbox"],
+.settings-page input[type="radio"] {
+  accent-color: rgb(var(--color-brand));
+  flex-shrink: 0;
+}
+.settings-page label:has(input[type="checkbox"]) {
+  min-height: 44px;
+}
+.settings-navigation {
+  scrollbar-width: none;
+}
+@media (min-width: 768px) {
+  .message-column {
+    max-width: min(36rem, 68%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shared-media-tile img {
+    transition: none;
+  }
+}
+.emoji-mart-panel em-emoji-picker {
+  width: 100%;
+  max-width: 100%;
+  height: min(360px, 55dvh);
+}
+
+.message-attachment-body .message-bubble {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.message-attachment-body > .message-meta {
+  padding-inline: 4px;
+}
+
+/* Media is one bounded album bubble, never a full-width grid of message cards. */
+.media-album-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(360px, 100%);
+  max-width: calc(100% - 46px);
+  gap: 3px;
+  padding: 3px;
+  margin-top: 12px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgb(var(--bubble-in));
+  box-shadow: 0 1px 2px rgb(15 23 42 / .08);
+}
+.media-album-out {
+  margin-left: auto;
+  background: rgb(var(--bubble-out));
+}
+.media-album-in { margin-left: 46px; }
+.media-album-grid .album-tile article,
+.media-album-grid .album-tile article > div {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+}
+.album-tile .message-attachment-body {
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.album-tile .message-attachment-body > div:has(.media-visual),
+.album-tile .media-visual,
+.album-tile .media-visual > button:first-child {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+}
+.album-tile .message-attachment-body > div:has(.media-visual) > div {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.album-tile .media-visual img { width: 100%; height: 100%; object-fit: cover; }
+.media-album-three > .album-tile:first-child { grid-column: span 2; }
+.media-album-three > .album-tile:first-child .message-attachment-body { aspect-ratio: 2; }
+.album-tile .message-bubble {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 1;
+  width: 100%;
+  padding: 24px 8px 27px;
+  border: 0;
+  border-radius: 0;
+  background: linear-gradient(transparent, rgb(0 0 0 / .75));
+  color: white;
+}
+.album-tile .message-bubble > div { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.message-attachment-body:has(.media-visual) { width: min(320px, 100%); }
+.album-tile .message-attachment-body:has(.media-visual) { width: 100%; }
+.message-attachment-body:has(.media-visual) > .message-meta {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  z-index: 2;
+  margin: 0;
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: rgb(0 0 0 / .55);
+  color: white;
+  text-shadow: 0 1px 2px rgb(0 0 0 / .3);
+}
+.message-attachment-body:has(.media-visual) > .message-meta [data-message-status] { color: inherit; }
+.message-attachment-body:has(.media-visual) > .message-meta [data-message-status="read"] { color: #c4b5fd; }
+.message-attachment-body:has(.media-visual) > .message-meta [data-message-status="queued"] { color: #fde68a; }
+.album-tile .message-reactions { position: absolute; top: 6px; left: 6px; z-index: 4; }
+.album-tile .media-visual > [data-download-state] { position: absolute; inset: 8px 8px auto; z-index: 3; border-radius: 8px; background: rgb(0 0 0 / .7); padding: 6px; color: white; }
+.media-staging-dialog > div:first-child { padding: 14px 20px; }
+.media-staging-dialog > div:last-child { padding: 12px max(16px, calc((100% - 760px) / 2)); }
+.media-staging-preview { background: rgb(var(--color-canvas)); }
+@media (max-width: 767px) {
+  .media-album-grid { width: min(320px, 100%); }
+  .media-staging-dialog > div:first-child { padding: 12px 16px; }
+  .media-staging-dialog > div:last-child { padding: 10px 12px max(10px, env(safe-area-inset-bottom)); }
+}
+.message-attachment-body:has(.media-visual) > .message-bubble:not(.album-tile .message-bubble) {
+  order: 2;
+  width: 100%;
+  padding-bottom: 24px;
+}
+
+/* A neutral theatre keeps media colours independent of the chat theme. */
+.media-viewer-dialog { background: #111318; color: #f8fafc; }
+.media-viewer-dialog > div:first-child { padding: 14px 20px; border-color: #ffffff12; align-items: center; }
+.media-viewer-dialog > div:first-child h2 { color: #f8fafc; font-size: 14px; font-weight: 500; }
+.media-viewer-dialog > div:first-child button { color: #cbd5e1; }
+.media-viewer-dialog > div:nth-child(2) { color: #f8fafc; }
+.media-viewer-dialog .border-line { border-color: #ffffff12; }
+.media-viewer-dialog .viewer-stage { background: #0b0d11; }
+.media-viewer-dialog .viewer-stage > img { display: block; }
+.media-viewer-dialog .viewer-caption { text-align: center; }
+.media-viewer-dialog .viewer-filmstrip { background: #0b0d11; }
+.viewer-icon-button { display: inline-grid; width: 44px; height: 44px; flex-shrink: 0; place-items: center; border-radius: 999px; }
+.viewer-icon-button:hover:not(:disabled) { background: #ffffff18; }
+.viewer-icon-button:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+@media (max-width: 767px) {
+  .media-viewer-dialog > div:first-child { padding: 12px 16px; }
+  .media-viewer-dialog .viewer-caption { padding: 10px 16px; max-height: 20vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-rail-panel { transition: none; }
+}
+.shared-media-tile .media-visual { position: relative; width: 100%; height: 100%; }
+.shared-media-tile .media-visual > button:first-child { width: 100%; height: 100%; max-width: none !important; aspect-ratio: 1 !important; border: 0; }
+.shared-media-tile .media-visual img { width: 100%; height: 100%; object-fit: cover; }
+.shared-media-tile .media-preview-retry,
+.shared-media-tile .media-download-state { position: absolute; z-index: 15; left: 50%; top: 62%; transform: translate(-50%, -50%); }
+.media-viewer-dialog .text-brand { color: #c4b5fd; }
+.viewer-filmstrip { justify-content: flex-start; }
+.viewer-filmstrip > button:first-child { margin-left: auto; }
+.viewer-filmstrip > button:last-child { margin-right: auto; }
+.audio-waveform { display: flex; height: 36px; align-items: center; justify-content: space-between; gap: 2px; color: rgb(var(--color-brand)); overflow: hidden; }
+.audio-waveform > span { display: block; flex: 1 1 2px; min-width: 2px; max-width: 4px; border-radius: 999px; background: currentColor; }
+.voice-control { display: inline-grid; width: 40px; height: 44px; flex-shrink: 0; place-items: center; border-radius: 999px; }
+.voice-control:focus-visible { outline: 2px solid rgb(var(--color-brand)); outline-offset: 2px; }
+.audio-waveform { gap: 1px; }
+.audio-waveform > span { min-width: 1px; }
+/* Overlay timestamps must not intercept taps intended for the photo. */
+.message-attachment-body:has(.media-visual) > .message-meta { pointer-events: none; }
+.message-attachment-body:has(.media-visual) > .message-meta button { pointer-events: auto; }

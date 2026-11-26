@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import IconClose from '@/assets/icons/close.svg?react';
+import { containDialog, isTopDialog } from "../../lib/dialogFocus";
+import { useEffect, useId, useRef } from "react";
+import { createPortal } from "react-dom";
+import IconClose from "@/assets/icons/close.svg?react";
 
 /**
  * A bottom-anchored dialog — the mobile form of `Modal`.
@@ -16,7 +17,14 @@ import IconClose from '@/assets/icons/close.svg?react';
  * @param {React.ReactNode} title
  * @param {React.ReactNode} [footer]
  */
-export default function Sheet({ open, onClose, title, children, footer, className = '' }) {
+export default function Sheet({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  className = "",
+}) {
   const titleId = useId();
   const panelRef = useRef(null);
   const restoreFocusTo = useRef(null);
@@ -25,22 +33,31 @@ export default function Sheet({ open, onClose, title, children, footer, classNam
     if (!open) return undefined;
     restoreFocusTo.current = document.activeElement;
     panelRef.current?.focus();
-    return () => restoreFocusTo.current?.focus?.();
+    const release = containDialog(panelRef.current);
+    return () => {
+      release();
+      restoreFocusTo.current?.focus?.();
+    };
   }, [open]);
 
   useEffect(() => {
     if (!open) return undefined;
 
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') onClose?.();
+      if (
+        isTopDialog(panelRef.current) &&
+        !panelRef.current?.querySelector('[role="menu"]') &&
+        event.key === "Escape"
+      )
+        onClose?.();
     };
-    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener("keydown", onKeyDown);
 
     const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    document.body.style.overflow = "hidden";
 
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
     };
   }, [open, onClose]);
@@ -80,7 +97,11 @@ export default function Sheet({ open, onClose, title, children, footer, classNam
 
         <div className="px-5 py-4 text-body text-ink">{children}</div>
 
-        {footer && <div className="flex justify-end gap-3 border-t border-line px-5 py-4">{footer}</div>}
+        {footer && (
+          <div className="flex justify-end gap-3 border-t border-line px-5 py-4">
+            {footer}
+          </div>
+        )}
       </div>
     </div>,
     document.body,

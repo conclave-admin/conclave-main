@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import AuthLayout from '@/components/layout/AuthLayout';
-import Button from '@/components/ui/Button';
-import Input from '@/components/ui/Input';
-import { useAuth } from '@/contexts/AuthContext';
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import AuthLayout from "@/components/layout/AuthLayout";
+import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
+import { useAuth } from "@/contexts/AuthContext";
+import { isDevAuthBypass } from "@/config/devPreview";
 
 /**
  * Create an account.
@@ -15,19 +16,31 @@ import { useAuth } from '@/contexts/AuthContext';
 export default function Register() {
   const { register } = useAuth();
   const navigate = useNavigate();
-  const [form, setForm] = useState({ displayName: '', email: '', password: '' });
-  const [error, setError] = useState('');
+  const [form, setForm] = useState({
+    displayName: "",
+    email: "",
+    password: "",
+    website: "",
+  });
+  const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function submit(event) {
     event.preventDefault();
     setSubmitting(true);
-    setError('');
+    setError("");
     try {
-      await register(form);
-      navigate('/chats', { replace: true });
+      const result = await register(form);
+      if (isDevAuthBypass) {
+        navigate("/chats", { replace: true });
+        return;
+      }
+      navigate("/verify-email", {
+        replace: true,
+        state: { verificationEmailQueued: result?.verificationEmailQueued },
+      });
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not create your account.');
+      setError(err.response?.data?.message || "Could not create your account.");
     } finally {
       setSubmitting(false);
     }
@@ -42,19 +55,40 @@ export default function Register() {
       alternateLabel="Sign in"
     >
       <form onSubmit={submit} className="space-y-5">
+        <div
+          className="absolute -left-[10000px] top-auto h-px w-px overflow-hidden"
+          aria-hidden="true"
+        >
+          <label htmlFor="website">Website</label>
+          <input
+            id="website"
+            name="website"
+            type="text"
+            tabIndex={-1}
+            autoComplete="off"
+            value={form.website}
+            onChange={(event) =>
+              setForm({ ...form, website: event.target.value })
+            }
+          />
+        </div>
         <Input
           id="displayName"
           label="Display name"
           autoComplete="name"
+          maxLength={100}
           required
           value={form.displayName}
-          onChange={(event) => setForm({ ...form, displayName: event.target.value })}
+          onChange={(event) =>
+            setForm({ ...form, displayName: event.target.value })
+          }
         />
         <Input
           id="email"
           label="Email"
           type="email"
           autoComplete="email"
+          maxLength={254}
           required
           value={form.email}
           onChange={(event) => setForm({ ...form, email: event.target.value })}
@@ -67,17 +101,22 @@ export default function Register() {
           autoComplete="new-password"
           required
           value={form.password}
-          onChange={(event) => setForm({ ...form, password: event.target.value })}
+          onChange={(event) =>
+            setForm({ ...form, password: event.target.value })
+          }
         />
 
         {error && (
-          <p role="alert" className="rounded-lg bg-error/10 p-3 text-body text-error">
+          <p
+            role="alert"
+            className="rounded-lg bg-error/10 p-3 text-body text-error"
+          >
             {error}
           </p>
         )}
 
         <Button type="submit" className="w-full" disabled={submitting}>
-          {submitting ? 'Creating account…' : 'Create account'}
+          {submitting ? "Creating account…" : "Create account"}
         </Button>
       </form>
     </AuthLayout>

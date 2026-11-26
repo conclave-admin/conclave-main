@@ -1,22 +1,27 @@
-const { query } = require('../config/db');
-const asyncHandler = require('../utils/asyncHandler');
-const { ok } = require('../utils/apiResponse');
-const ApiError = require('../utils/ApiError');
-const { NOTIFICATION_TYPES } = require('../services/notification.service');
+const { query } = require("../config/db");
+const asyncHandler = require("../utils/asyncHandler");
+const { ok } = require("../utils/apiResponse");
+const ApiError = require("../utils/ApiError");
+const { NOTIFICATION_TYPES } = require("../services/notification.service");
+const { validateQuietHours } = require("../services/quietHours");
 
 // What a caller may set. `activity_level` is constrained again by a CHECK in
 // migration 015 — this is the friendly version of the same rule, so the client
 // gets the list of allowed values instead of a database error message.
-const ACTIVITY_LEVELS = ['all', 'mentions', 'none'];
+const ACTIVITY_LEVELS = ["all", "mentions", "none"];
 
 // What a caller gets when they have never saved anything. Defined here rather
 // than read out of an absent row so that "no preferences" and "preferences all
 // set to their defaults" are literally the same object, and a client cannot tell
 // the difference between a new account and a deliberately-configured one.
 const DEFAULTS = {
-  activity_level: 'all',
+  activity_level: "all",
   muted: {},
   push_enabled: true,
+  push_preview_enabled: true,
+  in_app_alerts_enabled: true,
+  quiet_hours: [],
+  quiet_hours_timezone: "UTC",
 };
 
 // Upsert rather than update-then-insert. Two concurrent saves on a first-ever
@@ -24,21 +29,25 @@ const DEFAULTS = {
 // duplicate-key error from the loser. ON CONFLICT resolves that in the database
 // instead of in application code.
 const UPSERT = `
-  INSERT INTO notification_preferences (user_id, activity_level, muted, push_enabled)
-  VALUES ($1, $2, $3::jsonb, $4)
+  INSERT INTO notification_preferences (user_id, activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, quiet_hours, quiet_hours_timezone)
+  VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7::jsonb, $8)
   ON CONFLICT (user_id) DO UPDATE
-    SET activity_level = EXCLUDED.activity_level,
-        muted           = EXCLUDED.muted,
-        push_enabled    = EXCLUDED.push_enabled,
-        updated_at      = NOW()
-  RETURNING activity_level, muted, push_enabled, updated_at
+    SET activity_level        = EXCLUDED.activity_level,
+        muted                 = EXCLUDED.muted,
+        push_enabled          = EXCLUDED.push_enabled,
+        push_preview_enabled  = EXCLUDED.push_preview_enabled,
+        in_app_alerts_enabled = EXCLUDED.in_app_alerts_enabled,
+        quiet_hours           = EXCLUDED.quiet_hours,
+        quiet_hours_timezone  = EXCLUDED.quiet_hours_timezone,
+        updated_at            = NOW()
+  RETURNING activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, quiet_hours, quiet_hours_timezone, updated_at
 `;
 
 // ---------- getPreferences ----------
 const getPreferences = asyncHandler(async (req, res) => {
   const result = await query(
-    'SELECT activity_level, muted, push_enabled, updated_at FROM notification_preferences WHERE user_id = $1',
-    [req.user.id]
+    "SELECT activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, quiet_hours, quiet_hours_timezone, updated_at FROM notification_preferences WHERE user_id = $1",
+    [req.user.id],
   );
 
   // No row is not an error and not a null response — it is the default set.
@@ -54,31 +63,74 @@ const getPreferences = asyncHandler(async (req, res) => {
     // the column existed rather than trusting the NOT NULL default to hold.
     muted: row.muted || {},
     push_enabled: row.push_enabled,
+    push_preview_enabled: row.push_preview_enabled,
+    in_app_alerts_enabled: row.in_app_alerts_enabled,
+    quiet_hours: row.quiet_hours || [],
+    quiet_hours_timezone: row.quiet_hours_timezone || "UTC",
     updatedAt: row.updated_at || null,
   });
 });
 
 // ---------- updatePreferences ----------
-// Same whitelist discipline as users.controller updateProfile: only these three
+// Same whitelist discipline as users.controller updateProfile: only these
 // fields, and an empty body is an error rather than a silent no-op, so a client
 // that sends the wrong key finds out instead of believing it saved.
 const updatePreferences = asyncHandler(async (req, res) => {
-  const { activity_level: level, muted, push_enabled: push } = req.body;
+  const {
+    activity_level: level,
+    muted,
+    push_enabled: push,
+    push_preview_enabled: preview,
+    in_app_alerts_enabled: inApp,
+    quiet_hours: quietHours,
+    quiet_hours_timezone: quietTimezone,
+  } = req.body;
 
-  if (level === undefined && muted === undefined && push === undefined) {
+  if (
+    level === undefined &&
+    muted === undefined &&
+    push === undefined &&
+    preview === undefined &&
+    inApp === undefined &&
+    quietHours === undefined &&
+    quietTimezone === undefined
+  ) {
     throw new ApiError(
       400,
-      `No updatable fields provided. Allowed: activity_level, muted, push_enabled`
+      `No updatable fields provided. Allowed: activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, quiet_hours, quiet_hours_timezone`,
     );
   }
 
+  // Both new switches are plain booleans; a non-boolean here would otherwise
+  // reach Postgres as a string and be stored as a truthy value.
+  for (const [name, value] of [
+    ["push_enabled", push],
+    ["push_preview_enabled", preview],
+    ["in_app_alerts_enabled", inApp],
+  ])
+    if (value !== undefined && typeof value !== "boolean")
+      throw new ApiError(400, `${name} must be a boolean`);
+
   if (level !== undefined && !ACTIVITY_LEVELS.includes(level)) {
-    throw new ApiError(400, `activity_level must be one of: ${ACTIVITY_LEVELS.join(', ')}`);
+    throw new ApiError(
+      400,
+      `activity_level must be one of: ${ACTIVITY_LEVELS.join(", ")}`,
+    );
+  }
+
+  if (quietHours !== undefined && !Array.isArray(quietHours)) {
+    throw new ApiError(400, "quiet_hours must be an array of weekly time windows");
+  }
+  if (quietTimezone !== undefined && typeof quietTimezone !== "string") {
+    throw new ApiError(400, "quiet_hours_timezone must be a time zone name");
   }
 
   if (muted !== undefined) {
-    if (muted === null || typeof muted !== 'object' || Array.isArray(muted)) {
-      throw new ApiError(400, 'muted must be an object mapping notification type to a boolean');
+    if (muted === null || typeof muted !== "object" || Array.isArray(muted)) {
+      throw new ApiError(
+        400,
+        "muted must be an object mapping notification type to a boolean",
+      );
     }
     // Both checks live here rather than in the migration because Postgres
     // forbids subqueries in CHECK constraints, so the shape of the values could
@@ -89,7 +141,7 @@ const updatePreferences = asyncHandler(async (req, res) => {
       if (!NOTIFICATION_TYPES.includes(key)) {
         throw new ApiError(400, `Unknown notification type: ${key}`);
       }
-      if (typeof value !== 'boolean') {
+      if (typeof value !== "boolean") {
         throw new ApiError(400, `muted.${key} must be a boolean`);
       }
     }
@@ -104,16 +156,27 @@ const updatePreferences = asyncHandler(async (req, res) => {
   // never-saved row produce the same result as a GET on one: the row comes into
   // existence already holding the values a reader would have synthesised.
   const existing = await query(
-    'SELECT activity_level, muted, push_enabled FROM notification_preferences WHERE user_id = $1',
-    [req.user.id]
+    "SELECT activity_level, muted, push_enabled, push_preview_enabled, in_app_alerts_enabled, quiet_hours, quiet_hours_timezone FROM notification_preferences WHERE user_id = $1",
+    [req.user.id],
   );
   const current = existing.rows.length > 0 ? existing.rows[0] : DEFAULTS;
+  const nextQuietHours = quietHours === undefined ? current.quiet_hours || [] : quietHours;
+  const nextQuietTimezone = quietTimezone === undefined
+    ? current.quiet_hours_timezone || "UTC"
+    : quietTimezone.trim();
+  if (!validateQuietHours(nextQuietHours, nextQuietTimezone)) {
+    throw new ApiError(400, "Quiet hours need valid days, distinct start/end times, and an IANA time zone");
+  }
 
   const result = await query(UPSERT, [
     req.user.id,
     level === undefined ? current.activity_level : level,
     JSON.stringify(muted === undefined ? current.muted || {} : muted),
     push === undefined ? current.push_enabled : push,
+    preview === undefined ? current.push_preview_enabled : preview,
+    inApp === undefined ? current.in_app_alerts_enabled : inApp,
+    JSON.stringify(nextQuietHours),
+    nextQuietTimezone,
   ]);
 
   const row = result.rows[0];
@@ -121,8 +184,17 @@ const updatePreferences = asyncHandler(async (req, res) => {
     activity_level: row.activity_level,
     muted: row.muted || {},
     push_enabled: row.push_enabled,
+    push_preview_enabled: row.push_preview_enabled,
+    in_app_alerts_enabled: row.in_app_alerts_enabled,
+    quiet_hours: row.quiet_hours || [],
+    quiet_hours_timezone: row.quiet_hours_timezone || "UTC",
     updatedAt: row.updated_at,
   });
 });
 
-module.exports = { getPreferences, updatePreferences, ACTIVITY_LEVELS, DEFAULTS };
+module.exports = {
+  getPreferences,
+  updatePreferences,
+  ACTIVITY_LEVELS,
+  DEFAULTS,
+};

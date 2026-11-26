@@ -1,7 +1,7 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig } from "@playwright/test";
 
-const APP = 'http://localhost:5173';
-const PUBLIC = 'http://localhost:5174';
+const APP = "http://localhost:5175";
+const PUBLIC = "http://localhost:5174";
 
 const mobile = {
   viewport: { width: 390, height: 844 },
@@ -16,17 +16,21 @@ const desktop = {
 };
 
 export default defineConfig({
-  testDir: './e2e',
-  outputDir: './e2e/test-results',
-  fullyParallel: true,
+  testDir: "./e2e",
+  outputDir: "./e2e/test-results",
+  // Each Vite server keeps a filesystem watcher open. Serial local execution
+  // makes the suite usable on machines with a low inotify limit; CI can still
+  // scale this explicitly with PLAYWRIGHT_WORKERS.
+  fullyParallel: false,
+  workers: Number(process.env.PLAYWRIGHT_WORKERS) || (process.env.CI ? 2 : 1),
   forbidOnly: !!process.env.CI,
   retries: 0,
-  reporter: [['list']],
+  reporter: [["list"]],
   timeout: 45_000,
   expect: { timeout: 8_000 },
   use: {
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
   },
 
   /*
@@ -34,7 +38,7 @@ export default defineConfig({
    * bundle at dev-server start (`import.meta.env.DEV && VITE_DEV_AUTH_BYPASS`),
    * so it cannot be toggled at runtime from the browser.
    *
-   * 5173 is the app: bypass ON, every service returns fixtures, and the
+   * 5175 is the app: bypass ON, every service returns fixtures, and the
    * visitor is treated as signed in. That covers every authenticated route
    * plus /login and /register, which PublicOnlyRoute deliberately lets
    * through under bypass.
@@ -45,23 +49,33 @@ export default defineConfig({
    * never be reached. One server exists solely to render Landing.
    */
   projects: [
-    { name: 'app-desktop', use: { baseURL: APP, ...desktop } },
-    { name: 'app-mobile', use: { baseURL: APP, ...mobile } },
-    { name: 'public-desktop', use: { baseURL: PUBLIC, ...desktop } },
-    { name: 'public-mobile', use: { baseURL: PUBLIC, ...mobile } },
+    { name: "app-desktop", use: { baseURL: APP, ...desktop } },
+    { name: "app-mobile", use: { baseURL: APP, ...mobile } },
+    { name: "public-desktop", use: { baseURL: PUBLIC, ...desktop } },
+    { name: "public-mobile", use: { baseURL: PUBLIC, ...mobile } },
   ],
 
   webServer: [
     {
-      command: 'npm run dev',
+      command: "npm run dev -- --port 5175",
       url: APP,
-      reuseExistingServer: true,
+      env: {
+        ...process.env,
+        VITE_DEV_AUTH_BYPASS: "true",
+        CHOKIDAR_USEPOLLING: "true",
+      },
+      reuseExistingServer: false,
       timeout: 90_000,
     },
     {
-      command: 'VITE_DEV_AUTH_BYPASS=false npm run dev -- --port 5174',
+      command: "npm run dev -- --port 5174",
       url: PUBLIC,
-      reuseExistingServer: true,
+      env: {
+        ...process.env,
+        VITE_DEV_AUTH_BYPASS: "false",
+        CHOKIDAR_USEPOLLING: "true",
+      },
+      reuseExistingServer: false,
       timeout: 90_000,
     },
   ],

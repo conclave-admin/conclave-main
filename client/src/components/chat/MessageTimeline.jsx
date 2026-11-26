@@ -1,22 +1,93 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import IconArrowDown from '@/assets/icons/arrow-down.svg?react';
-import EmptyState from '../ui/EmptyState';
-import Spinner from '../ui/Spinner';
-import { annotateMessages, daySeparatorLabel } from '@/lib/messageMeta';
-import Message from './Message';
-import TypingIndicator from './TypingIndicator';
+import { readPosition, savePosition } from "../../lib/readingPosition";
+import { observeMessageReads } from "../../lib/messageReads";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import IconArrowDown from "@/assets/icons/arrow-down.svg?react";
+import EmptyState from "../ui/EmptyState";
+import Spinner from "../ui/Spinner";
+import { annotateMessages, daySeparatorLabel } from "@/lib/messageMeta";
+import { groupMediaAlbums, viewerItems } from "../../lib/mediaAlbums";
+import { MediaViewerProvider } from "./MediaViewer";
+import Message from "./Message";
+import TypingIndicator from "./TypingIndicator";
 
 function DaySeparator({ label }) {
   return (
-    <div className="my-4 flex items-center gap-3" role="separator" aria-label={label}>
-      <span className="h-px flex-1 bg-line" aria-hidden="true" />
-      <span className="shrink-0 text-metadata text-muted">{label}</span>
-      <span className="h-px flex-1 bg-line" aria-hidden="true" />
+    <div
+      className="my-4 flex items-center justify-center"
+      role="separator"
+      aria-label={label}
+    >
+      <span className="rounded-lg border border-line/60 bg-surface/95 px-3 py-1 text-[11px] font-medium text-muted shadow-sm">
+        {label}
+      </span>
     </div>
   );
 }
 
 const NEAR_BOTTOM_PX = 120;
+const WINDOW_THRESHOLD = 80;
+const OVERSCAN_PX = 900;
+
+function groupKey(group) {
+  return group.messages[0].client_id || group.messages[0].id;
+}
+
+function estimatedHeight(group) {
+  const text = group.messages.reduce(
+    (length, message) => length + (message.content?.length || 0),
+    0,
+  );
+  return Math.max(76, 68 * group.messages.length + Math.ceil(text / 42) * 20);
+}
+
+function indexAt(offsets, position) {
+  let low = 0;
+  let high = offsets.length - 1;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (offsets[middle + 1] <= position) low = middle + 1;
+    else high = middle;
+  }
+  return Math.min(low, offsets.length - 2);
+}
+
+function rangeAt(offsets, top, viewportHeight) {
+  return {
+    start: indexAt(offsets, Math.max(0, top - OVERSCAN_PX)),
+    end: Math.min(
+      offsets.length - 1,
+      indexAt(offsets, top + viewportHeight + OVERSCAN_PX) + 1,
+    ),
+  };
+}
+
+function MeasuredGroup({ children, groupIndex, onMeasure, ...props }) {
+  const ref = useRef(null);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return undefined;
+    const measure = () =>
+      onMeasure(groupIndex, node.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [groupIndex, onMeasure]);
+  return (
+    <div ref={ref} {...props}>
+      {children}
+    </div>
+  );
+}
 
 /**
  * The conversation timeline.
@@ -36,14 +107,17 @@ const NEAR_BOTTOM_PX = 120;
  * @param {{ current: HTMLElement }} scrollContainerRef
  */
 export default function MessageTimeline({
+  initialPosition,
   messages,
   scrollContainerRef,
   viewerId,
   members = [],
   isAdmin,
   roomId,
+  readOnly = false,
   deliveryIds,
   typingUserIds = [],
+  recordingUserIds = [],
   hasMore,
   isLoadingOlder,
   onLoadOlder,
@@ -55,6 +129,17 @@ export default function MessageTimeline({
   onPin,
   onUnpin,
   onToggleReaction,
+  lastSeenSequence = 0,
+  onMessageInfo,
+  onMessageVisible,
+  readsEnabled = true,
+  onOpenThread,
+  onForward,
+  onJumpToMessage,
+  jumpTargetId,
+  onJumpLocated,
+  highlightedId,
+  disableWindowing = false,
 }) {
   const contentRef = useRef(null);
   const topSentinelRef = useRef(null);
@@ -62,14 +147,154 @@ export default function MessageTimeline({
   const placedRoomRef = useRef(null); // which room has had its first scroll
   const lastSeenRef = useRef({ firstId: null, lastId: null });
   const heightBeforeOlderRef = useRef(0);
+  const pendingBottomRef = useRef(false);
+  const heightCacheRef = useRef(new Map());
+  const heightRoomRef = useRef(roomId);
+  if (heightRoomRef.current !== roomId) {
+    heightRoomRef.current = roomId;
+    heightCacheRef.current = new Map();
+  }
+  const [heightRevision, setHeightRevision] = useState(0);
+  const [windowRange, setWindowRange] = useState(null);
+  const locatedJumpRef = useRef(null);
   const [showJump, setShowJump] = useState(false);
   const [newBelow, setNewBelow] = useState(0);
+  const [expandedAlbums, setExpandedAlbums] = useState(() => new Set());
+  const visibleIds = useMemo(() => new Set(), [roomId]);
+  const pendingReads = useMemo(() => new Set(), [roomId]);
 
   const hasMessages = messages.length > 0;
   const annotated = useMemo(() => annotateMessages(messages), [messages]);
   const messagesById = useMemo(
     () => new Map(annotated.map((message) => [message.id, message])),
     [annotated],
+  );
+  const firstUnreadId = useMemo(() => {
+    const unread = annotated.find(
+      (message) =>
+        Number(message.room_sequence || 0) > Number(lastSeenSequence) &&
+        message.sender_id !== viewerId,
+    );
+    return unread?.id || null;
+  }, [annotated, lastSeenSequence, viewerId]);
+  const unreadCount = useMemo(
+    () =>
+      annotated.filter(
+        (message) =>
+          Number(message.room_sequence || 0) > Number(lastSeenSequence) &&
+          message.sender_id !== viewerId,
+      ).length,
+    [annotated, lastSeenSequence, viewerId],
+  );
+
+  const groups = useMemo(
+    () => groupMediaAlbums(annotated, firstUnreadId),
+    [annotated, firstUnreadId],
+  );
+  const mediaItems = useMemo(() => viewerItems(annotated), [annotated]);
+  useLayoutEffect(() => {
+    const group = groups.find(
+      (entry) =>
+        entry.albumId &&
+        entry.messages.some((message) => message.id === jumpTargetId),
+    );
+    if (group)
+      setExpandedAlbums((current) =>
+        current.has(group.albumId)
+          ? current
+          : new Set([...current, group.albumId]),
+      );
+  }, [groups, jumpTargetId]);
+  const handleMediaView = useCallback(
+    (message) => {
+      if (
+        !readsEnabled ||
+        message.sender_id === viewerId ||
+        message._optimistic ||
+        visibleIds.has(message.id) ||
+        pendingReads.has(message.id)
+      )
+        return;
+      pendingReads.add(message.id);
+      return Promise.resolve(onMessageVisible?.(message, { mediaViewer: true }))
+        .then((accepted) => {
+          if (accepted === true) visibleIds.add(message.id);
+        })
+        .finally(() => pendingReads.delete(message.id));
+    },
+    [readsEnabled, viewerId, visibleIds, pendingReads, onMessageVisible],
+  );
+
+  const virtualized = groups.length > WINDOW_THRESHOLD && !disableWindowing;
+  const offsets = useMemo(() => {
+    const next = [0];
+    for (const group of groups)
+      next.push(
+        next.at(-1) +
+          (heightCacheRef.current.get(groupKey(group)) ||
+            estimatedHeight(group)),
+      );
+    return next;
+  }, [groups, heightRevision]);
+  const groupForMessage = useMemo(() => {
+    const index = new Map();
+    groups.forEach((group, groupIndex) =>
+      group.messages.forEach((message) => index.set(message.id, groupIndex)),
+    );
+    return index;
+  }, [groups]);
+  const initialGroup =
+    (initialPosition?.id && groupForMessage.get(initialPosition.id)) ??
+    (firstUnreadId && groupForMessage.get(firstUnreadId)) ??
+    Math.max(0, groups.length - 1);
+  const initialRange = virtualized
+    ? {
+        start: Math.max(0, initialGroup - 12),
+        end: Math.min(groups.length, initialGroup + 18),
+      }
+    : { start: 0, end: groups.length };
+  const range =
+    virtualized && windowRange?.roomId === roomId
+      ? {
+          start: Math.min(windowRange.start, groups.length - 1),
+          end: Math.min(
+            groups.length,
+            Math.max(windowRange.end, windowRange.start + 1),
+          ),
+        }
+      : initialRange;
+
+  const syncRange = useCallback(() => {
+    if (pendingBottomRef.current) return;
+    const container = scrollContainerRef?.current;
+    if (!container || !virtualized) return;
+    const next = rangeAt(offsets, container.scrollTop, container.clientHeight);
+    setWindowRange((current) =>
+      current?.roomId === roomId &&
+      current.start === next.start &&
+      current.end === next.end
+        ? current
+        : { ...next, roomId },
+    );
+  }, [scrollContainerRef, virtualized, offsets, roomId]);
+
+  const onMeasure = useCallback(
+    (index, height) => {
+      const key = groupKey(groups[index]);
+      const previous =
+        heightCacheRef.current.get(key) || estimatedHeight(groups[index]);
+      if (Math.abs(previous - height) < 1) return;
+      heightCacheRef.current.set(key, height);
+      const container = scrollContainerRef?.current;
+      if (
+        container &&
+        !stickRef.current &&
+        offsets[index + 1] <= container.scrollTop
+      )
+        container.scrollTop += height - previous;
+      setHeightRevision((value) => value + 1);
+    },
+    [groups, offsets, scrollContainerRef],
   );
 
   // A Map lookup instead of a scan per row.
@@ -80,28 +305,61 @@ export default function MessageTimeline({
   // and those events are what decide whether we are "at the bottom".
   const scrollToBottom = useCallback(() => {
     const container = scrollContainerRef?.current;
-    if (container) container.scrollTop = container.scrollHeight;
+    if (container) {
+      if (virtualized) {
+        pendingBottomRef.current = true;
+        setWindowRange({
+          start: Math.max(0, groups.length - 35),
+          end: groups.length,
+          roomId,
+        });
+      } else container.scrollTop = container.scrollHeight;
+    }
     stickRef.current = true;
     setShowJump(false);
     setNewBelow(0);
-  }, [scrollContainerRef]);
+  }, [scrollContainerRef, virtualized, groups.length, roomId]);
+
+  useLayoutEffect(() => {
+    if (!pendingBottomRef.current || range.end !== groups.length) return;
+    const container = scrollContainerRef?.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+    pendingBottomRef.current = false;
+    syncRange();
+  }, [range.start, range.end, groups.length, scrollContainerRef, syncRange]);
 
   useEffect(() => {
     const container = scrollContainerRef?.current;
     if (!container) return undefined;
 
     const handleScroll = () => {
-      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+      syncRange();
+      const distance =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
       const atBottom = distance <= NEAR_BOTTOM_PX;
       stickRef.current = atBottom;
       setShowJump(!atBottom);
+      const viewport = container.getBoundingClientRect();
+      const visible = [...container.querySelectorAll("[data-message-id]")].find(
+        (el) => {
+          const box = el.getBoundingClientRect();
+          return box.bottom > viewport.top && box.top < viewport.bottom;
+        },
+      );
+      if (visible && placedRoomRef.current === roomId)
+        savePosition(viewerId, roomId, {
+          id: visible.dataset.messageId,
+          offset: visible.getBoundingClientRect().top - viewport.top,
+          atBottom,
+        });
       if (atBottom) setNewBelow(0);
     };
 
     handleScroll();
-    container.addEventListener('scroll', handleScroll, { passive: true });
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [scrollContainerRef]);
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, [scrollContainerRef, viewerId, roomId, syncRange]);
 
   // Runs before paint, so the reader never sees the top of the room flash by.
   useLayoutEffect(() => {
@@ -110,24 +368,60 @@ export default function MessageTimeline({
 
     const first = annotated[0];
     const last = annotated[annotated.length - 1];
+    // An acknowledgement replaces the temporary id without adding a new item.
+    // Preserve scroll position and open actions for that same logical message.
+    const lastId = last.client_id || last.id;
     const seen = lastSeenRef.current;
 
     if (placedRoomRef.current !== roomId) {
-      // 1. First paint of this room: open at the latest message.
+      // 1. First paint opens at the unread boundary when one exists.
       placedRoomRef.current = roomId;
-      container.scrollTop = container.scrollHeight;
-      stickRef.current = true;
-    } else if (seen.firstId && first.id !== seen.firstId && last.id === seen.lastId) {
+      const savedId =
+        initialPosition && !initialPosition.atBottom && initialPosition.id;
+      const savedTarget =
+        savedId &&
+        container.querySelector(`[data-message-id="${CSS.escape(savedId)}"]`);
+      const target =
+        savedTarget ||
+        (firstUnreadId &&
+          container.querySelector(`[data-message-id="${firstUnreadId}"]`));
+      if (target) {
+        container.scrollTop +=
+          target.getBoundingClientRect().top -
+          container.getBoundingClientRect().top -
+          (savedTarget ? initialPosition.offset : 0);
+        stickRef.current = false;
+      } else {
+        container.scrollTop = container.scrollHeight;
+        stickRef.current = true;
+      }
+      if (virtualized && !target && (savedId || firstUnreadId)) {
+        const index = groupForMessage.get(savedId || firstUnreadId);
+        if (index != null) {
+          container.scrollTop =
+            offsets[index] - (savedId ? initialPosition.offset || 0 : 0);
+          stickRef.current = false;
+        }
+      }
+      syncRange();
+    } else if (
+      seen.firstId &&
+      first.id !== seen.firstId &&
+      lastId === seen.lastId
+    ) {
       // 2. Older page prepended: keep the reader on the message they were on.
       if (heightBeforeOlderRef.current > 0) {
-        container.scrollTop += container.scrollHeight - heightBeforeOlderRef.current;
+        container.scrollTop +=
+          container.scrollHeight - heightBeforeOlderRef.current;
         heightBeforeOlderRef.current = 0;
+        syncRange();
       }
-    } else if (last.id !== seen.lastId) {
+    } else if (lastId !== seen.lastId) {
       // 3. Something new at the bottom. Your own sends always follow.
       const mine = last.sender_id === viewerId;
       if (mine || stickRef.current) {
         container.scrollTop = container.scrollHeight;
+        syncRange();
         stickRef.current = true;
         setShowJump(false);
         setNewBelow(0);
@@ -136,23 +430,123 @@ export default function MessageTimeline({
       }
     }
 
-    lastSeenRef.current = { firstId: first.id, lastId: last.id };
-  }, [annotated, roomId, viewerId, scrollContainerRef]);
+    lastSeenRef.current = { firstId: first.id, lastId };
+  }, [
+    annotated,
+    firstUnreadId,
+    roomId,
+    viewerId,
+    scrollContainerRef,
+    virtualized,
+    groupForMessage,
+    offsets,
+    initialPosition,
+    syncRange,
+  ]);
+
+  useLayoutEffect(() => {
+    if (!jumpTargetId || !groupForMessage.has(jumpTargetId)) {
+      locatedJumpRef.current = null;
+      return;
+    }
+    const container = scrollContainerRef?.current;
+    if (!container) return;
+    if (locatedJumpRef.current === jumpTargetId) return;
+    const groupIndex = groupForMessage.get(jumpTargetId);
+    const node = container.querySelector(
+      `[data-message-id="${CSS.escape(String(jumpTargetId))}"]`,
+    );
+    if (!node) {
+      container.scrollTop = offsets[groupIndex];
+      stickRef.current = false;
+      setWindowRange({
+        start: Math.max(0, groupIndex - 8),
+        end: Math.min(groups.length, groupIndex + 12),
+        roomId,
+      });
+      return;
+    }
+    if (!node.getClientRects().length) return;
+    locatedJumpRef.current = jumpTargetId;
+    node.scrollIntoView({
+      behavior:
+        virtualized ||
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+          ? "instant"
+          : "smooth",
+      block: "center",
+    });
+    if (virtualized)
+      savePosition(viewerId, roomId, {
+        id: jumpTargetId,
+        offset:
+          node.getBoundingClientRect().top -
+          container.getBoundingClientRect().top,
+        atBottom: false,
+      });
+    onJumpLocated?.(jumpTargetId);
+  }, [
+    jumpTargetId,
+    groupForMessage,
+    scrollContainerRef,
+    offsets,
+    range.start,
+    range.end,
+    groups.length,
+    roomId,
+    viewerId,
+    virtualized,
+    onJumpLocated,
+    expandedAlbums,
+  ]);
+
+  useEffect(() => {
+    if (virtualized) window.dispatchEvent(new Event("conclave:read-resume"));
+  }, [virtualized, range.start, range.end]);
+
+  useEffect(() => {
+    const container = scrollContainerRef?.current;
+    if (!container || !onMessageVisible) return undefined;
+    return observeMessageReads({
+      container,
+      confirmed: visibleIds,
+      inFlight: pendingReads,
+      enabled: readsEnabled,
+      messages: new Map(
+        annotated
+          .filter(
+            (message) => message.sender_id !== viewerId && !message._optimistic,
+          )
+          .map((message) => [message.id, message]),
+      ),
+      onRead: onMessageVisible,
+    });
+  }, [
+    annotated,
+    onMessageVisible,
+    scrollContainerRef,
+    visibleIds,
+    pendingReads,
+    readsEnabled,
+    viewerId,
+  ]);
 
   // Images loading, the composer growing and the mobile keyboard opening all
   // change heights without a message arriving. Stay on the bottom through them.
   useEffect(() => {
     const container = scrollContainerRef?.current;
     const content = contentRef.current;
-    if (!container || !content || typeof ResizeObserver === 'undefined') return undefined;
+    if (!container || !content || typeof ResizeObserver === "undefined")
+      return undefined;
 
     const observer = new ResizeObserver(() => {
       if (stickRef.current) container.scrollTop = container.scrollHeight;
+      syncRange();
     });
     observer.observe(content);
     observer.observe(container);
     return () => observer.disconnect();
-  }, [scrollContainerRef, hasMessages]);
+  }, [scrollContainerRef, hasMessages, syncRange]);
 
   const requestOlder = useCallback(() => {
     const container = scrollContainerRef?.current;
@@ -169,7 +563,7 @@ export default function MessageTimeline({
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) requestOlder();
       },
-      { root: container, rootMargin: '200px' },
+      { root: container, rootMargin: "200px" },
     );
     observer.observe(node);
     return () => observer.disconnect();
@@ -192,49 +586,138 @@ export default function MessageTimeline({
   }
 
   return (
-    <div
-      ref={contentRef}
-      className="relative mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-5 pt-4 md:px-7"
+    <MediaViewerProvider
+      items={mediaItems}
+      onJump={onJumpToMessage}
+      onView={handleMediaView}
+      deliveryActions={deliveryIds}
     >
-      {hasMore && (
-        <div ref={topSentinelRef} className="py-2">
-          {isLoadingOlder && <Spinner label="Loading earlier messages" />}
-        </div>
-      )}
-
-      {annotated.map((message, index) => (
-        <Fragment key={message.id}>
-          {message._startsDay && (
-            <DaySeparator label={daySeparatorLabel(message.created_at)} />
-          )}
-          {/* mt-auto on the first row keeps a short conversation pinned to the
-              bottom of the pane, next to the composer, rather than stranded at
-              the top with a void beneath it. */}
-          <div className={index === 0 ? 'mt-auto' : message._consecutive ? 'mt-0.5' : 'mt-3'}>
-            <Message
-              message={message}
-              viewerId={viewerId}
-              members={members}
-              isAdmin={isAdmin}
-              roomId={roomId}
-              replyTarget={replyTargetFor(message)}
-              deliveryIds={deliveryIds}
-              onReply={onReply}
-              onEdit={onEdit}
-              onDelete={onDelete}
-              onPromote={onPromote}
-              onFlagTask={onFlagTask}
-              onPin={onPin}
-              onUnpin={onUnpin}
-              onToggleReaction={onToggleReaction}
-            />
+      <div
+        ref={contentRef}
+        className="relative mx-auto flex w-full min-w-0 max-w-5xl flex-1 flex-col px-3 pb-5 pt-4 md:px-8"
+      >
+        {hasMore && (
+          <div ref={topSentinelRef} className="py-2">
+            {isLoadingOlder && <Spinner label="Loading earlier messages" />}
           </div>
-        </Fragment>
-      ))}
+        )}
 
-      <TypingIndicator typingUserIds={typingUserIds} members={members} />
+        {virtualized && range.start > 0 && (
+          <div
+            aria-hidden="true"
+            style={{ height: offsets[range.start], flexShrink: 0 }}
+          />
+        )}
+        {groups.slice(range.start, range.end).map((group, localIndex) => {
+          const groupIndex = range.start + localIndex;
+          return (
+            <MeasuredGroup
+              key={groupKey(group)}
+              groupIndex={groupIndex}
+              onMeasure={onMeasure}
+              className={groupIndex === 0 ? "mt-auto" : ""}
+            >
+              {group.messages[0].id === firstUnreadId && (
+                <div
+                  className="my-4 flex items-center gap-3 text-metadata font-medium text-brand"
+                  role="separator"
+                  aria-label="Unread messages"
+                >
+                  <span
+                    className="h-px flex-1 bg-brand/40"
+                    aria-hidden="true"
+                  />
+                  <span>{unreadCount} unread messages</span>
+                  <span
+                    className="h-px flex-1 bg-brand/40"
+                    aria-hidden="true"
+                  />
+                </div>
+              )}
+              {group.messages[0]._startsDay && (
+                <DaySeparator
+                  label={daySeparatorLabel(group.messages[0].created_at)}
+                />
+              )}
+              <div
+                data-album-id={group.albumId || undefined}
+                className={
+                  group.albumId && group.messages.length > 1
+                    ? `media-album-grid ${group.senderId === viewerId ? "media-album-out" : "media-album-in"} ${group.messages.length === 3 ? "media-album-three" : ""}`
+                    : ""
+                }
+              >
+                {group.messages.map((message) => (
+                  <Fragment key={message.client_id || message.id}>
+                    {/* mt-auto on the first row keeps a short conversation pinned to the
+                bottom of the pane, next to the composer, rather than stranded at
+                the top with a void beneath it. */}
+                    <div
+                      data-message-id={message.id}
+                      className={`min-w-0 max-w-full ${group.albumId && group.messages.length > 1 ? `album-tile ${group.messages.indexOf(message) > 3 && !expandedAlbums.has(group.albumId) ? "hidden" : ""}` : message._consecutive ? "mt-1" : "mt-4"} ${highlightedId === message.id ? "message-jump-highlight rounded-2xl" : ""}`}
+                    >
+                      <Message
+                        message={message}
+                        albumTile={Boolean(
+                          group.albumId && group.messages.length > 1,
+                        )}
+                        overflowCount={
+                          group.albumId &&
+                          group.messages.length > 4 &&
+                          group.messages.indexOf(message) === 3 &&
+                          !expandedAlbums.has(group.albumId)
+                            ? group.messages.length - 4
+                            : 0
+                        }
+                        viewerId={viewerId}
+                        members={members}
+                        isAdmin={isAdmin}
+                        roomId={roomId}
+                        readOnly={readOnly}
+                        replyTarget={replyTargetFor(message)}
+                        deliveryIds={deliveryIds}
+                        onMessageInfo={onMessageInfo}
+                        onReply={onReply}
+                        onEdit={onEdit}
+                        onDelete={onDelete}
+                        onPromote={onPromote}
+                        onFlagTask={onFlagTask}
+                        onPin={onPin}
+                        onUnpin={onUnpin}
+                        onToggleReaction={onToggleReaction}
+                        onOpenThread={onOpenThread}
+                        onForward={onForward}
+                        onJumpToMessage={onJumpToMessage}
+                      />
+                    </div>
+                  </Fragment>
+                ))}
+              </div>
+            </MeasuredGroup>
+          );
+        })}
+        {virtualized && range.end < groups.length && (
+          <div
+            aria-hidden="true"
+            style={{
+              height: offsets.at(-1) - offsets[range.end],
+              flexShrink: 0,
+            }}
+          />
+        )}
 
-      {/*
+        <TypingIndicator
+          recordingUserIds={recordingUserIds}
+          typingUserIds={typingUserIds}
+          members={members}
+        />
+        <span className="sr-only" aria-live="polite" aria-atomic="true">
+          {annotated.length
+            ? `Latest message from ${annotated.at(-1)?.sender_name || "a member"}.`
+            : ""}
+        </span>
+
+        {/*
         `sticky`, not `absolute`. This container is the scroll *content*, so an
         absolutely positioned child anchors to the end of the whole transcript
         — measured 910px below the visible pane, visible only once the reader
@@ -245,18 +728,24 @@ export default function MessageTimeline({
         scroll tick, and an in-flow button would shove the transcript each time
         it appeared or disappeared.
       */}
-      {showJump && (
-        <div className="pointer-events-none sticky bottom-3 z-10 h-0">
-          <button
-            type="button"
-            onClick={scrollToBottom}
-            className="pointer-events-auto absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-surface px-4 py-2 text-label text-ink shadow-modal transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
-          >
-            <IconArrowDown className="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
-            {newBelow > 0 ? `${newBelow} new message${newBelow === 1 ? '' : 's'}` : 'Jump to latest'}
-          </button>
-        </div>
-      )}
-    </div>
+        {showJump && (
+          <div className="pointer-events-none sticky bottom-3 z-10 h-0">
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="pointer-events-auto absolute bottom-0 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-surface px-4 py-2 text-label text-ink shadow-modal transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+            >
+              <IconArrowDown
+                className="h-4 w-4 shrink-0 text-muted"
+                aria-hidden="true"
+              />
+              {newBelow > 0
+                ? `${newBelow} new message${newBelow === 1 ? "" : "s"}`
+                : "Jump to latest"}
+            </button>
+          </div>
+        )}
+      </div>
+    </MediaViewerProvider>
   );
 }

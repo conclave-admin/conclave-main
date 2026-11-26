@@ -1,15 +1,66 @@
-const { pool, query } = require('../config/db');
-const asyncHandler = require('../utils/asyncHandler');
-const { ok } = require('../utils/apiResponse');
-const ApiError = require('../utils/ApiError');
+const { pool, query } = require("../config/db");
+const asyncHandler = require("../utils/asyncHandler");
+const { ok } = require("../utils/apiResponse");
+const ApiError = require("../utils/ApiError");
+const r2 = require("../config/r2");
+const presence = require("../services/presence.service");
+const {
+  MAX_DISPLAY_NAME_LENGTH,
+  validateDisplayName,
+  identityCollisionError,
+} = require("../utils/userIdentity");
 
-const UPDATABLE_FIELDS = ['display_name', 'avatar_url', 'bio'];
+const UPDATABLE_FIELDS = ["display_name", "avatar_url", "bio"];
 const PAGE_SIZE = 25;
+
+// Resolve an opaque R2 avatar key only when it is currently used by an active
+// profile or by a room the requesting user belongs to.
+const getAvatarUrl = asyncHandler(async (req, res) => {
+  const fileUrl = req.query.url;
+  if (
+    typeof fileUrl !== "string" ||
+    !fileUrl.startsWith(`r2://${r2.bucket}/`)
+  ) {
+    throw new ApiError(400, "A valid R2 avatar key is required");
+  }
+  if (!r2.isConfigured())
+    throw new ApiError(503, "File storage is not configured");
+
+  const result = await query(
+    `SELECT f.public_id, f.mime_type
+       FROM file_uploads f
+      WHERE f.file_url = $1 AND f.resource_type = 'r2'
+        AND f.mime_type IN ('image/jpeg', 'image/png', 'image/gif', 'image/webp')
+        AND (
+          EXISTS (SELECT 1 FROM users u WHERE u.avatar_url = f.file_url AND u.deleted_at IS NULL AND privacy_allowed(u.id,$2,'photo'))
+          OR EXISTS (
+            SELECT 1 FROM rooms r
+            INNER JOIN room_members rm ON rm.room_id = r.id
+            WHERE r.avatar_url = f.file_url AND rm.user_id = $2
+          )
+        )`,
+    [fileUrl, req.user.id],
+  );
+  if (!result.rows.length) throw new ApiError(404, "Avatar not found");
+
+  const row = result.rows[0];
+  try {
+    const url = await r2.signedGetUrl(row.public_id, {
+      expiresIn: 3600,
+      contentType: row.mime_type,
+      inline: true,
+    });
+    return ok(res, { url, expiresAt: Math.floor(Date.now() / 1000) + 3600 });
+  } catch (err) {
+    console.error("R2 avatar URL signing failed", { code: err.name });
+    throw new ApiError(502, "Avatar storage is temporarily unavailable");
+  }
+});
 
 // Per-field length ceilings. Without these, updateProfile accepted an
 // arbitrarily long avatar_url or bio (BACKEND_TASKS.md Bug 15).
 const FIELD_LIMITS = {
-  display_name: 100,
+  display_name: MAX_DISPLAY_NAME_LENGTH,
   avatar_url: 2048,
   bio: 1000,
 };
@@ -17,12 +68,30 @@ const FIELD_LIMITS = {
 // ---------- getMe ----------
 const getMe = asyncHandler(async (req, res) => {
   const result = await query(
-    'SELECT id, email, display_name, avatar_url, bio, created_at FROM users WHERE id = $1 AND deleted_at IS NULL',
-    [req.user.id]
+    "SELECT id, email, display_name, avatar_url, bio, created_at, email_verified_at FROM users WHERE id = $1 AND deleted_at IS NULL",
+    [req.user.id],
   );
   if (result.rows.length === 0) {
-    throw new ApiError(404, 'User not found');
+    throw new ApiError(404, "User not found");
   }
+  return ok(res, result.rows[0]);
+});
+
+// Profile reads require a shared room (or the caller's own account). Never
+// expose email or bypass the existing photo/about privacy and block rules.
+const getProfile = asyncHandler(async (req, res) => {
+  const result = await query(
+    `SELECT u.id, u.display_name,
+       CASE WHEN privacy_allowed(u.id,$2,'photo') THEN u.avatar_url ELSE NULL END AS avatar_url,
+       CASE WHEN privacy_allowed(u.id,$2,'about') THEN u.bio ELSE NULL END AS bio
+     FROM users u WHERE u.id=$1 AND u.deleted_at IS NULL
+       AND (u.id=$2 OR EXISTS (
+         SELECT 1 FROM room_members a JOIN room_members b ON b.room_id=a.room_id
+         WHERE a.user_id=$2 AND b.user_id=u.id
+       ))`,
+    [req.params.userId, req.user.id],
+  );
+  if (!result.rows.length) throw new ApiError(404, "Profile not available");
   return ok(res, result.rows[0]);
 });
 
@@ -41,12 +110,24 @@ const updateProfile = asyncHandler(async (req, res) => {
   if (Object.keys(updates).length === 0) {
     throw new ApiError(
       400,
-      `No updatable fields provided. Allowed: ${UPDATABLE_FIELDS.join(', ')}`
+      `No updatable fields provided. Allowed: ${UPDATABLE_FIELDS.join(", ")}`,
     );
   }
 
-  if ('display_name' in updates && !String(updates.display_name).trim()) {
-    throw new ApiError(400, 'display_name cannot be empty');
+  if ("display_name" in updates) {
+    updates.display_name = validateDisplayName(
+      updates.display_name,
+      "display_name",
+    );
+    const collision = await query(
+      `SELECT 1 FROM users
+       WHERE deleted_at IS NULL AND id <> $1
+         AND lower(btrim(display_name)) = lower($2)`,
+      [req.user.id, updates.display_name],
+    );
+    if (collision.rows.length) {
+      throw new ApiError(409, "That display name is already taken");
+    }
   }
 
   for (const [field, value] of Object.entries(updates)) {
@@ -65,20 +146,25 @@ const updateProfile = asyncHandler(async (req, res) => {
   let i = 1;
   for (const [field, value] of Object.entries(updates)) {
     setClauses.push(`${field} = $${i}`);
-    values.push(field === 'display_name' ? String(value).trim() : value);
+    values.push(value);
     i += 1;
   }
   values.push(req.user.id);
 
   // 3. Apply the update, return the fresh row
-  const result = await query(
-    `UPDATE users SET ${setClauses.join(', ')} WHERE id = $${i}
-     RETURNING id, email, display_name, avatar_url, bio, created_at`,
-    values
-  );
+  let result;
+  try {
+    result = await query(
+      `UPDATE users SET ${setClauses.join(", ")} WHERE id = $${i}
+       RETURNING id, email, display_name, avatar_url, bio, created_at`,
+      values,
+    );
+  } catch (error) {
+    throw identityCollisionError(error) || error;
+  }
 
   if (result.rows.length === 0) {
-    throw new ApiError(404, 'User not found');
+    throw new ApiError(404, "User not found");
   }
 
   return ok(res, result.rows[0]);
@@ -86,14 +172,16 @@ const updateProfile = asyncHandler(async (req, res) => {
 
 // ---------- listUsers ----------
 // Paginated user directory, optionally filtered by a search term matching
-// display_name or email. Primary use case: "add member to room" pickers.
+// display_name or email. Email is a search key, not a field other members need
+// to see: callers can find a person by a known address without harvesting the
+// directory's addresses.
 const listUsers = asyncHandler(async (req, res) => {
-  const { q, page = '1' } = req.query;
+  const { q, page = "1" } = req.query;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const offset = (pageNum - 1) * PAGE_SIZE;
 
   const params = [];
-  let where = 'WHERE deleted_at IS NULL';
+  let where = "WHERE deleted_at IS NULL";
   if (q && q.trim()) {
     params.push(`%${q.trim()}%`);
     where += ` AND (display_name ILIKE $${params.length} OR email ILIKE $${params.length})`;
@@ -101,12 +189,12 @@ const listUsers = asyncHandler(async (req, res) => {
 
   params.push(PAGE_SIZE, offset);
   const result = await query(
-    `SELECT id, display_name, avatar_url, email, created_at
+    `SELECT id, display_name, avatar_url, created_at
      FROM users
      ${where}
      ORDER BY display_name ASC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params
+    params,
   );
 
   return ok(res, {
@@ -129,7 +217,7 @@ const listUsers = asyncHandler(async (req, res) => {
 // Email is still searchable — you can type an address and find the person it
 // belongs to — it is just never returned.
 const searchUsers = asyncHandler(async (req, res) => {
-  const { q, page = '1' } = req.query;
+  const { q, page = "1" } = req.query;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const offset = (pageNum - 1) * PAGE_SIZE;
 
@@ -137,7 +225,12 @@ const searchUsers = asyncHandler(async (req, res) => {
   // "Recent" is a different screen with a different answer; this one answers
   // "find someone I have a name for".
   if (!q || !q.trim()) {
-    return ok(res, { users: [], page: pageNum, pageSize: PAGE_SIZE, hasMore: false });
+    return ok(res, {
+      users: [],
+      page: pageNum,
+      pageSize: PAGE_SIZE,
+      hasMore: false,
+    });
   }
 
   const result = await query(
@@ -147,7 +240,7 @@ const searchUsers = asyncHandler(async (req, res) => {
        AND (display_name ILIKE $1 OR email ILIKE $1)
      ORDER BY display_name ASC
      LIMIT $2 OFFSET $3`,
-    [`%${q.trim()}%`, PAGE_SIZE, offset]
+    [`%${q.trim()}%`, PAGE_SIZE, offset],
   );
 
   return ok(res, {
@@ -156,6 +249,115 @@ const searchUsers = asyncHandler(async (req, res) => {
     pageSize: PAGE_SIZE,
     hasMore: result.rows.length === PAGE_SIZE,
   });
+});
+
+const listSharedRooms = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  if (userId === req.user.id)
+    throw new ApiError(400, "Cannot list shared rooms with yourself");
+  const target = await query(
+    "SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL",
+    [userId],
+  );
+  if (!target.rows.length) throw new ApiError(404, "User not found");
+  const result = await query(
+    `SELECT r.id, r.name, r.type, r.slug, r.avatar_url, r.created_at,
+            COUNT(DISTINCT rm_all.user_id)::int AS member_count
+       FROM room_members mine
+       INNER JOIN room_members theirs ON theirs.room_id = mine.room_id AND theirs.user_id = $2
+       INNER JOIN rooms r ON r.id = mine.room_id AND r.type <> 'dm'
+       INNER JOIN room_members rm_all ON rm_all.room_id = r.id
+      WHERE mine.user_id = $1
+      GROUP BY r.id
+      ORDER BY r.name ASC`,
+    [req.user.id, userId],
+  );
+  return ok(res, { rooms: result.rows });
+});
+
+const getBlockStatus = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  if (userId === req.user.id)
+    throw new ApiError(400, "Cannot check a block against yourself");
+  const target = await query(
+    "SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL",
+    [userId],
+  );
+  if (!target.rows.length) throw new ApiError(404, "User not found");
+  const result = await query(
+    "SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2",
+    [req.user.id, userId],
+  );
+  return ok(res, { blocked: result.rows.length > 0 });
+});
+
+const blockUser = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  if (userId === req.user.id) throw new ApiError(400, "Cannot block yourself");
+  const target = await query(
+    "SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL",
+    [userId],
+  );
+  if (!target.rows.length) throw new ApiError(404, "User not found");
+  await query(
+    `WITH locked AS MATERIALIZED(SELECT pg_advisory_xact_lock(hashtextextended(LEAST($1::text,$2::text)||':'||GREATEST($1::text,$2::text),51)))
+     INSERT INTO user_blocks (blocker_id, blocked_id) SELECT $1::uuid,$2::uuid FROM locked
+     ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
+    [req.user.id, userId],
+  );
+  await presence.notifyPrivacyChanged(req.app.get("io"), req.user.id, userId);
+  return ok(res, { userId, blocked: true });
+});
+
+const unblockUser = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  await query(
+    "WITH locked AS MATERIALIZED(SELECT pg_advisory_xact_lock(hashtextextended(LEAST($1::text,$2::text)||':'||GREATEST($1::text,$2::text),51))) DELETE FROM user_blocks USING locked WHERE blocker_id=$1::uuid AND blocked_id=$2::uuid",
+    [req.user.id, userId],
+  );
+  await presence.notifyPrivacyChanged(req.app.get("io"), req.user.id, userId);
+  return ok(res, { userId, blocked: false });
+});
+
+const reportUser = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  const { reason, details, roomId } = req.body || {};
+  const allowedReasons = new Set([
+    "spam",
+    "harassment",
+    "inappropriate_content",
+    "impersonation",
+    "other",
+  ]);
+  if (userId === req.user.id) throw new ApiError(400, "Cannot report yourself");
+  if (!allowedReasons.has(reason))
+    throw new ApiError(400, "Choose a valid report reason");
+  if (details != null && String(details).length > 1000)
+    throw new ApiError(400, "details must be at most 1000 characters");
+  const target = await query(
+    "SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL",
+    [userId],
+  );
+  if (!target.rows.length) throw new ApiError(404, "User not found");
+  if (roomId) {
+    const membership = await query(
+      `SELECT 1 FROM room_members reporter
+       INNER JOIN room_members reported ON reported.room_id = reporter.room_id AND reported.user_id = $3
+       WHERE reporter.room_id = $1 AND reporter.user_id = $2`,
+      [roomId, req.user.id, userId],
+    );
+    if (!membership.rows.length)
+      throw new ApiError(
+        403,
+        "Both people must be members of the reported conversation",
+      );
+  }
+  const result = await query(
+    `INSERT INTO user_reports (reporter_id, reported_user_id, room_id, reason, details)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id, reason, status, created_at`,
+    [req.user.id, userId, roomId || null, reason, details?.trim() || null],
+  );
+  return ok(res, result.rows[0], 201);
 });
 
 // ---------- deleteMe ----------
@@ -168,7 +370,30 @@ const deleteMe = asyncHandler(async (req, res) => {
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
+
+    // Preserve one active platform administrator across concurrent role,
+    // suspension and account-deletion changes.
+    await client.query("SELECT pg_advisory_xact_lock(730041)");
+    const platformRole = (await client.query(
+      "SELECT r.name FROM users u JOIN roles r ON r.id=u.role_id WHERE u.id=$1 AND u.deleted_at IS NULL FOR UPDATE OF u",
+      [req.user.id],
+    )).rows[0]?.name;
+    if (platformRole === "admin") {
+      const admins = await client.query(
+        `SELECT COUNT(*)::int AS count FROM users u JOIN roles r ON r.id=u.role_id
+         WHERE r.name='admin' AND u.deleted_at IS NULL AND u.suspended_at IS NULL`,
+      );
+      if (admins.rows[0].count <= 1)
+        throw new ApiError(409, "Transfer administrator access before deleting the last active platform administrator");
+    }
+
+    const ownedTeams = await client.query(
+      "SELECT id FROM teams WHERE owner_id=$1 FOR UPDATE",
+      [req.user.id],
+    );
+    if (ownedTeams.rowCount)
+      throw new ApiError(409, "Transfer ownership of every team before deleting your account");
 
     // 1. Anonymize and mark deleted
     await client.query(
@@ -183,21 +408,62 @@ const deleteMe = asyncHandler(async (req, res) => {
       [req.user.id],
     );
 
+    await client.query(
+      "UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE user_id = $1",
+      [req.user.id],
+    );
+
     // 2. Kill all sessions (refresh tokens)
-    await client.query('DELETE FROM refresh_tokens WHERE user_id = $1', [req.user.id]);
+    await client.query("DELETE FROM refresh_tokens WHERE user_id = $1", [
+      req.user.id,
+    ]);
+    await client.query("DELETE FROM account_tokens WHERE user_id=$1", [
+      req.user.id,
+    ]);
+    await client.query("DELETE FROM privacy_preferences WHERE user_id=$1", [
+      req.user.id,
+    ]);
 
     // 3. Remove from all rooms
-    await client.query('DELETE FROM room_members WHERE user_id = $1', [req.user.id]);
+    await client.query("DELETE FROM room_members WHERE user_id = $1", [
+      req.user.id,
+    ]);
+    await client.query("DELETE FROM team_pending_room_grants WHERE user_id=$1", [req.user.id]);
+    await client.query("DELETE FROM team_join_requests WHERE user_id=$1", [req.user.id]);
+    await client.query("UPDATE team_invites SET revoked_at=COALESCE(revoked_at,NOW()) WHERE created_by=$1", [req.user.id]);
+    await client.query("DELETE FROM team_members WHERE user_id=$1", [req.user.id]);
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     throw err;
   } finally {
     client.release();
   }
 
-  return ok(res, { message: 'Account deleted' });
+  // Revoke active realtime sessions across API instances as soon as the
+  // transaction commits. REST requests also reject deleted accounts, but an
+  // already-connected socket would otherwise keep working until disconnect.
+  const io = req.app.get("io");
+  if (io) {
+    io.to(`user:${req.user.id}`).emit("session:revoked");
+    io.in(`user:${req.user.id}`).disconnectSockets(true);
+  }
+
+  return ok(res, { message: "Account deleted" });
 });
 
-module.exports = { getMe, updateProfile, listUsers, searchUsers, deleteMe };
+module.exports = {
+  getProfile,
+  getMe,
+  updateProfile,
+  listUsers,
+  searchUsers,
+  listSharedRooms,
+  getAvatarUrl,
+  getBlockStatus,
+  blockUser,
+  unblockUser,
+  reportUser,
+  deleteMe,
+};

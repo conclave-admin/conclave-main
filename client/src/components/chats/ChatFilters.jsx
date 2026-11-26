@@ -1,6 +1,6 @@
-import { Link, useSearchParams } from 'react-router-dom';
-import IconCompose from '@/assets/icons/compose.svg?react';
-import IconSearch from '@/assets/icons/search.svg?react';
+import { Link, useSearchParams } from "react-router-dom";
+import IconCompose from "@/assets/icons/compose.svg?react";
+import IconSearch from "@/assets/icons/search.svg?react";
 
 /**
  * The four chips are navigation, not local state.
@@ -35,32 +35,36 @@ import IconSearch from '@/assets/icons/search.svg?react';
 export default function ChatFilters() {
   const [params, setParams] = useSearchParams();
 
-  const active = params.get('filter') || '';
-  const query = params.get('q') || '';
+  const active = params.get("filter") || "";
+  const query = params.get("q") || "";
 
   const setQuery = (value) => {
     const next = new URLSearchParams(params);
-    if (value) next.set('q', value);
-    else next.delete('q');
+    if (value) next.set("q", value);
+    else next.delete("q");
     setParams(next, { replace: true });
   };
 
   const selectFilter = (value) => {
     const next = new URLSearchParams(params);
-    if (value) next.set('filter', value);
-    else next.delete('filter');
+    if (value) next.set("filter", value);
+    else next.delete("filter");
     setParams(next, { replace: true });
   };
 
   const FILTERS = [
-    { value: '', label: 'All' },
-    { value: 'unread', label: 'Unread' },
-    { value: 'groups', label: 'Groups' },
-    { value: 'dms', label: 'DMs' },
+    { value: "", label: "All" },
+    { value: "unread", label: "Unread" },
+    { value: "groups", label: "Groups" },
+    { value: "dms", label: "Direct" },
+    { value: "archived", label: "Archived" },
   ];
 
   return (
-    <div className="sticky top-0 z-10 border-b border-line bg-surface px-3 pb-3 pt-3">
+    <div className="sticky top-0 z-10 border-b border-line/60 bg-surface px-4 pb-3 pt-4">
+      <div className="mb-3 flex items-baseline justify-between gap-3 md:sr-only">
+        <h1 className="text-xl font-semibold tracking-tight text-ink">Chats</h1>
+      </div>
       <div className="flex items-center gap-2">
         <label className="relative block min-w-0 flex-1">
           <span className="sr-only">Search chats</span>
@@ -73,7 +77,7 @@ export default function ChatFilters() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search chats"
-            className="min-h-10 w-full rounded-lg border border-line bg-canvas pl-9 pr-3 text-body text-ink outline-none transition-shadow placeholder:text-muted/70 focus:border-brand focus:ring-2 focus:ring-brand/15"
+            className="min-h-10 w-full rounded-full border border-transparent bg-canvas pl-9 pr-3 text-body text-ink outline-none transition-shadow placeholder:text-muted/70 focus:border-brand focus:ring-2 focus:ring-brand/15"
           />
         </label>
 
@@ -81,7 +85,7 @@ export default function ChatFilters() {
           to="/new"
           aria-label="New chat"
           title="New chat"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-brand text-surface transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-brand text-white transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
         >
           <IconCompose className="h-5 w-5" aria-hidden="true" />
         </Link>
@@ -92,12 +96,14 @@ export default function ChatFilters() {
           const selected = filter.value === active;
           return (
             <button
-              key={filter.value || 'all'}
+              key={filter.value || "all"}
               type="button"
               aria-pressed={selected}
               onClick={() => selectFilter(filter.value)}
-              className={`min-h-8 shrink-0 rounded-full px-3 text-label transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
-                selected ? 'bg-brand font-semibold text-surface' : 'bg-canvas text-muted hover:text-ink'
+              className={`min-h-9 shrink-0 rounded-full px-3 text-label transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
+                selected
+                  ? "bg-brand-soft font-semibold text-brand"
+                  : "bg-canvas text-muted hover:text-ink"
               }`}
             >
               {filter.label}

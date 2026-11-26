@@ -1,5 +1,5 @@
-import { api } from '../lib/api';
-import { isDevAuthBypass, previewDecisions } from '../config/devPreview';
+import { api } from "../lib/api";
+import { isDevAuthBypass, previewDecisions } from "../config/devPreview";
 
 // Bypass returns only the preview decisions that belong to the requested room.
 // The other fixtures belong to rooms that do not exist offline, so showing
@@ -8,6 +8,16 @@ function previewFor(roomId) {
   return roomId
     ? previewDecisions.filter((decision) => decision.room_id === roomId)
     : previewDecisions;
+}
+
+export async function getDecisionOverview() {
+  if (isDevAuthBypass) return {
+    active: previewDecisions.filter((item) => item.status !== "retracted").length,
+    retracted: previewDecisions.filter((item) => item.status === "retracted").length,
+    with_open_tasks: 0, follow_ups_done: 0,
+  };
+  const { data } = await api.get("/decisions/overview");
+  return data.data;
 }
 
 /**
@@ -20,10 +30,15 @@ function previewFor(roomId) {
  *   opaque `created_at|id` cursor from the previous page
  * @returns {{ decisions: Array, nextCursor: string|null }}
  */
-export async function listDecisions({ roomId, before } = {}) {
-  if (isDevAuthBypass) return { decisions: previewFor(roomId), nextCursor: null };
-  const { data } = await api.get('/decisions', {
-    params: { roomId, before },
+export async function listDecisions({ roomId, before, pinnedOnly = false, status = "all" } = {}) {
+  if (isDevAuthBypass)
+    return { decisions: (pinnedOnly
+      ? previewFor(roomId).filter((decision) =>
+        decision.pins?.room || decision.pins?.mine?.length)
+      : previewFor(roomId)).filter((decision) =>
+        status === "all" || (decision.status || "active") === status), nextCursor: null };
+  const { data } = await api.get("/decisions", {
+    params: { roomId, before, pinned: pinnedOnly || undefined, status },
   });
   return data.data;
 }
@@ -38,18 +53,26 @@ export async function listDecisions({ roomId, before } = {}) {
  * @param {string} q
  * @param {string} [roomId]
  */
-export async function searchDecisions(q, roomId) {
+export async function searchDecisions(q, roomId, after, status = "all") {
   if (isDevAuthBypass) {
     const needle = q.trim().toLowerCase();
-    return previewFor(roomId).filter(
+    const matches = previewFor(roomId).filter(
       (decision) =>
-        decision.title.toLowerCase().includes(needle) ||
+        (status === "all" || (decision.status || "active") === status) &&
+        (decision.title.toLowerCase().includes(needle) ||
         decision.body.toLowerCase().includes(needle) ||
-        (decision.tags || []).some((tag) => tag.includes(needle)),
+        (decision.tags || []).some((tag) => tag.includes(needle))),
     );
+    const index = Number(after || 0);
+    return {
+      decisions: matches.slice(index, index + 50),
+      nextCursor: matches.length > index + 50 ? String(index + 50) : null,
+    };
   }
-  const { data } = await api.get('/decisions/search', { params: { q, roomId } });
-  return data.data.decisions;
+  const { data } = await api.get("/decisions/search", {
+    params: { q, roomId, after, status },
+  });
+  return data.data;
 }
 
 /**
@@ -64,8 +87,10 @@ export async function searchDecisions(q, roomId) {
  */
 export async function getDecision(decisionId) {
   if (isDevAuthBypass) {
-    const found = previewDecisions.find((decision) => decision.id === decisionId);
-    if (!found) throw new Error('Decision not found');
+    const found = previewDecisions.find(
+      (decision) => decision.id === decisionId,
+    );
+    if (!found) throw new Error("Decision not found");
     return found;
   }
   const { data } = await api.get(`/decisions/${decisionId}`);
@@ -81,14 +106,39 @@ export async function getDecision(decisionId) {
  *
  * @param {{ roomId: string, sourceMessageId?: string, title: string, body: string, tags?: string[] }} payload
  */
-export async function promoteToDecision({ roomId, sourceMessageId, title, body, tags }) {
-  const { data } = await api.post('/decisions', {
+export async function promoteToDecision({
+  roomId,
+  sourceMessageId,
+  title,
+  body,
+  tags,
+  clientId,
+}) {
+  const { data } = await api.post("/decisions", {
     roomId,
     sourceMessageId,
     title,
     body,
     tags: tags || [],
+    clientId,
   });
+  return data.data;
+}
+
+export async function editDecision(decisionId, changes) {
+  const { data } = await api.patch(`/decisions/${decisionId}`, changes);
+  return data.data;
+}
+
+export async function retractDecision(decisionId, version, reason) {
+  const { data } = await api.post(`/decisions/${decisionId}/retract`, {
+    version, reason,
+  });
+  return data.data;
+}
+
+export async function getDecisionHistory(decisionId, before) {
+  const { data } = await api.get(`/decisions/${decisionId}/history`, { params: { before } });
   return data.data;
 }
 

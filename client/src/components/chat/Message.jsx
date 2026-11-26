@@ -1,65 +1,25 @@
-import Avatar from '@/components/ui/Avatar';
-import { usePresence } from '@/contexts/PresenceContext';
-import { formatClockTime, readStatus } from '@/lib/messageMeta';
-import IconFailed from '@/assets/icons/failed.svg?react';
-import IconPending from '@/assets/icons/pending.svg?react';
-import IconRead from '@/assets/icons/read.svg?react';
-import IconSent from '@/assets/icons/sent.svg?react';
-import AttachmentCard from './AttachmentCard';
-import MessageActions from './MessageActions';
-import MessageReactions from './MessageReactions';
-import PollCard from './PollCard';
-import { useState } from "react";
+import { useMediaViewer } from "./MediaViewer";
+import { ReminderAction } from "./MessageLater";
+import MessageBody from "./MessageBody";
+import Avatar from "@/components/ui/Avatar";
+import { usePresence } from "@/contexts/PresenceContext";
+import { formatClockTime, messageSummary, readStatus } from "@/lib/messageMeta";
+import MessageStatus from "./MessageStatus";
+import { AttachmentGroup } from "./AttachmentCard";
+import MessageActions from "./MessageActions";
+import MessageReactions from "./MessageReactions";
+import LinkPreviewCard from "./LinkPreviewCard";
+import PollCard from "./PollCard";
+import MessageSendState from "./MessageSendState";
+import { useRef, useState } from "react";
 import useLongPress from "@/hooks/useLongPress";
-
-const TICKS = {
-  pending: { Icon: IconPending, label: 'Sending' },
-  sent: { Icon: IconSent, label: 'Sent' },
-  read: { Icon: IconRead, label: 'Read' },
-  failed: { Icon: IconFailed, label: 'Failed to send' },
-};
-
-function Tick({ status }) {
-  if (!status) return null;
-  const { Icon, label } = TICKS[status];
-  return (
-    <span
-      className={status === 'failed' ? 'text-error' : status === 'read' ? 'text-brand' : 'text-muted'}
-    >
-      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-      <span className="sr-only">{label}</span>
-    </span>
-  );
-}
-
-/**
- * Highlight @tokens in a message body.
- *
- * Styling only — this deliberately does not resolve anybody. The API says
- * display names are not unique, so text cannot tell two members apart; the
- * authoritative list is `mentioned_user_ids`, which is recorded at send time.
- * Painting a token is safe because it changes no identity and notifies nobody.
- */
-function renderContent(text) {
-  if (!text) return null;
-  return text.split(/(@[\w.]+)/).map((part, index) =>
-    part.startsWith('@') ? (
-      <span key={index} className="rounded bg-brand-soft px-0.5 font-medium text-brand">
-        {part}
-      </span>
-    ) : (
-      part
-    ),
-  );
-}
 
 /**
  * One message row.
  *
- * Own messages sit right in brand, others left on a soft surface, per section 6.
- * A run of messages from one author shares an avatar and a name — only the last
- * of the run carries the timestamp and the delivery tick, which is what makes a
- * conversation scannable rather than a stack of identical cards.
+ * Own messages sit right on a soft brand surface; others sit left. Consecutive
+ * messages share an avatar and name while each bubble retains its own time and
+ * receipt state, so individual messages remain identifiable within a run.
  *
  * @param {object} message - from annotateMessages, so _consecutive/_endsGroup exist
  * @param {string} viewerId
@@ -76,8 +36,12 @@ export default function Message({
   members = [],
   isAdmin,
   roomId,
+  readOnly = false,
   replyTarget,
+  albumTile = false,
+  overflowCount = 0,
   deliveryIds,
+  onMessageInfo,
   onReply,
   onEdit,
   onDelete,
@@ -86,152 +50,296 @@ export default function Message({
   onPin,
   onUnpin,
   onToggleReaction,
+  onOpenThread,
+  onForward,
+  onJumpToMessage,
 }) {
-  const { isOnlineIn } = usePresence();
+  const { isOnlineIn, getPresence } = usePresence();
+  const mediaViewer = useMediaViewer();
   const mine = message.sender_id === viewerId;
   const [menuOpen, setMenuOpen] = useState(false);
-  const longPress = useLongPress(() => setMenuOpen(true), { disabled: message.is_deleted });
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const bodyRef = useRef(null);
+  const longPress = useLongPress(() => setMenuOpen(true), {
+    disabled: readOnly || message.is_deleted || message._optimistic,
+  });
 
   const status = mine
-    ? readStatus(message, members, viewerId, deliveryIds?.pendingIds, deliveryIds?.failedIds)
+    ? readStatus(
+        message,
+        members,
+        viewerId,
+        deliveryIds?.pendingIds,
+        deliveryIds?.failedIds,
+        deliveryIds?.queuedIds,
+      )
     : null;
 
-  const senderName = message.sender_name || 'Unknown member';
-  const showAvatar = !mine && !message._consecutive;
+  const senderName = message.sender_name || "Unknown member";
+  const showAvatar = !albumTile && !mine && !message._consecutive;
 
-const bubbleClass = [
-  "px-3 py-2 text-body [overflow-wrap:anywhere]",
-  "rounded-2xl",
-  mine ? "bg-brand text-surface" : "bg-canvas text-ink",
-  message._endsGroup ? (mine ? "rounded-br-md" : "rounded-bl-md") : "",
-  message.is_deleted ? "italic" : "",
-  "[-webkit-touch-callout:none] [@media(hover:none)]:select-none",
-]
-  .filter(Boolean)
-  .join(" ");
+  const bubbleClass = [
+    "message-bubble min-w-0 max-w-full px-3 py-2 text-body [overflow-wrap:anywhere]",
+    albumTile ? "pr-9" : "",
+    "rounded-xl",
+    mine ? "message-bubble-out" : "message-bubble-in text-ink",
+    message._endsGroup ? (mine ? "rounded-br-md" : "rounded-bl-md") : "",
+    message.is_deleted ? "italic" : "",
+    "[-webkit-touch-callout:none] [@media(hover:none)]:select-none",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const metadata = (
+    <div
+      className={`message-meta mt-1 flex items-center justify-end gap-1 whitespace-nowrap text-[11px] leading-4 text-muted ${albumTile ? "order-3" : ""}`}
+    >
+      {status === "failed" && (
+        <span className="text-metadata text-error">Failed to send</span>
+      )}
+      {message.edited_at && !message.is_deleted && <span>edited</span>}
+      <time className="tabular-nums" dateTime={message.created_at}>
+        {formatClockTime(message.created_at)}
+      </time>
+      {mine && !message._optimistic && onMessageInfo ? (
+        <button
+          type="button"
+          aria-label="Message info"
+          title="View delivery and read details"
+          onClick={() => onMessageInfo(message)}
+          className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+        >
+          <MessageStatus status={status} />
+        </button>
+      ) : (
+        <MessageStatus status={status} />
+      )}
+    </div>
+  );
 
   return (
     <article
-      className={`group relative flex items-start gap-2.5 ${mine ? "flex-row-reverse" : ""}`}
+      className={`group relative flex w-full min-w-0 max-w-full items-start gap-2.5 ${mine ? "flex-row-reverse" : ""}`}
     >
       {showAvatar ? (
         <Avatar
           name={senderName}
           src={message.sender_avatar}
-          size="md"
+          size="sm"
           presence={
-            isOnlineIn(roomId, message.sender_id) ? "online" : "offline"
+            getPresence(roomId, message.sender_id) === "unknown"
+              ? null
+              : isOnlineIn(roomId, message.sender_id)
+                ? "online"
+                : "offline"
           }
         />
       ) : (
         // Keeps a run of messages aligned under the first one's text rather
         // than sliding left into the avatar column.
-        !mine && <span className="h-10 w-10 shrink-0" aria-hidden="true" />
+        !albumTile &&
+        !mine && <span className="h-9 w-9 shrink-0" aria-hidden="true" />
       )}
 
       <div
-        className={`flex min-w-0 max-w-[min(36rem,85%)] flex-col gap-1 ${
+        className={`flex min-w-0 ${albumTile ? "w-full max-w-full" : "message-column"} flex-col gap-1 ${
           mine ? "items-end" : "items-start"
         }`}
       >
-        {!message._consecutive && !mine && (
-          <span className="truncate text-label text-ink">{senderName}</span>
+        {!albumTile && !message._consecutive && !mine && (
+          <span className="truncate text-label font-semibold text-brand">
+            {senderName}
+          </span>
         )}
 
+        {!readOnly && !message._optimistic && !message.is_deleted && (
+          <ReminderAction
+            messageId={message.id}
+            externalOpen={reminderOpen}
+            hideTrigger
+            onClose={() => setReminderOpen(false)}
+          />
+        )}
+        {message.thread_count > 0 && !message.is_deleted && (
+          <button
+            type="button"
+            className="min-h-9 text-label text-brand"
+            onClick={() => onOpenThread?.(message)}
+          >
+            {message.thread_count}{" "}
+            {message.thread_count === 1 ? "reply" : "replies"}
+            {message.thread_unread ? ` · ${message.thread_unread} unread` : ""}
+          </button>
+        )}
+        {message.forwarded && !message.is_deleted && (
+          <p className="text-metadata italic text-muted">Forwarded</p>
+        )}
         {replyTarget && !message.is_deleted && (
-          <div className="max-w-xs truncate rounded-md border-l-2 border-brand bg-canvas px-2 py-1 text-metadata text-muted">
+          <button
+            type="button"
+            onClick={() => onJumpToMessage?.(replyTarget)}
+            className="max-w-xs truncate rounded-md border-l-2 border-brand bg-canvas px-2 py-1 text-left text-metadata text-muted hover:bg-brand/10"
+          >
             Replying to {replyTarget.sender_name || "a message"}:{" "}
-            {replyTarget.content ||
-              (replyTarget.is_deleted ? "deleted message" : "attachment")}
-          </div>
+            {messageSummary(replyTarget)}
+          </button>
         )}
         {message.reply_to_id && !replyTarget && !message.is_deleted && (
-          <div className="rounded-md border-l-2 border-line bg-canvas px-2 py-1 text-metadata text-muted">
+          <button
+            type="button"
+            onClick={() => onJumpToMessage?.({ id: message.reply_to_id })}
+            className="rounded-md border-l-2 border-line bg-canvas px-2 py-1 text-metadata text-muted hover:bg-brand/10"
+          >
             Replied to an earlier message
-          </div>
+          </button>
         )}
 
         {message.is_deleted ? (
           <div className={`${bubbleClass} text-muted`}>Message deleted</div>
         ) : (
-          message.content && (
-            // The poll carries its question as the message content, so the
-            // bubble exists either way — it just renders the poll instead of
-            // the text. Chat-list previews and search still read the question
-            // as ordinary content.
-            <div {...longPress}>
-              {message.poll ? (
+          // One body for everything that is the message itself: the bubble or
+          // poll, and its attachments. Long-press and the hover button both
+          // attach here, so a message that is only a photo has a menu too.
+          <div
+            ref={bodyRef}
+            {...longPress}
+            className={`relative flex min-w-0 max-w-full ${albumTile ? "w-full flex-col" : "flex-col"} gap-1.5 ${
+              mine ? "items-end" : "items-start"
+            } ${message.attachments?.length ? "message-attachment-body rounded-xl border border-line/50 bg-surface p-1.5" : ""}`}
+          >
+            {message.content &&
+              (message.poll ? (
                 <PollCard
                   message={message}
                   viewerId={viewerId}
                   canClose={mine || isAdmin}
                 />
               ) : (
-                <div className={bubbleClass}>{renderContent(message.content)}</div>
-              )}
-            </div>
-          )
-        )}
+                <div className={`${bubbleClass} ${albumTile ? "order-2" : ""}`}>
+                  <MessageBody
+                    text={message.content}
+                    members={members}
+                    mentionedIds={
+                      message.mentioned_user_ids ||
+                      message.mentionedUserIds ||
+                      []
+                    }
+                    forceExpanded={Boolean(message._searchMatch)}
+                    query={message._searchQuery || ""}
+                  />
+                  <LinkPreviewCard text={message.content} compact />
+                  {!message.attachments?.length && metadata}
+                </div>
+              ))}
 
-        {message.attachments?.length > 0 && !message.is_deleted && (
-          <div className="flex w-full flex-col gap-1.5">
-            {message.attachments.map((attachment) => (
-              <AttachmentCard
-                key={attachment.id || attachment.url}
-                attachment={attachment}
+            {message.attachments?.length > 0 && (
+              <AttachmentGroup
+                attachments={message.attachments}
+                albumTile={albumTile}
               />
-            ))}
+            )}
+
+            {message.attachments?.length > 0 && metadata}
+            {message._outbox &&
+              message.attachments?.some((file) =>
+                /^(image|video)\//.test(file.mime_type || ""),
+              ) && (
+                <MessageSendState
+                  message={message}
+                  onRetry={deliveryIds.onRetry}
+                  onCancel={deliveryIds.onCancel}
+                  compact
+                />
+              )}
+            {overflowCount > 0 && (
+              <button
+                type="button"
+                className="album-overflow absolute inset-0 z-[2] flex items-center justify-center rounded-lg bg-black/45 text-3xl font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                aria-label={`View ${overflowCount} more photos and videos`}
+                onClick={() =>
+                  mediaViewer?.open(
+                    message.attachments.find((file) =>
+                      /^(image|video)\//.test(file.mime_type || ""),
+                    ),
+                  )
+                }
+              >
+                +{overflowCount}
+              </button>
+            )}
+
+            {/* Beside the body and out of the layout flow, so a row reserves no
+                indent. Hover devices reveal it on hover; touch devices hide it
+                and open the menu by long-press. */}
+            {!readOnly && !message._optimistic && (
+              <div
+                className={`absolute top-1 transition-opacity ${
+                  albumTile
+                    ? "right-1 z-10 rounded-md bg-surface/90"
+                    : mine
+                      ? "right-full pr-1"
+                      : "left-full pl-1"
+                } ${
+                  menuOpen ? "opacity-100" : "opacity-0"
+                } [@media(hover:none)]:hidden [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-within:opacity-100`}
+              >
+                <MessageActions
+                  message={message}
+                  viewerId={viewerId}
+                  isAdmin={isAdmin}
+                  open={menuOpen}
+                  onOpenChange={setMenuOpen}
+                  anchorRef={bodyRef}
+                  align={mine ? "end" : "start"}
+                  onRemind={() => {
+                    setMenuOpen(false);
+                    setReminderOpen(true);
+                  }}
+                  onToggleReaction={(emoji) => onToggleReaction(message, emoji)}
+                  onMessageInfo={
+                    mine && onMessageInfo
+                      ? () => onMessageInfo(message)
+                      : undefined
+                  }
+                  onReply={() => onReply(message)}
+                  onOpenThread={() => onOpenThread(message)}
+                  onForward={onForward ? () => onForward(message) : undefined}
+                  onEdit={() => onEdit(message)}
+                  onDelete={() => onDelete(message)}
+                  onPromote={() => onPromote(message)}
+                  onFlagTask={() => onFlagTask(message)}
+                  onPin={onPin}
+                  onUnpin={onUnpin}
+                />
+              </div>
+            )}
           </div>
         )}
 
-        {message.edited_at && !message.is_deleted && (
-          <span className="text-metadata text-muted">edited</span>
-        )}
+        {message._outbox &&
+          !message.attachments?.some((file) =>
+            /^(image|video)\//.test(file.mime_type || ""),
+          ) && (
+            <MessageSendState
+              message={message}
+              onRetry={deliveryIds.onRetry}
+              onCancel={deliveryIds.onCancel}
+            />
+          )}
 
-        {/* Always rendered, not only when reactions exist: the picker lives
-            inside it, so a conditional here would mean a message with no
-            reactions yet could never receive its first one. */}
-        {!message.is_deleted && (
+        {/* Renders nothing until a reaction exists. The first one comes from the
+            actions menu, so this row only appears once there is something to
+            show or add to. */}
+        {!message.is_deleted && !message._optimistic && !readOnly && (
           <MessageReactions
             message={message}
             onToggle={(emoji) => onToggleReaction(message, emoji)}
           />
         )}
 
-        {message._endsGroup && (
-          <div className="flex items-center gap-1.5">
-            {status === "failed" && (
-              <span className="text-metadata text-error">Failed to send</span>
-            )}
-            <time
-              className="text-metadata text-muted"
-              dateTime={message.created_at}
-            >
-              {formatClockTime(message.created_at)}
-            </time>
-            <Tick status={status} />
-          </div>
-        )}
-      </div>
-
-      <div
-        className={`shrink-0 transition-opacity ${menuOpen ? "opacity-100" : "opacity-0"} pointer-events-none [@media(hover:none)]:absolute [@media(hover:none)]:right-0 [@media(hover:none)]:top-0 [@media(hover:hover)]:pointer-events-auto [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-within:opacity-100`}
-      >
-        <MessageActions
-          message={message}
-          viewerId={viewerId}
-          isAdmin={isAdmin}
-          open={menuOpen}
-          onOpenChange={setMenuOpen}
-          onToggleReaction={(emoji) => onToggleReaction(message, emoji)}
-          onReply={() => onReply(message)}
-          onEdit={() => onEdit(message)}
-          onDelete={() => onDelete(message)}
-          onPromote={() => onPromote(message)}
-          onFlagTask={() => onFlagTask(message)}
-          onPin={onPin}
-          onUnpin={onUnpin}
-        />
+        {(!message.attachments?.length || message.is_deleted) &&
+          (!message.content || message.poll || message.is_deleted) &&
+          metadata}
       </div>
     </article>
   );

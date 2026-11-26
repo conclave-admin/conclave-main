@@ -1,20 +1,24 @@
+import { useEffect, useState } from "react";
+import Modal from "./Modal";
+import { resolveAvatarUrl } from "@/services/users.service";
+
 const SIZES = {
   // Sized against the existing primitives: sm is a chat-list row, md is a
   // message or a member row, lg is a profile header.
-  sm: 'h-8 w-8 text-metadata',
-  md: 'h-10 w-10 text-label',
-  lg: 'h-16 w-16 text-h2',
+  sm: "h-9 w-9 text-metadata",
+  md: "h-12 w-12 text-label",
+  lg: "h-20 w-20 text-h2",
 };
 
-export function initialsOf(name = '') {
+export function initialsOf(name = "") {
   return (
-    name
-      .split(' ')
+    String(name ?? "")
+      .split(" ")
       .filter(Boolean)
       .map((part) => part[0])
       .slice(0, 2)
-      .join('')
-      .toUpperCase() || '?'
+      .join("")
+      .toUpperCase() || "?"
   );
 }
 
@@ -26,20 +30,100 @@ export function initialsOf(name = '') {
  *   and no wrapper is added at all, so a plain avatar costs nothing extra
  * @param {string} [className]
  */
-export default function Avatar({ name = '', src, size = 'md', presence, className = '' }) {
+export default function Avatar({
+  name = "",
+  src,
+  size = "md",
+  presence,
+  className = "",
+}) {
+  const [expanded, setExpanded] = useState(false);
   const box = `${SIZES[size] ?? SIZES.md} shrink-0 rounded-full ${className}`;
+  const [imageSrc, setImageSrc] = useState(null);
+  const [imageFailed, setImageFailed] = useState(false);
 
-  const face = src ? (
-    <img src={src} alt="" className={`${box} object-cover`} />
-  ) : (
-    // initials rather than a grey circle: the message list currently draws an
-    // unlabelled placeholder, which says nothing about who is talking.
-    <span className={`${box} grid place-items-center bg-brand-soft text-brand`} aria-hidden="true">
-      {initialsOf(name)}
-    </span>
-  );
+  useEffect(() => {
+    let active = true;
+    setImageFailed(false);
+    if (!src) {
+      setImageSrc(null);
+      return () => {
+        active = false;
+      };
+    }
+    if (!src.startsWith("r2://")) {
+      setImageSrc(src);
+      return () => {
+        active = false;
+      };
+    }
 
-  if (!presence) return face;
+    setImageSrc(null);
+    resolveAvatarUrl(src)
+      .then((url) => {
+        if (active) setImageSrc(url);
+      })
+      .catch(() => {
+        if (active) setImageSrc(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [src]);
+
+  const face =
+    imageSrc && !imageFailed && size !== "lg" ? (
+      <img
+        src={imageSrc}
+        alt=""
+        onError={() => setImageFailed(true)}
+        className={`${box} object-cover`}
+      />
+    ) : imageSrc && !imageFailed ? (
+      <>
+        <button
+          type="button"
+          aria-label={`View ${name || "profile"} photo`}
+          className="shrink-0 rounded-full"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setExpanded(true);
+          }}
+        >
+          <img
+            src={imageSrc}
+            alt=""
+            onError={() => setImageFailed(true)}
+            className={`${box} object-cover`}
+          />
+        </button>
+        <Modal
+          open={expanded}
+          fullscreen
+          className="media-viewer-dialog"
+          title={`${name || "Profile"} photo`}
+          onClose={() => setExpanded(false)}
+        >
+          <img
+            src={imageSrc}
+            alt={`${name || "Profile"} photo`}
+            className="h-full w-full object-contain p-4 md:p-8"
+          />
+        </Modal>
+      </>
+    ) : (
+      // initials rather than a grey circle: the message list currently draws an
+      // unlabelled placeholder, which says nothing about who is talking.
+      <span
+        className={`${box} grid place-items-center bg-brand-soft text-brand`}
+        aria-hidden="true"
+      >
+        {initialsOf(name)}
+      </span>
+    );
+
+  if (presence !== "online") return face;
 
   return (
     <span className="relative inline-flex shrink-0">
@@ -49,7 +133,7 @@ export default function Avatar({ name = '', src, size = 'md', presence, classNam
           the dot as well would read it out twice. */}
       <span
         className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface ${
-          presence === 'online' ? 'bg-success' : 'bg-line'
+          presence === "online" ? "bg-success" : "bg-line"
         }`}
         aria-hidden="true"
       />

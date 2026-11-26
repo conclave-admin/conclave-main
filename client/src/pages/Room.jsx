@@ -1,36 +1,46 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
-import FlagAsTaskDialog from '../components/chat/FlagAsTaskDialog';
-import CreatePollDialog from '../components/chat/CreatePollDialog';
-import MessageComposer from '../components/chat/MessageComposer';
-import MessageTimeline from '../components/chat/MessageTimeline';
-import PinnedDecisionStrip from '../components/chat/PinnedDecisionStrip';
-import PinnedMessagesPanel from '../components/chat/PinnedMessagesPanel';
-import PromoteToDecisionDialog from '../components/chat/PromoteToDecisionDialog';
-import RoomHeader from '../components/chat/RoomHeader';
-import Button from '../components/ui/Button';
-import Modal from '../components/ui/Modal';
-import Spinner from '../components/ui/Spinner';
-import Textarea from '../components/ui/Textarea';
-import { useAuth } from '../contexts/AuthContext';
-import { useChats } from '../contexts/ChatsContext';
-import { useRealtime } from '../contexts/RealtimeContext';
-import { useToast } from '../contexts/ToastContext';
-import useMessages from '../hooks/useMessages';
-import useRoom from '../hooks/useRoom';
+import { useSyncReconciler } from "../contexts/SyncContext";
+import { api } from "../lib/api";
+import ConversationPolicyNotice from "../components/chat/ConversationPolicyNotice";
+import ThreadPanel from "../components/chat/ThreadPanel";
+import { readDraft } from "../lib/drafts";
+import { readPosition } from "../lib/readingPosition";
+import { conversationMessageVisible } from "../lib/clearedConversations";
+import { respondToRequest } from "../services/security.service";
+import { activeReadView } from "../lib/messageReads";
+import { isDevAuthBypass } from "../config/devPreview";
+import MessageInfoDialog from "../components/chat/MessageInfoDialog";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useNavigate,
+  useOutletContext,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
+import ForwardMessageDialog from "../components/chat/ForwardMessageDialog";
+import FlagAsTaskDialog from "../components/chat/FlagAsTaskDialog";
+import CreatePollDialog from "../components/chat/CreatePollDialog";
+import MessageComposer from "../components/chat/MessageComposer";
+import MessageTimeline from "../components/chat/MessageTimeline";
+import PinnedItemsPanel from "../components/chat/PinnedItemsPanel";
+import PromoteToDecisionDialog from "../components/chat/PromoteToDecisionDialog";
+import RoomHeader from "../components/chat/RoomHeader";
+import Button from "../components/ui/Button";
+import Modal from "../components/ui/Modal";
+import Spinner from "../components/ui/Spinner";
+import Textarea from "../components/ui/Textarea";
+import { useAuth } from "../contexts/AuthContext";
+import { useRealtime } from "../contexts/RealtimeContext";
+import { useToast } from "../contexts/ToastContext";
+import useMessages from "../hooks/useMessages";
+import { messageSummary } from "../lib/messageMeta";
+import useRoom from "../hooks/useRoom";
+import { setActiveRoomId } from "../lib/activeRoom";
 
 /**
  * One conversation.
  *
- * Marking the room read lives here rather than on the list row's click
- * handler, because the click handler is not the only way in. The rail, a deep
- * link, the browser's back button and a future notification all land on this
- * component, and a badge that only clears when the pointer happens to be the
- * thing that navigated is a badge that is usually wrong.
- *
- * The optimistic zero in `markSeen` means the badge disappears the instant the
- * room opens, before the request completes — which is the behaviour you want,
- * and safe because the server's answer is not in doubt.
+ * Read state advances as timeline messages become visible, so opening a room
+ * does not clear messages the reader has not reached yet.
  *
  * Edit and delete are dialogs rather than inline: an edit that turns the row
  * into a second composer breaks the grouping around it, and a delete needs a
@@ -44,24 +54,156 @@ import useRoom from '../hooks/useRoom';
 export default function Room() {
   const { roomId } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const anchorId = searchParams.get("message") || null;
   const { isConnected, socket } = useRealtime();
   const { setRoomHeader } = useOutletContext();
-  const { markSeen } = useChats();
   const { user } = useAuth();
   const viewerId = user?.id;
+  const initialPosition = useMemo(
+    () => anchorId ? null : readPosition(viewerId, roomId),
+    [anchorId, viewerId, roomId],
+  );
+  // Ordinary conversation opens show current history. Only an explicit deep
+  // link requests an older slice around a particular message.
+  const historyAnchor = anchorId;
   const { toast } = useToast();
-  const { room, isLoading: roomLoading, error: roomError } = useRoom(roomId);
+  const [browserOnline, setBrowserOnline] = useState(
+    () => typeof navigator === "undefined" || navigator.onLine !== false,
+  );
+  const {
+    room,
+    isLoading: roomLoading,
+    error: roomError,
+    reload: reloadRoom,
+  } = useRoom(roomId);
+  const [messageInfo, setMessageInfo] = useState(null);
+  const [threadCounts, setThreadCounts] = useState({});
+  const [threadCountsRevision, setThreadCountsRevision] = useState(0);
+  useSyncReconciler(
+    async (batch) => {
+      if (batch.reset || batch.changes.some((c) => c.kind === "preferences"))
+        setThreadCountsRevision((v) => v + 1);
+    },
+    [roomId],
+  );
   const [replyTo, setReplyTo] = useState(null);
+  useEffect(() => {
+    const draft = readDraft(viewerId, roomId);
+    setReplyTo(
+      draft.reply && conversationMessageVisible(draft.reply, viewerId, roomId)
+        ? draft.reply
+        : null,
+    );
+  }, [viewerId, roomId]);
   const [editing, setEditing] = useState(null);
-  const [editDraft, setEditDraft] = useState('');
+  const [editDraft, setEditDraft] = useState("");
   const [deleting, setDeleting] = useState(null);
   const [promoting, setPromoting] = useState(null);
   const [flagging, setFlagging] = useState(null);
   const [creatingPoll, setCreatingPoll] = useState(false);
+  const [forwarding, setForwarding] = useState(null);
+  const [threadRoot, setThreadRoot] = useState(null);
+  useEffect(() => {
+    setThreadRoot(null);
+  }, [roomId]);
+  // So a message arriving for this room never pops an in-app toast/sound for
+  // the conversation already on screen — ChatsContext reads this synchronously
+  // off `chat:updated`, which is cheaper and more immediate than round-tripping
+  // through the server-side viewing presence lease used for read receipts.
+  useEffect(() => {
+    setActiveRoomId(roomId);
+    return () => setActiveRoomId(null);
+  }, [roomId]);
+  const [jumpTarget, setJumpTarget] = useState(null);
+  const [highlightedId, setHighlightedId] = useState(null);
+  const jumpTimerRef = useRef(null);
 
   const scrollContainerRef = useRef(null);
+  const composerRef = useRef(null);
+  // While a file drag hovers the pane. A counter rather than a boolean because
+  // dragover fires on every child element the pointer crosses — entering a
+  // message bubble fires dragleave from that bubble, and a plain true/false
+  // flickers the overlay for as long as the cursor moves over the transcript.
+  const dragDepth = useRef(0);
+  const [droppingFiles, setDroppingFiles] = useState(false);
+
+  const composerCanAccept = (dataTransfer) =>
+    Boolean(
+      dataTransfer &&
+        Array.from(dataTransfer.types || []).includes("Files"),
+    );
+
+  const handleDragEnter = (event) => {
+    if (!composerCanAccept(event.dataTransfer)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setDroppingFiles(true);
+  };
+
+  const handleDragOver = (event) => {
+    // Required for `drop` to fire at all; without it the browser navigates
+    // away to the dropped file instead of handing it to the app.
+    if (!composerCanAccept(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDragLeave = (event) => {
+    if (!composerCanAccept(event.dataTransfer)) return;
+    event.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDroppingFiles(false);
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    dragDepth.current = 0;
+    setDroppingFiles(false);
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (!files.length) return;
+    // Mirrors the composer's own `disabled` guard for the paste path: a
+    // read-only member must not be able to stage files the send button will
+    // refuse anyway.
+    if (room?.member_can_send === false && room?.my_role !== "admin") return;
+    // Same validation, size/type checks, image compression and preview dialog
+    // as a picked or pasted file: the composer owns that path and exposes it,
+    // so dropping cannot smuggle in a file the picker would have refused.
+    composerRef.current?.addFiles(files, { compress: true });
+  };
+
+  useEffect(() => {
+    const cleared = (event) => {
+      if (event.detail?.userId !== viewerId || event.detail?.roomId !== roomId)
+        return;
+      // Selected objects can outlive the filtered timeline. Drop their old text
+      // without touching the composer's draft or the durable pending outbox.
+      setReplyTo(null);
+      setThreadRoot(null);
+      setMessageInfo(null);
+      setEditing(null);
+      setDeleting(null);
+      setForwarding(null);
+    };
+    window.addEventListener("conclave:conversation-cleared", cleared);
+    return () =>
+      window.removeEventListener("conclave:conversation-cleared", cleared);
+  }, [viewerId, roomId]);
+
+  useEffect(() => {
+    const online = () => setBrowserOnline(true);
+    const offline = () => setBrowserOnline(false);
+    window.addEventListener("online", online);
+    window.addEventListener("offline", offline);
+    return () => {
+      window.removeEventListener("online", online);
+      window.removeEventListener("offline", offline);
+    };
+  }, []);
 
   const members = room?.members || [];
+  const deletedDmPeer = room?.type === "dm" &&
+    !members.some((member) => member.id !== viewerId);
   const myRole = room?.my_role;
 
   const {
@@ -72,6 +214,7 @@ export default function Room() {
     isLoadingOlder,
     loadOlder,
     sendMessage,
+    sendMedia,
     stopTyping,
     editMessage,
     removeMessage,
@@ -79,9 +222,147 @@ export default function Room() {
     pinMessage,
     unpinMessage,
     typingUserIds,
+    recordingUserIds,
     readPointers,
+    readSequences,
+    deliveredSequences,
     deliveryIds,
-  } = useMessages(roomId, members);
+    lastSeenSequence,
+  } = useMessages(roomError && !room ? null : roomId, members, historyAnchor);
+
+  const threadRootSignatures = useMemo(() => {
+    const roots = new Map();
+    for (const message of messages) {
+      const id = message.thread_root_id || message.id;
+      if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
+      const current = roots.get(id) || { count: 0, deleted: 0 };
+      current.count += 1;
+      if (message.deleted_at || message.is_deleted) current.deleted += 1;
+      roots.set(id, current);
+    }
+    return [...roots].map(([id, value]) => ({
+      id,
+      signature: `${value.count}:${value.deleted}`,
+    }));
+  }, [messages]);
+  const fetchedThreadRootsRef = useRef({
+    roomId: null,
+    revision: null,
+    signatures: new Map(),
+  });
+  useEffect(() => {
+    let active = true;
+    const cache = fetchedThreadRootsRef.current;
+    if (cache.roomId !== roomId || cache.revision !== threadCountsRevision) {
+      cache.roomId = roomId;
+      cache.revision = threadCountsRevision;
+      cache.signatures = new Map();
+      setThreadCounts({});
+    }
+    const pending = threadRootSignatures.filter(
+      ({ id, signature }) => cache.signatures.get(id) !== signature,
+    );
+    (async () => {
+      const counts = {};
+      const succeeded = [];
+      for (let i = 0; i < pending.length; i += 200) {
+        const page = pending.slice(i, i + 200);
+        try {
+          const result = (
+            await api.get(`/experience/rooms/${roomId}/thread-counts`, {
+              params: { ids: page.map(({ id }) => id).join(",") },
+            })
+          ).data.data;
+          if (!active) return;
+          succeeded.push(...page);
+          result.threads.forEach((row) => {
+            counts[row.id] = row;
+          });
+        } catch {}
+      }
+      if (!active) return;
+      succeeded.forEach(({ id, signature }) =>
+        cache.signatures.set(id, signature),
+      );
+      if (Object.keys(counts).length)
+        setThreadCounts((previous) => ({ ...previous, ...counts }));
+    })();
+    return () => {
+      active = false;
+    };
+  }, [roomId, threadRootSignatures, threadCountsRevision]);
+
+  const timelineMessages = useMemo(
+    () =>
+      messages.map((message) => ({
+        ...message,
+        thread_count:
+          threadCounts[message.thread_root_id || message.id]?.reply_count,
+        thread_unread:
+          threadCounts[message.thread_root_id || message.id]?.unread_count,
+        ...(message.id === anchorId
+          ? {
+              _searchMatch: true,
+              _searchQuery: searchParams.get("q") || "",
+            }
+          : {}),
+      })),
+    [messages, threadCounts, anchorId, searchParams],
+  );
+
+  useEffect(() => {
+    setHighlightedId(null);
+    setJumpTarget(anchorId ? { id: anchorId } : null);
+  }, [roomId, anchorId]);
+
+  useEffect(() => () => clearTimeout(jumpTimerRef.current), []);
+
+  const handleJumpLocated = useCallback((id) => {
+    clearTimeout(jumpTimerRef.current);
+    setHighlightedId(id);
+    jumpTimerRef.current = setTimeout(() => {
+      setHighlightedId(null);
+      setJumpTarget(null);
+    }, 2200);
+  }, []);
+
+  useEffect(() => {
+    if (!jumpTarget?.id || messagesLoading || roomLoading) return;
+    if (!messages.some((message) => message.id === jumpTarget.id)) {
+      if (messagesError || !hasMore) {
+        setJumpTarget(null);
+        if (!messagesError)
+          toast({
+            title: "Message unavailable",
+            description: "It may have been deleted or cleared on this device.",
+            tone: "error",
+          });
+      } else if (!isLoadingOlder) loadOlder();
+    }
+  }, [
+    jumpTarget,
+    messages,
+    hasMore,
+    isLoadingOlder,
+    loadOlder,
+    messagesLoading,
+    roomLoading,
+    messagesError,
+    toast,
+  ]);
+
+  useEffect(() => {
+    const id = searchParams.get("thread");
+    const root = messages.find((m) => m.id === id);
+    if (root) setThreadRoot(root);
+  }, [searchParams, messages]);
+
+  const jumpToMessage = (message) => {
+    if (!message?.id) return;
+    if (anchorId && !messages.some((item) => item.id === message.id)) {
+      navigate(`/chats/${roomId}?message=${encodeURIComponent(message.id)}`);
+    } else setJumpTarget(message);
+  };
 
   // Read ticks are derived from `last_seen_at`, so the members array has to be
   // the one the socket updates. The array from GET /rooms is a snapshot from
@@ -92,13 +373,30 @@ export default function Room() {
       members.map((member) => ({
         ...member,
         last_seen_at: readPointers.get(member.id) || member.last_seen_at,
+        last_seen_sequence:
+          readSequences.get(member.id) ?? member.last_seen_sequence,
+        last_delivered_sequence:
+          deliveredSequences.get(member.id) ?? member.last_delivered_sequence,
       })),
-    [members, readPointers],
+    [members, readPointers, readSequences, deliveredSequences],
   );
 
-  useEffect(() => {
-    markSeen(roomId);
-  }, [roomId, markSeen]);
+  const handleMessageVisible = useCallback(
+    async (message, { mediaViewer = false } = {}) => {
+      if (
+        !socket?.connected ||
+        !activeReadView(document, window, mediaViewer) ||
+        !message?.id ||
+        message._optimistic
+      )
+        return false;
+      const response = await socket
+        .timeout(6000)
+        .emitWithAck("message-read", { roomId, messageId: message.id });
+      return response?.ok === true;
+    },
+    [socket, roomId],
+  );
 
   useEffect(() => {
     if (!room) return undefined;
@@ -107,7 +405,7 @@ export default function Room() {
   }, [room, isConnected, setRoomHeader]);
 
   const handleTyping = () => {
-    if (socket?.connected) socket.emit('typing', { roomId });
+    if (socket?.connected) socket.emit("typing", { roomId });
   };
 
   const handleEdit = async () => {
@@ -118,9 +416,10 @@ export default function Room() {
       setEditing(null);
     } catch (err) {
       toast({
-        title: 'Edit failed',
-        description: err.response?.data?.message || 'Could not save this message.',
-        tone: 'error',
+        title: "Edit failed",
+        description:
+          err.response?.data?.message || "Could not save this message.",
+        tone: "error",
       });
     }
   };
@@ -131,9 +430,10 @@ export default function Room() {
       setDeleting(null);
     } catch (err) {
       toast({
-        title: 'Delete failed',
-        description: err.response?.data?.message || 'Could not delete this message.',
-        tone: 'error',
+        title: "Delete failed",
+        description:
+          err.response?.data?.message || "Could not delete this message.",
+        tone: "error",
       });
     }
   };
@@ -145,19 +445,20 @@ export default function Room() {
     pinMessage(message.id, scope)
       .then(() => {
         toast({
-          title: scope === 'room' ? 'Pinned for everyone' : 'Bookmarked',
+          title: scope === "room" ? "Pinned for everyone" : "Bookmarked",
           description:
-            scope === 'room'
-              ? 'It is now in the pinned messages panel.'
-              : 'Only you can see this bookmark.',
-          tone: 'success',
+            scope === "room"
+              ? "It is now in the pinned messages panel."
+              : "Only you can see this bookmark.",
+          tone: "success",
         });
       })
       .catch((err) => {
         toast({
-          title: 'Pin failed',
-          description: err.response?.data?.message || 'Could not pin this message.',
-          tone: 'error',
+          title: "Pin failed",
+          description:
+            err.response?.data?.message || "Could not pin this message.",
+          tone: "error",
         });
       });
   };
@@ -165,9 +466,10 @@ export default function Room() {
   const handleUnpin = (message, scope) => {
     unpinMessage(message.id, scope).catch((err) => {
       toast({
-        title: 'Unpin failed',
-        description: err.response?.data?.message || 'Could not remove this pin.',
-        tone: 'error',
+        title: "Unpin failed",
+        description:
+          err.response?.data?.message || "Could not remove this pin.",
+        tone: "error",
       });
     });
   };
@@ -175,9 +477,10 @@ export default function Room() {
   const handleToggleReaction = (message, emoji) => {
     toggleReaction(message, emoji).catch((err) => {
       toast({
-        title: 'Reaction failed',
-        description: err.response?.data?.message || 'Could not save that reaction.',
-        tone: 'error',
+        title: "Reaction failed",
+        description:
+          err.response?.data?.message || "Could not save that reaction.",
+        tone: "error",
       });
     });
   };
@@ -187,64 +490,89 @@ export default function Room() {
   // question after "did it work" is "let me read it back", and making the
   // reader find it on the board turns a two-step action into a hunt.
   const handlePromoted = (decision) => {
-    toast({ title: 'Promoted to decision', description: decision.title, tone: 'success' });
+    toast({
+      title: "Promoted to decision",
+      description: decision.title,
+      tone: "success",
+    });
     navigate(`/decisions/${decision.id}`);
   };
 
   const handleTaskCreated = (task) => {
-    toast({ title: 'Task created', description: task.title, tone: 'success' });
+    toast({ title: "Task created", description: task.title, tone: "success" });
   };
 
   if (roomLoading) return <Spinner label="Opening room" />;
 
-  if (roomError) {
+  if (roomError && !room) {
     return (
-      <p role="alert" className="m-6 rounded-lg bg-error/10 p-4 text-body text-error">
+      <p
+        role="alert"
+        className="m-6 rounded-lg bg-error/10 p-4 text-body text-error"
+      >
         {roomError}
       </p>
     );
   }
 
   return (
-    <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-surface">
-      {/*
-        Rows are addressed explicitly rather than by source order.
-        PinnedDecisionStrip returns null for any room with no pins, and a null
-        child is not a grid item — so auto-placement renumbered the remaining
-        two, putting the composer in the `1fr` row and the scroller in `auto`.
-        With no messages the scroller then collapsed to the empty state's
-        min-h-48 and the composer stretched over everything below it, floating
-        its own content at the top. Pinning row-start means the layout is the
-        same whether or not there are pins.
-
-        `minmax(0, 1fr)` rather than `1fr`: a bare `1fr` floors at `auto`, so a
-        long transcript can push the row open past the pane. 0 is the same guard
-        as `min-h-0` on the scroller, stated on the track itself.
-      */}
-      {/* Row-start on both, for the reason in the note below: a null child is
-          not a grid item, so auto-placement would renumber the rows when either
-          strip is empty. */}
+    <section
+      className="relative grid h-full min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)_auto] conversation-canvas"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Out of flow (absolute), so it is not a grid item and cannot disturb
+          the explicit row-start placement described below. pointer-events-none
+          keeps the drop landing on the section itself. */}
+      {droppingFiles && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-brand bg-brand-soft/80"
+        >
+          <p className="rounded-lg bg-surface px-4 py-2 text-label text-ink shadow-modal">
+            Drop to attach
+          </p>
+        </div>
+      )}
+      {/* Explicit row placement keeps the timeline and composer stable when the
+          optional pinned area is absent. `minmax(0, 1fr)` also prevents a long
+          transcript from expanding the page beyond the conversation pane. */}
       <div className="row-start-1 min-w-0">
-        <PinnedMessagesPanel
+        <ConversationPolicyNotice room={room} />
+        {anchorId && (
+          <div
+            className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2 text-metadata text-muted"
+            role="status"
+          >
+            <span>Viewing a shared message</span>
+            <Button
+              variant="ghost"
+              onClick={() => navigate(`/chats/${roomId}`, { replace: true })}
+            >
+              Return to latest
+            </Button>
+          </div>
+        )}
+        <PinnedItemsPanel
           roomId={roomId}
-          isAdmin={myRole === 'admin'}
+          isAdmin={myRole === "admin"}
           viewerId={viewerId}
+          onJumpToMessage={jumpToMessage}
         />
-        <PinnedDecisionStrip roomId={roomId} />
       </div>
 
-        <div
-          ref={scrollContainerRef}
-          className="row-start-2 min-h-0 overflow-y-auto overscroll-contain [overflow-anchor:none]"
-        >
-        {/* No in-room catch-up digest. markSeen below advances this room's
-            last_seen_at on open, and getRoomDigest filters against exactly that
-            pointer — so a digest fetched here would always be empty. Catch-up
-            belongs to the cross-room card and page, which read the pointer
-            without moving it. */}
+      <div
+        ref={scrollContainerRef}
+        data-message-scroll
+        className="row-start-2 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain [overflow-anchor:none]"
+      >
+        {/* Catch-up belongs to the cross-room digest. Room read pointers move
+            as individual messages enter the viewport. */}
         {messagesLoading ? (
           <Spinner label="Loading messages" />
-        ) : messagesError ? (
+        ) : messagesError && !messages.length ? (
           <p
             role="alert"
             className="mx-4 mt-5 rounded-lg bg-error/10 p-4 text-body text-error md:mx-2"
@@ -253,21 +581,24 @@ export default function Room() {
           </p>
         ) : (
           <MessageTimeline
-            messages={messages}
+            messages={timelineMessages}
+            initialPosition={initialPosition}
             scrollContainerRef={scrollContainerRef}
             viewerId={viewerId}
             members={membersWithPointers}
-            isAdmin={myRole === 'admin'}
+            isAdmin={myRole === "admin"}
             roomId={roomId}
+            readOnly={deletedDmPeer}
             deliveryIds={deliveryIds}
             typingUserIds={typingUserIds}
+            recordingUserIds={recordingUserIds}
             hasMore={hasMore}
             isLoadingOlder={isLoadingOlder}
             onLoadOlder={loadOlder}
             onReply={setReplyTo}
             onEdit={(message) => {
               setEditing(message);
-              setEditDraft(message.content || '');
+              setEditDraft(message.content || "");
             }}
             onDelete={setDeleting}
             onPromote={setPromoting}
@@ -275,22 +606,175 @@ export default function Room() {
             onToggleReaction={handleToggleReaction}
             onPin={handlePin}
             onUnpin={handleUnpin}
+            lastSeenSequence={Math.max(Number(members.find((member) => member.id === viewerId)?.last_seen_sequence) || 0, lastSeenSequence)}
+            onMessageVisible={handleMessageVisible}
+            readsEnabled={
+              isConnected &&
+              !messageInfo &&
+              !threadRoot &&
+              !editing &&
+              !deleting &&
+              !promoting &&
+              !flagging &&
+              !creatingPoll &&
+              !forwarding
+            }
+            onMessageInfo={setMessageInfo}
+            onOpenThread={setThreadRoot}
+            onForward={setForwarding}
+            onJumpToMessage={jumpToMessage}
+            jumpTargetId={jumpTarget?.id}
+            onJumpLocated={handleJumpLocated}
+            highlightedId={highlightedId}
+            disableWindowing={
+              isDevAuthBypass &&
+              roomId === "preview-large-room" &&
+              searchParams.has("fullHistory")
+            }
           />
         )}
       </div>
 
-      <MessageComposer
-        className="row-start-3"
-        disabled={!isConnected}
-        onSend={sendMessage}
-        onCreatePoll={() => setCreatingPoll(true)}
-        onCreateDecision={() => setPromoting({ manual: true })}
-        onCreateTask={() => setFlagging({ manual: true })}
-        members={members}
-        onTyping={handleTyping}
-        replyTo={replyTo}
-        onCancelReply={() => setReplyTo(null)}
+      {deletedDmPeer ? (
+        <p role="status" className="row-start-3 border-t border-line bg-surface px-4 py-4 text-center text-body text-muted">
+          This account was deleted. You can still read your conversation.
+        </p>
+      ) : room?.superseded_by ? (
+        <div className="row-start-3 border-t border-line p-4">
+          <Button onClick={() => navigate(`/chats/${room.superseded_by}`)}>
+            Continue in the current conversation
+          </Button>
+          <p className="mt-2 text-metadata text-muted">
+            This conversation has moved.
+          </p>
+        </div>
+      ) : room?.message_request?.status === "declined" ? (
+        <p className="row-start-3 border-t border-line p-4 text-body text-muted">
+          This message request was declined.
+        </p>
+      ) : room?.message_request?.status === "pending" &&
+        (room.message_request.recipient_id === viewerId ||
+          messages.some((m) => m.sender_id === viewerId && !m._optimistic)) ? (
+        <div className="row-start-3 space-y-3 border-t border-line p-4">
+          <p className="text-body text-ink">
+            {room.message_request.recipient_id === viewerId
+              ? "Message request: accept to reply, or decline. You can report or block this person from conversation details."
+              : "Waiting for this person to accept your message request."}
+          </p>
+          {room.message_request.recipient_id === viewerId && (
+            <div className="flex gap-2">
+              {["accepted", "declined"].map((status) => (
+                <Button
+                  key={status}
+                  variant="secondary"
+                  onClick={async () => {
+                    try {
+                      await respondToRequest(roomId, status);
+                      await reloadRoom();
+                    } catch (e) {
+                      toast({
+                        title: "Could not update request",
+                        description: e.response?.data?.message || e.message,
+                        tone: "error",
+                      });
+                    }
+                  }}
+                >
+                  {status === "accepted" ? "Accept request" : "Decline request"}
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="chat-composer row-start-3">
+          {room.member_can_send === false && room.my_role !== "admin" && (
+            <p role="status" className="px-4 text-body text-muted">
+              Only admins can send messages in this room.
+            </p>
+          )}
+          <MessageComposer
+            ref={composerRef}
+            disabled={
+              room.member_can_send === false && room.my_role !== "admin"
+            }
+            className=""
+            onEditLast={() => {
+              const last = [...messages]
+                .reverse()
+                .find(
+                  (message) =>
+                    message.sender_id === viewerId &&
+                    !message.is_deleted &&
+                    !message._optimistic,
+                );
+              if (last) {
+                setEditing(last);
+                setEditDraft(last.content || "");
+              }
+            }}
+            onSend={async (payload) => {
+              await sendMessage(payload);
+              if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
+            }}
+            onSendMedia={async (items) => {
+              await sendMedia(items);
+              if (anchorId) navigate(`/chats/${roomId}`, { replace: true });
+            }}
+            isOnline={browserOnline && isConnected}
+            onCreatePoll={() => setCreatingPoll(true)}
+            onCreateDecision={() => setPromoting({ manual: true })}
+            onCreateTask={() => setFlagging({ manual: true })}
+            members={members}
+            activityScope={roomId}
+            onTyping={handleTyping}
+            onStopTyping={stopTyping}
+            onRecording={() => {
+              if (socket?.connected) socket.emit("start-recording", { roomId });
+            }}
+            onStopRecording={() => {
+              if (socket?.connected) socket.emit("stop-recording", { roomId });
+            }}
+            replyTo={replyTo}
+            onCancelReply={() => setReplyTo(null)}
+          />
+        </div>
+      )}
+
+      <MessageInfoDialog
+        message={messageInfo}
+        onClose={() => setMessageInfo(null)}
       />
+
+      <ForwardMessageDialog
+        message={forwarding}
+        onClose={() => setForwarding(null)}
+      />
+
+      {threadRoot && (
+        <ThreadPanel
+          root={threadRoot}
+          room={room}
+          onClose={() => {
+            setThreadRoot(null);
+            setSearchParams(
+              (previous) => {
+                const next = new URLSearchParams(previous);
+                next.delete("thread");
+                return next;
+              },
+              { replace: true },
+            );
+          }}
+          onSend={sendMessage}
+          onSendMedia={sendMedia}
+          deliveryIds={deliveryIds}
+          pending={messages.filter(
+            (m) =>
+              m.thread_root_id === (threadRoot.thread_root_id || threadRoot.id),
+          )}
+        />
+      )}
 
       <Modal
         open={Boolean(editing)}
@@ -301,7 +785,11 @@ export default function Room() {
             <Button variant="secondary" onClick={() => setEditing(null)}>
               Cancel
             </Button>
-            <Button variant="primary" onClick={handleEdit} disabled={!editDraft.trim()}>
+            <Button
+              variant="primary"
+              onClick={handleEdit}
+              disabled={!editDraft.trim()}
+            >
               Save
             </Button>
           </>
@@ -313,7 +801,9 @@ export default function Room() {
           rows={4}
           aria-label="Message text"
         />
-        <p className="mt-2 text-metadata text-muted">An edited message keeps its original time.</p>
+        <p className="mt-2 text-metadata text-muted">
+          An edited message keeps its original time.
+        </p>
       </Modal>
 
       <Modal
@@ -333,7 +823,8 @@ export default function Room() {
         }
       >
         <p className="text-body text-ink">
-          This replaces the message with “Message deleted” for everyone in the room.
+          This replaces the message with “Message deleted” for everyone in the
+          room.
         </p>
       </Modal>
 

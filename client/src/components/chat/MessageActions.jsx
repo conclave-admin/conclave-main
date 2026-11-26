@@ -1,17 +1,21 @@
-import { useRef, useState } from 'react';
+import EmojiPicker from "./EmojiPicker";
+import { useRef, useState } from "react";
 // compose.svg, not an "edit" icon: the set has no pencil glyph, and compose and
 // edit are the same gesture — a pen writing on a surface. Inventing one asset
 // for a single row would break the set's 90-icon style contract for no gain.
-import IconCompose from '@/assets/icons/compose.svg?react';
-import IconDecisions from '@/assets/icons/decisions.svg?react';
-import IconDelete from '@/assets/icons/delete.svg?react';
-import IconMore from '@/assets/icons/more.svg?react';
-import IconPin from '@/assets/icons/pin.svg?react';
-import IconReply from '@/assets/icons/reply.svg?react';
-import IconStar from '@/assets/icons/star.svg?react';
-import IconTasks from '@/assets/icons/tasks.svg?react';
-import PopoverMenu from '@/components/ui/PopoverMenu';
-import { REACTION_EMOJI } from "@/lib/messageMeta";
+import IconCompose from "@/assets/icons/compose.svg?react";
+import IconCopy from "@/assets/icons/copy.svg?react";
+import IconDecisions from "@/assets/icons/decisions.svg?react";
+import IconDelete from "@/assets/icons/delete.svg?react";
+import IconMore from "@/assets/icons/more.svg?react";
+import IconPin from "@/assets/icons/pin.svg?react";
+import IconForward from "@/assets/icons/forward.svg?react";
+import IconReply from "@/assets/icons/reply.svg?react";
+import IconStar from "@/assets/icons/star.svg?react";
+import IconTasks from "@/assets/icons/tasks.svg?react";
+import IconInfo from "@/assets/icons/info.svg?react";
+import IconThread from "@/assets/icons/thread.svg?react";
+import PopoverMenu from "@/components/ui/PopoverMenu";
 
 /**
  * Per-message actions.
@@ -30,8 +34,8 @@ import { REACTION_EMOJI } from "@/lib/messageMeta";
  * almost always remembered as "that message in #deployments" — finding it again
  * in a board is the hard part, not writing it down.
  *
- * The menu is a sibling of the message content rather than a wrapper around it,
- * so the row stays selectable and the menu cannot swallow a text selection.
+ * The trigger sits beside the message body without taking layout space; the
+ * popover is portalled so it is not clipped by the scrolling timeline.
  *
  * @param {object} message
  * @param {string} viewerId
@@ -51,12 +55,16 @@ import { REACTION_EMOJI } from "@/lib/messageMeta";
  * @param {{ onReply: Function, onEdit: Function, onDelete: Function, onPromote: Function, onFlagTask: Function, onPin: Function, onUnpin: Function }} handlers
  */
 export default function MessageActions({
+  onRemind,
   message,
   viewerId,
   isAdmin,
   open,
   onOpenChange,
+  anchorRef,
+  align = "end",
   onToggleReaction,
+  onMessageInfo,
   onReply,
   onEdit,
   onDelete,
@@ -64,10 +72,25 @@ export default function MessageActions({
   onFlagTask,
   onPin,
   onUnpin,
+  onOpenThread,
+  onForward,
 }) {
   const triggerRef = useRef(null);
   const setOpen = (value) =>
     onOpenChange(typeof value === "function" ? value(open) : value);
+
+  // The kebab is hidden on touch, so there the menu anchors to the message.
+  const isTouch =
+    typeof window !== "undefined" && window.matchMedia("(hover: none)").matches;
+  const menuAnchor = isTouch && anchorRef ? anchorRef : triggerRef;
+
+  const copyText = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+    } catch {
+      // Clipboard blocked (plain http, or permission denied). Nothing to do.
+    }
+  };
 
   const isMine = message.sender_id === viewerId;
 
@@ -83,7 +106,33 @@ export default function MessageActions({
   const mayUnpinRoom = holdsRoomPin || isAdmin;
 
   const items = [
+    isMine &&
+      onMessageInfo && {
+        key: "info",
+        label: "Message info",
+        Icon: IconInfo,
+        onClick: onMessageInfo,
+      },
+    {
+      key: "thread",
+      label: "Open thread",
+      Icon: IconThread,
+      onClick: onOpenThread,
+    },
     { key: "reply", label: "Reply", Icon: IconReply, onClick: onReply },
+    onForward &&
+      !message.poll && {
+        key: "forward",
+        label: "Forward",
+        Icon: IconForward,
+        onClick: onForward,
+      },
+    message.content && {
+      key: "copy",
+      label: "Copy text",
+      Icon: IconCopy,
+      onClick: copyText,
+    },
     // Edit is omitted on a poll: its question IS the message content, so
     // editing the text would silently change what the recorded votes answer,
     // and the server rejects it outright with 400.
@@ -158,44 +207,33 @@ export default function MessageActions({
 
       <PopoverMenu
         open={open}
+        followScroll
         onClose={() => setOpen(false)}
-        triggerRef={triggerRef}
-        align="end"
+        triggerRef={menuAnchor}
+        align={align}
         label="Message actions"
-        className="w-52"
+        className="w-[min(352px,calc(100vw-16px))] max-h-[calc(100dvh-16px)] overflow-y-auto"
       >
-        <div
-          role="group"
-          aria-label="React to this message"
-          className="mb-1 flex justify-between gap-1 border-b border-line px-1 pb-1.5 pt-0.5"
-        >
-          {REACTION_EMOJI.map((emoji) => {
-            const already = message.reactions?.find(
-              (r) => r.emoji === emoji,
-            )?.reacted;
-            return (
-              <button
-                key={emoji}
-                type="button"
-                role="menuitem"
-                aria-pressed={already}
-                onClick={() => {
-                  setOpen(false);
-                  onToggleReaction(emoji);
-                }}
-                className={`grid h-9 w-9 place-items-center rounded-lg text-body transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
-                  already ? "bg-brand-soft" : ""
-                }`}
-              >
-                <span aria-hidden="true">{emoji}</span>
-                <span className="sr-only">
-                  {already ? `Remove ${emoji} reaction` : `React with ${emoji}`}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        
+        <EmojiPicker
+          onPick={(emoji) => {
+            setOpen(false);
+            onToggleReaction(emoji);
+          }}
+        />
+
+        {onRemind && (
+          <button
+            type="button"
+            role="menuitem"
+            className="min-h-11 w-full rounded-lg px-3 text-left text-body text-ink hover:bg-canvas"
+            onClick={() => {
+              setOpen(false);
+              onRemind();
+            }}
+          >
+            Remind me
+          </button>
+        )}
         {items.map(({ key, label, Icon, onClick, danger }) => (
           <button
             key={key}

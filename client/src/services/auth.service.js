@@ -1,6 +1,11 @@
 import { api } from "../lib/api";
-import { saveSession, clearSession, getRefreshToken } from '../lib/session';
-export { getAccessToken, clearSession } from '../lib/session';
+import {
+  saveSession,
+  clearSession,
+  getRefreshToken,
+  saveSessionUser,
+} from "../lib/session";
+export { getAccessToken, clearSession } from "../lib/session";
 export async function login(credentials) {
   const { data } = await api.post("/auth/login", credentials);
   saveSession(data.data);
@@ -13,6 +18,7 @@ export async function register(details) {
 }
 export async function getCurrentUser() {
   const { data } = await api.get("/users/me");
+  saveSessionUser(data.data);
   return data.data;
 }
 export async function logout() {

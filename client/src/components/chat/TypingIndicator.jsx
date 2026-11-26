@@ -12,22 +12,39 @@
  * @param {string[]} typingUserIds
  * @param {Array} members - room members, for display names
  */
-export default function TypingIndicator({ typingUserIds = [], members = [] }) {
-  if (typingUserIds.length === 0) return null;
-
-  const names = typingUserIds.map(
-    (id) => members.find((member) => member.id === id)?.display_name || 'Someone',
-  );
-  const label =
-    names.length === 1
-      ? `${names[0]} is typing`
-      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} are typing`;
+export default function TypingIndicator({
+  typingUserIds = [],
+  recordingUserIds = [],
+  members = [],
+}) {
+  const typers = typingUserIds.filter((id) => !recordingUserIds.includes(id));
+  if (!typers.length && !recordingUserIds.length) return null;
+  const describe = (ids, singular, plural) => {
+    const names = ids.map(
+      (id) =>
+        members.find((member) => member.id === id)?.display_name || "Someone",
+    );
+    if (!names.length) return "";
+    return names.length === 1
+      ? `${names[0]} ${singular}`
+      : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} ${plural}`;
+  };
+  const label = [
+    describe(
+      recordingUserIds,
+      "is recording a voice message",
+      "are recording voice messages",
+    ),
+    describe(typers, "is typing", "are typing"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <div
       role="status"
       aria-live="polite"
-      className="pointer-events-none absolute bottom-2 left-0 right-0 flex items-center gap-2 px-7 text-metadata text-muted"
+      className="typing-indicator pointer-events-none sticky bottom-0 z-[2] -mt-6 flex h-0 shrink-0 -translate-y-6 items-center gap-2 overflow-visible px-7 text-metadata text-muted"
     >
       <span className="flex items-end gap-0.5" aria-hidden="true">
         <span className="h-1.5 w-1.5 animate-typing-dot rounded-full bg-muted [animation-delay:0ms]" />

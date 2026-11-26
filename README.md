@@ -2,8 +2,8 @@
 
 A team messaging and collaboration platform with **Decisions**, **Action Items**,
 and **Catch-up Digests** that survive the scroll. Registration is open to everyone.
-Group invitations and public/private group preferences govern collaboration;
-public group discovery and joining still need implementation.
+Room membership controls collaboration. Signed-in users can discover and join
+public rooms; private rooms remain invitation-only.
 
 Full product/architecture context: [`docs/PKB_Project_Architecture_Brief.docx`](docs/PKB_Project_Architecture_Brief.docx).
 
@@ -12,7 +12,7 @@ Full product/architecture context: [`docs/PKB_Project_Architecture_Brief.docx`](
 - **Backend:** Node.js + Express
 - **Real-time:** Socket.IO
 - **Database:** PostgreSQL
-- **Cache / presence / pub-sub:** Redis
+- **Cache / multi-instance pub-sub:** Optional Redis
 - **Media storage:** Cloudinary
 - **Auth:** JWT (access + refresh token)
 - **Frontend:** React + Tailwind (Vite)
@@ -20,34 +20,44 @@ Full product/architecture context: [`docs/PKB_Project_Architecture_Brief.docx`](
 ## Getting Started (local dev)
 
 1. **Copy env files:**
+
    ```bash
    cp backend/.env.example backend/.env
    cp client/.env.example client/.env
    ```
+
    Fill in your Cloudinary credentials and JWT secrets in `backend/.env`.
 
 2. **Start Postgres + Redis:**
+
    ```bash
    docker compose up -d postgres redis
    ```
 
 3. **Run migrations:**
+
    ```bash
    cd backend
    npm install
    npm run migrate
    npm run seed
    ```
+
    The seed command creates five login accounts in the `Conclave Test Room`:
    `admin1@example.test` and `admin2@example.test` are room admins; the other
    three are members. All five use the password `ConclaveTest123!`. It is
    repeatable and is blocked when `NODE_ENV=production`.
 
 4. **Start the backend:**
+
    ```bash
    npm run dev
    ```
-   Runs on `http://localhost:5000` by default.
+
+   Runs on `http://localhost:7000` by default. Keep `PORT` in `backend/.env`
+   aligned with `VITE_API_URL` and `VITE_SOCKET_URL` in `client/.env`, then restart
+   both dev servers after changing them. Docker Compose uses `BACKEND_PORT`
+   (default `7000`) for the backend listener, published port and health check.
 
 5. **Start the client (new terminal):**
    ```bash
@@ -77,11 +87,39 @@ docker-compose.yml   Postgres + Redis for local dev
 ## Architecture and documentation
 
 REST requests follow routes → controllers → shared services → PostgreSQL.
-Socket.IO uses the same message write service; Redis maintains presence and
-relays events between API instances. Cloudinary stores uploaded attachments.
+Socket.IO uses the same message write service. A single API instance keeps
+presence and typing state locally; optional Redis relays events when running
+multiple instances. See [Redis operations](docs/redis.md). R2 stores new
+attachments; legacy Cloudinary attachments remain supported.
 
 - [API contracts](docs/API_CONTRACTS.md): endpoint payloads and integration notes.
 - [Backend backlog](docs/BACKEND_TASKS.md): current status, priorities and risks.
 - [Product brief](docs/PKB_Project_Architecture_Brief.docx): product rationale.
 - [Frontend guidance](docs/CLAUDE.md), [design questions](docs/DESIGN_QUESTIONS.md)
   and [visual QA](docs/design-qa.md): Isaac's implementation references.
+
+Room invitations, approval, permissions, handover, and personal history require
+migration **038** before deploying the updated API/client. See
+[Rooms and personal history](docs/ROOMS_AND_PERSONAL_HISTORY.md) for rollout,
+permission, and clearing rules.
+
+## Repository verification
+
+Use Node 22 (`nvm use`), then install dependencies with `npm ci --prefix backend`
+and `npm ci --prefix client`. From the repository root:
+
+```sh
+npm run check          # backend/client unit tests and client production build
+npm run test:db        # real PostgreSQL/Redis checks using disposable databases
+npm run test:browser   # desktop/mobile recovery and real-API security suites
+npm run test:media     # focused media transfer regressions
+npm run migrate        # explicit migration of DATABASE_URL; not part of check
+```
+
+Browser checks require `cd client && npx playwright install chromium` and local
+PostgreSQL/Redis. Never point test configuration at production. See
+[release evidence](docs/RELEASE_EVIDENCE.md) and
+[deferred feature designs](docs/DEFERRED_FEATURES.md).
+
+The messaging layout and interaction changes are described in
+[messaging UI](docs/MESSAGING_UI.md).

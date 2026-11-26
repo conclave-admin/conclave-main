@@ -1,10 +1,27 @@
-const jwt = require('jsonwebtoken');
-const env = require('../config/env');
-const { query } = require('../config/db');
-const { createMessage } = require('../services/message.service');
-const { personalRoom } = require('../services/notification.service');
-const presence = require('../services/presence.service');
-const socketHandler = require('../utils/socketHandler');
+const jwt = require("jsonwebtoken");
+const env = require("../config/env");
+const { query } = require("../config/db");
+const { createMessage } = require("../services/message.service");
+const { personalRoom } = require("../services/notification.service");
+const presence = require("../services/presence.service");
+const conversationActivity = require("../services/conversationActivity.service");
+const ACTIVITY_ORDER = Symbol("activityOrder");
+const indicatorEvents = new Set([
+  "typing",
+  "stop-typing",
+  "start-recording",
+  "stop-recording",
+]);
+const { redisClient, isRedisReady, safe } = require("../config/redis");
+const socketHandler = require("../utils/socketHandler");
+const rateLimit = require("../middlewares/rateLimit.middleware");
+const ApiError = require("../utils/ApiError");
+const { requireSession, sessionRoom } = require("../services/session.service");
+const callService = require("../services/call.service");
+const {
+  registerAccessControl,
+  withRoomMembership,
+} = require("../services/realtimeAccess.service");
 
 // Event names match what was scoped in the original planning conversation.
 //
@@ -15,8 +32,10 @@ const socketHandler = require('../utils/socketHandler');
 //                      mentionedUserIds? }
 //   typing            { roomId }
 //   stop-typing       { roomId }
+//   start-recording   { roomId }
+//   stop-recording    { roomId }
 //   message-read      { roomId, messageId }
-//   heartbeat         {}              (keep-alive for presence)
+//   heartbeat         { foreground?, roomId?, revision? }
 //
 // Server -> Client:
 //   receive-message   { message }
@@ -29,12 +48,16 @@ const socketHandler = require('../utils/socketHandler');
 //                                   badge — updates without being opened.
 //                                   Emitted by emitChatUpdated in
 //                                   services/notification.service.js.
-//   user-online        { userId }
-//   user-offline       { userId }
-//   room-presence      { roomId, onlineUserIds }
-//   room-typing        { roomId, typingUserIds }
-//   typing             { roomId, userId }
-//   stop-typing        { roomId, userId }
+// Global user presence is intentionally not broadcast. Presence is visible
+// only to members currently subscribed to the same room.
+//   room-presence      { roomId, available, onlineUserIds, viewingUserIds,
+//                        typingUserIds, recordingUserIds, activity,
+//                        activityVersion, hiddenUserIds, checkedAt }
+//   presence:unavailable / presence:resync  invalidate or refresh presence
+//   room-typing        same filtered activity fields as room-presence
+//   typing / stop-typing / start-recording / stop-recording
+//                      { roomId, userId, ttlMs, activityVersion }
+//   privacy:changed    { userId, hidden }  sent to both affected users
 //   message-read       { roomId, messageId, userId, lastSeenAt }
 //                                   persists: advances room_members.last_seen_at
 //                                   and echoes the stored timestamp back, so the
@@ -46,19 +69,15 @@ const socketHandler = require('../utils/socketHandler');
 //                                   writers publish, so a read tick updates for
 //                                   everyone whether the reader arrived via the
 //                                   socket or the REST call.
-//   decision:pinned    { decision, scope, userId }
-//   decision:unpinned  { decision, scope, userId }
-//                                   from PUT /decisions/:decisionId/pin and
-//                                   DELETE .../pin/:scope. The decision carries
-//                                   pins.room, which is shared truth and identical
-//                                   for every viewer. It does NOT carry a finished
-//                                   pins.mine — that is per viewer, the same way
-//                                   reactions' `reacted` is, so each client fixes
-//                                   up its own from the acting userId.
-//   task:updated       { task }     emitted by POST /tasks and
-//                                   PATCH /tasks/:taskId/status. Sent to each
-//                                   of the assignee, the creator and the room's
-//                                   admins individually in `user:{userId}`,
+//   decision:changed   { decisionId, roomId }
+//   decision:pinned    { decisionId, roomId, scope, userId }
+//   decision:unpinned  { decisionId, roomId, scope, userId }
+//                                   Events carry identifiers only; each viewer
+//                                   refetches their own bookmark/capability state.
+//                                   Personal pin events go only to user:{userId}.
+//   task:updated       { taskId, roomId } emitted after task creation or change.
+//                                   Sent to current room members in their
+//                                   personal socket rooms; clients refetch.
 //                                   never to the room — the list query hides a
 //                                   task from everyone else, so announcing it
 //                                   would leak it.
@@ -95,85 +114,150 @@ const socketHandler = require('../utils/socketHandler');
 //
 // Not yet implemented, so deliberately absent from this list rather than
 // advertised and never sent (BACKEND_TASKS.md Bug 13): upload-progress and
-// decision:created. `notification` is live — emitted by notification.service for
-// room invites and mentions. Marking notifications seen emits the separate
+// `notification` is live — emitted by notification.service for room invites,
+// mentions and decisions. Marking notifications seen emits the separate
 // `notification:seen`, never `notification` with a count in place of a row.
 //
-// Limitation worth knowing, now half-fixed: task:updated is no longer emitted to
-// the task's room (see its entry above), so it reaches the assignee, the creator
-// and the admins on `user:{userId}` — which every socket joins on connect, and so
-// the cross-room Tasks page updates live even though it never joins a room.
-// Nothing else here has changed: sockets still join a chat room only on demand
-// (client/src/hooks/useMessages.js emits join-room when a room view mounts).
-
-// Membership check for events that only relay state. createMessage already
-// authorises send-message; these three did not, so a client could spoof read
-// receipts and typing indicators into rooms it does not belong to.
-async function isMember(roomId, userId) {
-  const result = await query(
-    `SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2`,
-    [roomId, userId],
-  );
-  return result.rows.length > 0;
-}
+// Task updates reach each current member's personal socket room. The cross-room
+// board can refresh without joining every conversation room.
 
 function registerSocketHandlers(io) {
-  // Auth: client connects with `io(url, { auth: { token } })`.
+  registerAccessControl(io);
   io.use(async (socket, next) => {
+    const reject = (message, code) => {
+      const error = new Error(message);
+      error.data = { code };
+      return next(error);
+    };
     const token = socket.handshake.auth?.token;
-    if (!token) return next(new Error('Missing auth token'));
-
+    if (!token) return reject("Missing auth token", "AUTH_INVALID");
     let payload;
     try {
       payload = jwt.verify(token, env.jwt.accessSecret);
-    } catch (err) {
-      return next(new Error('Invalid or expired token'));
-    }
-
-    // Same soft-delete check requireAuth does on the REST side. A self-contained
-    // JWT cannot be revoked, so without this a deleted account kept an open
-    // socket and could still send messages until its token expired. Checked once
-    // at connect rather than per event, which bounds the window to the lifetime
-    // of the connection rather than a single request.
-    try {
-      const result = await query(
-        `SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL`,
-        [payload.sub],
+    } catch (error) {
+      return reject(
+        "Invalid or expired token",
+        error.name === "TokenExpiredError" ? "ACCESS_EXPIRED" : "AUTH_INVALID",
       );
-      if (result.rows.length === 0) {
-        return next(new Error('This account has been deleted'));
-      }
-    } catch (err) {
-      return next(new Error('Could not verify account'));
     }
-
-    socket.user = { id: payload.sub, email: payload.email };
+    if (!Number.isFinite(payload.exp))
+      return reject("Access token must expire", "AUTH_INVALID");
+    try {
+      const session = await requireSession(payload);
+      socket.user = { id: payload.sub, email: payload.email };
+      socket.authClaims = {
+        sub: payload.sub,
+        sid: payload.sid,
+        exp: payload.exp,
+      };
+      socket.sessionExpiresAt = Math.min(
+        payload.exp * 1000,
+        new Date(session.expires_at).getTime(),
+      );
+      socket.data.sessionId = payload.sid;
+      socket.data.userId = payload.sub;
+    } catch (error) {
+      return reject(
+        [401, 403].includes(error.status) ? error.message : "Could not verify account",
+        error.status === 401 ? "SESSION_REVOKED" : error.status === 403 ? "ACCOUNT_SUSPENDED" : "AUTH_UNAVAILABLE",
+      );
+    }
     return next();
   });
 
-  io.on('connection', (socket) => {
+  io.on("connection", (socket) => {
     const { id: userId } = socket.user;
-    const onEvent = (event, handler) => socket.on(event, socketHandler(socket, async (...args) => {
-      const initialized = await ready;
-      if (event !== 'disconnect' && (!initialized || !socket.connected)) return;
-      return handler(...args);
-    }, {
-      payload: !['heartbeat', 'disconnect'].includes(event),
-    }));
+    socket.data.activity = { foreground: false, roomId: null, revision: -1 };
+    let activityWork = Promise.resolve();
+    let indicatorOrder = 0;
+    const onEvent = (event, handler) => {
+      const run = socketHandler(
+        socket,
+        async (...args) => {
+          const initialized = await ready;
+          if (event !== "disconnect") {
+            if (!initialized || !socket.connected) return;
+            if (Date.now() >= socket.sessionExpiresAt) {
+              if (socket.data.activeCallId)
+                await callService.finishCall(io, socket, userId, socket.data.activeCallId, "end").catch(() => {});
+              socket.data.activeCallId = null;
+              socket.emit("session:expired", {
+                sessionId: socket.data.sessionId,
+              });
+              socket.disconnect(true);
+              throw new ApiError(401, "Access token expired");
+            }
+            if (indicatorEvents.has(event)) {
+              if (
+                !rateLimit.consume(`indicators:${socket.id}`, {
+                  windowMs: 10000,
+                  max: 24,
+                })
+              )
+                throw new ApiError(429, "Too many activity updates");
+            }
+            try {
+              const session = await requireSession(socket.authClaims);
+              // Starts share one account budget across tabs and instances.
+              // Stops must still clear another device after a start flood.
+              if (event === "typing" || event === "start-recording") {
+                await rateLimit.requireShared(
+                  `indicators:user:${userId}`,
+                  {
+                    windowMs: 10_000,
+                    max: 24 * Math.max(1, session?.active_session_count || 1),
+                  },
+                  "Too many activity updates",
+                );
+              }
+            } catch (error) {
+              if ([401, 403].includes(error.status)) {
+                socket.emit("session:revoked", {
+                  sessionId: socket.data.sessionId,
+                });
+                socket.disconnect(true);
+              }
+              throw error;
+            }
+            // The session check is asynchronous; revocation may disconnect us while it runs.
+            if (!socket.connected) return;
+          }
+          return handler(...args);
+        },
+        {
+          payload: !["heartbeat", "disconnect"].includes(event),
+        },
+      );
+      socket.on(event, (...args) => {
+        if (event === "heartbeat") {
+          if (typeof args[0] === "function") args.unshift({});
+          else if (args[0] === undefined) args[0] = {};
+        }
+        if (args[0] && typeof args[0] === "object" && !Array.isArray(args[0]))
+          args[0][ACTIVITY_ORDER] = ++indicatorOrder;
+        const work = run(...args);
+        if (event === "disconnect") presence.trackCleanup(work);
+        return work;
+      });
+    };
 
     // --- Presence: mark user online + start heartbeat ---
-    // Only announce user-online for the user's first socket; a second tab
-    // joining should not re-announce someone already online.
+    // A second tab joins independently. Presence is published only after it
+    // joins a room, and room rosters account for every socket.
     // Register listeners synchronously. Clients can emit join-room immediately
     // after connecting, before these Redis calls finish.
     const ready = (async () => {
       try {
-        const openSockets = await presence.socketConnected(userId, socket.id);
-        await presence.userConnected(userId);
-        if (socket.connected && openSockets === 1) socket.broadcast.emit('user-online', { userId });
+        await socket.join(personalRoom(userId));
+        await socket.join(sessionRoom(socket.data.sessionId));
+        await requireSession(socket.authClaims);
+        if (!socket.connected) return false;
+        await presence.socketConnected(userId, socket.id);
+        socket.data.presenceRenewedAt = Date.now();
+        await presence.publishUserPresence(io, userId);
         return true;
       } catch (error) {
-        console.error('Could not initialize socket presence', error);
+        console.error("Could not initialize socket presence", error);
         socket.disconnect(true);
         return false;
       }
@@ -182,167 +266,421 @@ function registerSocketHandlers(io) {
     // Join a per-user room so events addressed to one person (notifications)
     // can reach every tab they have open. Chat rooms are joined by raw room
     // UUID via join-room, so this prefixed name cannot collide with one.
-    socket.join(personalRoom(userId));
+    // Expiration disconnects even an idle socket; the client can refresh and
+    // reconnect using the same still-active session.
+    let expiryTimer;
+    const scheduleExpiry = () => {
+      expiryTimer = setTimeout(
+        async () => {
+          if (Date.now() < socket.sessionExpiresAt) return scheduleExpiry();
+          if (socket.data.activeCallId)
+            await callService.finishCall(io, socket, userId, socket.data.activeCallId, "end").catch((error) => console.warn("Could not end call on session expiry", error.message));
+          socket.data.activeCallId = null;
+          socket.emit("session:expired", { sessionId: socket.data.sessionId });
+          socket.disconnect(true);
+        },
+        Math.max(1, Math.min(socket.sessionExpiresAt - Date.now(), 2147483647)),
+      );
+      expiryTimer.unref?.();
+    };
+    scheduleExpiry();
 
     // --- join-room: verify membership, track per-room presence ---
-    onEvent('join-room', async ({ roomId }) => {
+    onEvent("join-room", async ({ roomId }) => {
       if (!roomId) return;
-
-      // Verify the user is actually a member of this room
-      const result = await query(
-        `SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2`,
-        [roomId, userId],
-      );
-
-      if (result.rows.length === 0) {
-        socket.emit('error:message', { message: 'You are not a member of this room' });
-        return;
-      }
-
-      socket.join(roomId);
-
-      // Track per-room presence and broadcast updated list
-      await presence.userJoinedRoom(userId, roomId);
-      const roomOnlineUsers = await presence.getRoomOnlineUsers(roomId);
-      io.to(roomId).emit('room-presence', {
-        roomId,
-        onlineUserIds: roomOnlineUsers,
+      return withRoomMembership(roomId, userId, async (client) => {
+        if (!socket.connected) return;
+        await socket.join(roomId);
+        await presence.userJoinedRoom(userId, roomId, socket.id);
+        await presence.publishRoomPresence(io, roomId, client);
+        return { roomId, joined: true };
       });
-
-      // Send the new joiner the current typing state for this room
-      const typingUserIds = await presence.getTypingUsers(roomId);
-      socket.emit('room-typing', { roomId, typingUserIds });
     });
 
-    onEvent('leave-room', async ({ roomId }) => {
-      if (!roomId) return;
+    onEvent("leave-room", async ({ roomId, [ACTIVITY_ORDER]: order }) => {
+      if (!roomId || !socket.rooms.has(roomId)) return;
 
-      socket.leave(roomId);
-      // Stamp last_seen_at before leaving so the digest window closes when
-      // the user actually goes away (BACKEND_TASKS.md Bug 2).
-      await query(
-        `UPDATE room_members SET last_seen_at = NOW() WHERE room_id = $1 AND user_id = $2`,
-        [roomId, userId],
-      );
-      await presence.userLeftRoom(userId, roomId);
-      const roomOnlineUsers = await presence.getRoomOnlineUsers(roomId);
-      io.to(roomId).emit('room-presence', {
-        roomId,
-        onlineUserIds: roomOnlineUsers,
-      });
+      await socket.leave(roomId);
+      await presence.userLeftRoom(userId, roomId, socket.id);
+      if (socket.data.activity.roomId === roomId)
+        socket.data.activity.roomId = null;
+      await conversationActivity.clearDevice(roomId, userId, socket.id, order);
+      await presence.publishRoomPresence(io, roomId, undefined, userId);
+      return { roomId, left: true };
+    });
+
+    onEvent("call:start", async ({ roomId, callType }) => {
+      if (typeof roomId !== "string" || !/^[0-9a-f-]{36}$/i.test(roomId))
+        throw new ApiError(400, "A valid direct conversation is required");
+      await rateLimit.requireShared(`call:start:${userId}`, {
+        windowMs: 5 * 60_000,
+        max: 6,
+      }, "Too many call attempts. Try again later.");
+      const result = await callService.startCall(io, socket, userId, roomId, callType || "audio");
+      socket.data.activeCallId = result.call.id;
+      return result;
+    });
+
+    onEvent("call:accept", async ({ callId }) => {
+      if (typeof callId !== "string" || !/^[0-9a-f-]{36}$/i.test(callId))
+        throw new ApiError(400, "A valid call is required");
+      await rateLimit.requireShared(`call:control:${userId}`, { windowMs: 60_000, max: 30 }, "Too many call updates. Please try again.");
+      const result = await callService.acceptCall(io, socket, userId, callId);
+      socket.data.activeCallId = callId;
+      return result;
+    });
+
+    onEvent("call:decline", async ({ callId }) => {
+      if (typeof callId !== "string" || !/^[0-9a-f-]{36}$/i.test(callId))
+        throw new ApiError(400, "A valid call is required");
+      await rateLimit.requireShared(`call:control:${userId}`, { windowMs: 60_000, max: 30 }, "Too many call updates. Please try again.");
+      const result = await callService.finishCall(io, socket, userId, callId, "decline");
+      if (socket.data.activeCallId === callId) socket.data.activeCallId = null;
+      return result;
+    });
+
+    onEvent("call:end", async ({ callId }) => {
+      if (typeof callId !== "string" || !/^[0-9a-f-]{36}$/i.test(callId))
+        throw new ApiError(400, "A valid call is required");
+      await rateLimit.requireShared(`call:control:${userId}`, { windowMs: 60_000, max: 30 }, "Too many call updates. Please try again.");
+      const result = await callService.finishCall(io, socket, userId, callId, "end");
+      if (socket.data.activeCallId === callId) socket.data.activeCallId = null;
+      return result;
+    });
+
+    onEvent("call:signal", async ({ callId, toUserId, signal }) => {
+      if (typeof callId !== "string" || !/^[0-9a-f-]{36}$/i.test(callId))
+        throw new ApiError(400, "A valid call is required");
+      await rateLimit.requireShared(`call:signal:${userId}`, {
+        windowMs: 60_000,
+        max: 120,
+      }, "Too many call updates. Please try again.");
+      return callService.relaySignal(io, userId, callId, toUserId, signal);
     });
 
     // --- send-message: persist to DB, then broadcast the saved row ---
     // mentionedUserIds is how a client says who was mentioned. Optional for now:
     // omitting it falls back to matching display names in the text, which is
     // temporary — see resolveMentionIds in services/message.service.js.
-    onEvent('send-message', async ({ roomId, content, replyToId, attachments, mentionedUserIds }) => {
-      const message = await createMessage({
+    onEvent(
+      "send-message",
+      async ({
         roomId,
-        senderId: userId,
+        clientId,
         content,
         replyToId,
+        threadRootId,
+        broadcastMention,
         attachments,
+        albumId,
         mentionedUserIds,
-        io,
+        forwardSource,
+        [ACTIVITY_ORDER]: order,
+      }) => {
+        await rateLimit.requireShared(
+          `socket:${userId}:messages`,
+          { windowMs: 60_000, max: 30 },
+          "Too many messages. Please try again shortly.",
+        );
+        const message = await createMessage({
+          roomId,
+          senderId: userId,
+          clientId,
+          content,
+          replyToId,
+          threadRootId,
+          broadcastMention,
+          attachments,
+          albumId,
+          mentionedUserIds,
+          forwardSource,
+          io,
+        });
+
+        // Auto-clear typing indicator when a message is sent
+        await conversationActivity.clearDevice(
+          roomId,
+          userId,
+          socket.id,
+          order,
+        );
+        await presence.publishRoomPresence(io, roomId, undefined, userId);
+
+        if (!message._idempotentRetry)
+          await require("../services/privacy.service").emitMessage(
+            io,
+            roomId,
+            "receive-message",
+            message,
+          );
+        return message;
+      },
+    );
+
+    // Starts are rate limited across instances; stops always clear only the
+    // originating device. Aggregate snapshots keep other devices visible.
+    for (const [event, kind, active] of [
+      ["typing", "typing", true],
+      ["stop-typing", "typing", false],
+      ["start-recording", "recording", true],
+      ["stop-recording", "recording", false],
+    ])
+      onEvent(event, async ({ roomId, [ACTIVITY_ORDER]: order }) => {
+        if (!roomId) throw new ApiError(400, "roomId is required");
+        if (active) {
+          const allowed =
+            process.env.SOCKET_REDIS_ADAPTER === "true"
+              ? await rateLimit.consumeShared(`activity:${userId}`, {
+                  windowMs: 60000,
+                  max: 120,
+                })
+              : rateLimit.consume(`activity:${userId}`, {
+                  windowMs: 60000,
+                  max: 120,
+                });
+          if (!allowed) throw new ApiError(429, "Too many activity updates");
+        }
+        return withRoomMembership(roomId, userId, async (client) => {
+          if (
+            active &&
+            (
+              await client.query(
+                `SELECT 1 FROM rooms r JOIN room_members rm ON rm.room_id=r.id AND rm.user_id=$2 WHERE r.id=$1 AND NOT r.member_can_send AND rm.role<>'admin'`,
+                [roomId, userId],
+              )
+            ).rowCount
+          )
+            throw new ApiError(
+              403,
+              "Only admins can send activity in this room",
+            );
+          if (!socket.connected || !socket.rooms.has(roomId))
+            throw new ApiError(
+              403,
+              "Join this conversation before sharing activity",
+            );
+          const changed = await conversationActivity.update(
+            roomId,
+            userId,
+            socket.id,
+            kind,
+            active,
+            order,
+          );
+          if (changed)
+            await presence.publishRoomPresence(io, roomId, client, userId);
+          return { roomId, accepted: changed };
+        });
       });
 
-      // Auto-clear typing indicator when a message is sent
-      await presence.clearTyping(roomId, userId);
-      socket.to(roomId).emit('stop-typing', { roomId, userId });
+    // Delivery means a device received message metadata, independent of media
+    // downloads. Reading additionally requires a live foreground timeline.
+    for (const [event, read] of [
+      ["message-read", true],
+      ["message-delivered", false],
+    ]) {
+      onEvent(event, async ({ roomId, messageId }) => {
+        if (!roomId || !messageId)
+          throw new ApiError(400, "roomId and messageId are required");
+        return require("../services/messageReceipt.service").acknowledge({
+          roomId,
+          messageId,
+          userId,
+          read,
+          io,
+          authorize: async () => {
+            if (!socket.connected) return false;
+            if (!read) return true;
+            if (!socket.rooms.has(roomId)) return false;
+            if (
+              process.env.SOCKET_REDIS_ADAPTER !== "true" ||
+              !isRedisReady() ||
+              !redisClient
+            )
+              return (
+                socket.data.activity?.foreground === true &&
+                socket.data.activity.roomId === roomId
+              );
+            const presenceState = await safe(
+              async (client) =>
+                Promise.all([
+                  client.zScore(
+                    "presence:leases",
+                    `${userId}:${socket.id}`,
+                  ),
+                  client.hGetAll(`presence:socket:${socket.id}`),
+                ]),
+              null,
+            );
+            if (!presenceState)
+              return (
+                socket.data.activity?.foreground === true &&
+                socket.data.activity.roomId === roomId
+              );
+            const [lease, meta] = presenceState;
+            return (
+              Number(lease) > Date.now() &&
+              meta.foreground === "1" &&
+              meta.roomId === roomId
+            );
+          },
+        });
+      });
+    }
 
-      io.to(roomId).emit('receive-message', { message });
-    });
-
-    // --- typing indicators: Redis-backed with auto-expiry ---
-    onEvent('typing', async ({ roomId }) => {
-      if (!roomId) return;
-      if (!(await isMember(roomId, userId))) return;
-      await presence.setTyping(roomId, userId);
-      socket.to(roomId).emit('typing', { roomId, userId });
-    });
-
-    onEvent('stop-typing', async ({ roomId }) => {
-      if (!roomId) return;
-      if (!(await isMember(roomId, userId))) return;
-      await presence.clearTyping(roomId, userId);
-      socket.to(roomId).emit('stop-typing', { roomId, userId });
-    });
-
-    // --- message-read: advance the reader's pointer, then broadcast ---
-    // Membership is checked because this previously relayed to any roomId the
-    // client named, letting a user spoof read receipts into rooms they are not
-    // in.
-    //
-    // It now PERSISTS, which is the whole point. Before this, the socket
-    // broadcast and room_members.last_seen_at were two competing notions of
-    // "read": the event evaporated the moment the recipient's tab closed, while
-    // the durable pointer that unread_count and the digest filter against was
-    // only ever moved by PATCH /rooms/:roomId/seen. A read tick that vanishes
-    // on reload is not a receipt, it is a rumour. Both paths now write the same
-    // column, so there is one definition of read and it survives a restart.
-    //
-    // last_seen_at advances to NOW(), not to the read message's created_at:
-    // reading a room means reading everything up to the point you reached, and
-    // the newest message is a safe upper bound for what the reader has seen.
-    onEvent('message-read', async ({ roomId, messageId }) => {
-      if (!roomId || !messageId) return;
-      if (!(await isMember(roomId, userId))) return;
-
-      const result = await query(
-        `UPDATE room_members
-            SET last_seen_at = NOW()
-          WHERE room_id = $1 AND user_id = $2
-          RETURNING last_seen_at`,
-        [roomId, userId],
-      );
-      const lastSeenAt = result.rows[0]?.last_seen_at;
-
-      // Broadcast to the room including the sender, so the reader's own client
-      // converges on the same timestamp the server stored rather than assuming
-      // one. `.to()` would exclude them and leave their tick on a guess.
-      io.to(roomId).emit('message-read', { roomId, messageId, userId, lastSeenAt });
-    });
-
-    // --- heartbeat: refresh the user's presence TTL ---
-    onEvent('heartbeat', async () => {
-      await presence.refreshHeartbeat(userId);
+    // Foreground attention is separate from subscriptions (info pages and
+    // background tabs retain subscriptions). Activity updates are serialized;
+    // revisions also discard requests whose authorization finished out of order.
+    onEvent("heartbeat", async (payload = {}) => {
+      activityWork = activityWork
+        .catch(() => {})
+        .then(async () => {
+          const previous = socket.data.activity;
+          const revision = Number.isSafeInteger(payload?.revision)
+            ? payload.revision
+            : previous.revision + 1;
+          if (revision < previous.revision || !socket.connected)
+            return { available: true };
+          let roomId =
+            typeof payload?.roomId === "string" ? payload.roomId : null;
+          if (roomId && !/^[0-9a-f-]{36}$/i.test(roomId))
+            throw new ApiError(400, "Invalid presence room");
+          const activity = {
+            foreground: payload?.foreground === true,
+            roomId,
+            revision,
+            order: payload[ACTIVITY_ORDER],
+          };
+          if (!activity.foreground) activity.roomId = roomId = null;
+          let changed;
+          const stateChanged =
+            previous.foreground !== activity.foreground ||
+            previous.roomId !== activity.roomId;
+          const refreshDue =
+            Date.now() - (socket.data.presenceRenewedAt || 0) >=
+            4 * 60 * 1000;
+          const rebuildPresence =
+            refreshDue || socket.data.presenceNeedsResync === true;
+          if (stateChanged || rebuildPresence) {
+            if (roomId) {
+              try {
+                changed = await withRoomMembership(roomId, userId, () =>
+                  presence.renewSocket(userId, socket.id, activity),
+                );
+              } catch (error) {
+                if (error.status !== 403) throw error;
+                activity.roomId = null;
+                changed = await presence.renewSocket(userId, socket.id, activity);
+              }
+            } else {
+              changed = await presence.renewSocket(userId, socket.id, activity);
+            }
+            socket.data.presenceRenewedAt = Date.now();
+            if (rebuildPresence) {
+              const rooms = [...socket.rooms].filter((id) =>
+                /^[0-9a-f-]{36}$/i.test(id),
+              );
+              for (const id of rooms) {
+                try {
+                  await withRoomMembership(id, userId, async () => {
+                    if (socket.connected && socket.rooms.has(id))
+                      await presence.userJoinedRoom(userId, id, socket.id);
+                  });
+                } catch (error) {
+                  if (error.status !== 403) throw error;
+                  await socket.leave(id);
+                  await presence.userLeftRoom(userId, id, socket.id);
+                  socket.emit("room:members", {
+                    roomId: id,
+                    userId,
+                    action: "removed",
+                  });
+                }
+              }
+              socket.data.presenceNeedsResync = false;
+            }
+          }
+          socket.data.activity = activity;
+          if (previous.roomId && previous.roomId !== activity.roomId) {
+            await conversationActivity.clearDevice(
+              previous.roomId,
+              userId,
+              socket.id,
+              payload[ACTIVITY_ORDER],
+            );
+            await presence.publishRoomPresence(
+              io,
+              previous.roomId,
+              undefined,
+              userId,
+            );
+          }
+          if (changed) await presence.publishUserPresence(io, userId);
+          if (stateChanged) {
+            for (const id of socket.rooms)
+              if (/^[0-9a-f-]{36}$/i.test(id))
+                await presence.publishRoomPresence(io, id);
+          }
+          return { available: true, checkedAt: Date.now() };
+        });
+      return activityWork;
     });
 
     // --- disconnect: clean up all presence state ---
-    onEvent('disconnect', async () => {
+    onEvent("disconnect", async () => {
+      clearTimeout(expiryTimer);
       // If the user still has another tab open, they are not offline — do not
       // tear down their presence or announce them as gone.
-      const remainingSockets = await presence.socketDisconnected(userId, socket.id);
+      await activityWork.catch(() => {});
+      const leftRooms = await presence.cleanupSocketFromRooms(
+        userId,
+        socket.id,
+      );
+      const remainingSockets = await presence.socketDisconnected(
+        userId,
+        socket.id,
+      );
+
+      // Notify each room only when the user's last tab there closed.
+      for (const roomId of leftRooms) {
+        await presence.publishRoomPresence(io, roomId);
+      }
+      await presence.publishUserPresence(io, userId);
       if (remainingSockets > 0) return;
 
-      // Remove from global online set + heartbeat key
+      // Remove the account from the online index only after its last device.
       await presence.userDisconnected(userId);
-
-      // Remove from all per-room presence sets
-      const leftRooms = await presence.cleanupUserFromRooms(userId);
-
-      // Notify each room the user was in
-      for (const roomId of leftRooms) {
-        const roomOnlineUsers = await presence.getRoomOnlineUsers(roomId);
-        io.to(roomId).emit('room-presence', {
-          roomId,
-          onlineUserIds: roomOnlineUsers,
+      try {
+        await query("UPDATE users SET last_active_at=NOW() WHERE id=$1", [
+          userId,
+        ]);
+      } catch (error) {
+        console.error("Could not update last-seen timestamp", {
+          message: error.message,
         });
       }
-
-      // Clean up any active typing indicators
-      await presence.cleanupUserTyping(userId);
-
-      // Broadcast global offline
-      socket.broadcast.emit('user-offline', { userId });
     });
   });
 
   // --- Start the heartbeat sweep timer ---
-  // Periodically removes users from online_users whose heartbeat has expired
-  // (network drop without clean disconnect).
+  // Expire individual device leases after a crash or sleeping connection.
   presence.startHeartbeatSweep(io);
+  const local = io.local || io;
+  const unavailable = () => local.emit?.("presence:unavailable");
+  const resync = () => {
+    for (const socket of io.of("/").sockets.values())
+      socket.data.presenceNeedsResync = true;
+    local.emit?.("presence:resync");
+  };
+  redisClient?.on("reconnecting", unavailable);
+  redisClient?.on("end", unavailable);
+  redisClient?.on("ready", resync);
+  io.httpServer?.once("close", () => {
+    presence.stopHeartbeatSweep(io);
+    redisClient?.off("reconnecting", unavailable);
+    redisClient?.off("end", unavailable);
+    redisClient?.off("ready", resync);
+  });
 }
 
 module.exports = registerSocketHandlers;

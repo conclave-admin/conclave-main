@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 
 const EDGE = 8;
 const GAP = 4;
@@ -33,6 +39,8 @@ const GAP = 4;
  * @param {{ current: HTMLElement | null }} triggerRef - the control to anchor to
  * @param {'top'|'bottom'} [side] - preferred opening direction
  * @param {'start'|'end'} [align] - align the menu's start or end edge to the trigger's
+ * @param {boolean} [followScroll] - retain message actions through layout-driven
+ *   scrolling; an intentional wheel/touch scroll outside still dismisses them
  * @param {string} [label] - accessible name for the menu itself
  * @param {string} [className] - width and any extra styling
  * @param {React.ReactNode} children
@@ -41,16 +49,22 @@ export default function PopoverMenu({
   open,
   onClose,
   triggerRef,
-  side = 'bottom',
-  align = 'end',
+  side = "bottom",
+  align = "end",
+  followScroll = false,
   label,
-  className = '',
+  popupRole = "menu",
+  className = "",
   children,
 }) {
   const menuRef = useRef(null);
   // Held off-screen and hidden until measured, so the first paint is never a
   // flash of a menu at the top-left corner of the window.
-  const [position, setPosition] = useState({ top: -9999, left: -9999, hidden: true });
+  const [position, setPosition] = useState({
+    top: -9999,
+    left: -9999,
+    hidden: true,
+  });
 
   const place = useCallback(() => {
     const trigger = triggerRef?.current;
@@ -67,17 +81,27 @@ export default function PopoverMenu({
     const below = triggerBox.bottom + GAP + menuBox.height;
     const above = triggerBox.top - GAP - menuBox.height;
     let top;
-    if (side === 'top') {
-      top = above < EDGE ? triggerBox.bottom + GAP : triggerBox.top - GAP - menuBox.height;
+    if (side === "top") {
+      top =
+        above < EDGE
+          ? triggerBox.bottom + GAP
+          : triggerBox.top - GAP - menuBox.height;
     } else {
-      top = below > viewportHeight - EDGE ? triggerBox.top - GAP - menuBox.height : triggerBox.bottom + GAP;
+      top =
+        below > viewportHeight - EDGE
+          ? triggerBox.top - GAP - menuBox.height
+          : triggerBox.bottom + GAP;
     }
     top = Math.min(Math.max(EDGE, top), viewportHeight - menuBox.height - EDGE);
 
     // Horizontal. The clamp is what fixes the off-screen case: it holds
     // whatever the alignment works out to inside the window.
-    const start = align === 'end' ? triggerBox.right - menuBox.width : triggerBox.left;
-    const left = Math.min(Math.max(EDGE, start), viewportWidth - menuBox.width - EDGE);
+    const start =
+      align === "end" ? triggerBox.right - menuBox.width : triggerBox.left;
+    const left = Math.min(
+      Math.max(EDGE, start),
+      viewportWidth - menuBox.width - EDGE,
+    );
 
     setPosition({ top, left, hidden: false });
   }, [triggerRef, side, align]);
@@ -91,10 +115,45 @@ export default function PopoverMenu({
   }, [open, place]);
 
   useEffect(() => {
+    if (!open || !menuRef.current || typeof ResizeObserver === "undefined")
+      return undefined;
+    const observer = new ResizeObserver(place);
+    observer.observe(menuRef.current);
+    return () => observer.disconnect();
+  }, [open, place]);
+
+  useEffect(() => {
     if (!open) return undefined;
 
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') onClose?.();
+      if (event.key === "Escape") {
+        onClose?.();
+        triggerRef?.current?.focus();
+        return;
+      }
+      if (popupRole !== "menu" || event.target?.closest?.("em-emoji-picker"))
+        return;
+      if (
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement
+      )
+        return;
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      const items = [
+        ...menuRef.current.querySelectorAll("button:not([disabled]),a[href]"),
+      ].filter((el) => el.getClientRects().length);
+      if (!items.length) return;
+      event.preventDefault();
+      const current = items.indexOf(document.activeElement);
+      const next =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? items.length - 1
+            : event.key === "ArrowDown"
+              ? (current + 1) % items.length
+              : (current - 1 + items.length) % items.length;
+      items[next].focus();
     };
 
     // Capture phase, and both nodes treated as inside. Capture matters because
@@ -108,32 +167,56 @@ export default function PopoverMenu({
     };
 
     const dismiss = () => onClose?.();
+    const onScroll = (event) => {
+      if (menuRef.current?.contains(event.target)) return;
+      if (followScroll) place();
+      else dismiss();
+    };
+    const userScroll = (event) => {
+      if (!menuRef.current?.contains(event.target)) dismiss();
+    };
 
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('pointerdown', onPointerDown, true);
-    window.addEventListener('resize', dismiss);
-    document.addEventListener('scroll', dismiss, true);
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("resize", dismiss);
+    document.addEventListener("scroll", onScroll, true);
+    if (followScroll) {
+      document.addEventListener("wheel", userScroll, {
+        passive: true,
+        capture: true,
+      });
+      document.addEventListener("touchmove", userScroll, {
+        passive: true,
+        capture: true,
+      });
+    }
 
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      window.removeEventListener('resize', dismiss);
-      document.removeEventListener('scroll', dismiss, true);
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("resize", dismiss);
+      document.removeEventListener("scroll", onScroll, true);
+      document.removeEventListener("wheel", userScroll, true);
+      document.removeEventListener("touchmove", userScroll, true);
     };
-  }, [open, onClose, triggerRef]);
+  }, [open, onClose, triggerRef, followScroll, place, popupRole]);
 
   if (!open) return null;
 
   return createPortal(
     <div
       ref={menuRef}
-      role={label ? 'menu' : undefined}
+      role={label ? popupRole : undefined}
       aria-label={label}
       className={`fixed z-50 rounded-lg border border-line bg-surface p-1 shadow-modal ${className}`}
-      style={{ top: position.top, left: position.left, visibility: position.hidden ? 'hidden' : 'visible' }}
+      style={{
+        top: position.top,
+        left: position.left,
+        visibility: position.hidden ? "hidden" : "visible",
+      }}
     >
       {children}
     </div>,
-    document.body,
+    triggerRef?.current?.closest('[role="dialog"]') || document.body,
   );
 }

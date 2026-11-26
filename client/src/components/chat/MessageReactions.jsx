@@ -1,16 +1,13 @@
-import { useRef, useState } from 'react';
-import IconReaction from '@/assets/icons/reaction.svg?react';
-import { REACTION_EMOJI } from '@/lib/messageMeta';
-import PopoverMenu from '@/components/ui/PopoverMenu';
+import EmojiPicker from "./EmojiPicker";
+import { useRef, useState } from "react";
+import IconReaction from "@/assets/icons/reaction.svg?react";
+import PopoverMenu from "@/components/ui/PopoverMenu";
 
 /**
  * Reaction chips, and the picker that adds one.
  *
- * The emoji list is the server's allowlist, not a client choice — anything
- * outside it is a 400. Offering a heart here would look right and always fail,
- * because the backend excludes it on purpose: ❤️ has two encodings and Postgres
- * treats them as different strings, so it can stack twice against the unique
- * constraint.
+ * The picker and API share Emoji Mart's canonical native sequences, including
+ * skin tones and joined emoji.
  *
  * `reacted` is per viewer and comes from the server already computed, so this
  * component never compares user ids itself. That matters because a reaction by
@@ -30,8 +27,7 @@ export default function MessageReactions({ message, onToggle }) {
   if (!reactions.length) return null;
 
   return (
-    // ...the rest stays exactly as it is
-    <div className="relative flex flex-wrap items-center gap-1.5">
+    <div className="message-reactions relative -mt-0.5 flex flex-wrap items-center gap-1">
       {reactions.map((reaction) => (
         <button
           key={reaction.emoji}
@@ -39,10 +35,10 @@ export default function MessageReactions({ message, onToggle }) {
           aria-pressed={reaction.reacted}
           aria-label={`${reaction.emoji} reaction, ${reaction.count}`}
           onClick={() => onToggle(reaction.emoji)}
-          className={`inline-flex min-h-6 items-center gap-1 rounded-full border px-1.5 text-metadata transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
+          className={`inline-flex min-h-8 items-center gap-1 rounded-full border px-2 text-metadata transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
             reaction.reacted
               ? "border-brand bg-brand-soft text-brand"
-              : "border-line bg-canvas text-muted hover:text-ink"
+              : "border-line bg-surface text-muted hover:text-ink"
           }`}
         >
           <span aria-hidden="true">{reaction.emoji}</span>
@@ -54,10 +50,10 @@ export default function MessageReactions({ message, onToggle }) {
         ref={triggerRef}
         type="button"
         onClick={() => setPickerOpen((open) => !open)}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-expanded={pickerOpen}
         aria-label="Add a reaction"
-        className="inline-flex min-h-6 items-center rounded-full border border-line bg-canvas px-1.5 text-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
+        className="inline-flex min-h-8 items-center rounded-full border border-line bg-surface px-1.5 text-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30"
       >
         <IconReaction className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
@@ -69,31 +65,15 @@ export default function MessageReactions({ message, onToggle }) {
         side="top"
         align="start"
         label="Choose a reaction"
-        className="flex gap-1"
+        popupRole="dialog"
+        className="w-[min(352px,calc(100vw-16px))] max-h-[calc(100dvh-16px)] overflow-y-auto"
       >
-        {REACTION_EMOJI.map((emoji) => {
-          const already = reactions.find((r) => r.emoji === emoji)?.reacted;
-          return (
-            <button
-              key={emoji}
-              type="button"
-              role="menuitem"
-              aria-pressed={already}
-              onClick={() => {
-                onToggle(emoji);
-                setPickerOpen(false);
-              }}
-              className={`grid h-9 w-9 place-items-center rounded-lg text-body transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30 ${
-                already ? "bg-brand-soft" : ""
-              }`}
-            >
-              <span aria-hidden="true">{emoji}</span>
-              <span className="sr-only">
-                {already ? `Remove ${emoji} reaction` : `React with ${emoji}`}
-              </span>
-            </button>
-          );
-        })}
+        <EmojiPicker
+          onPick={(emoji) => {
+            setPickerOpen(false);
+            onToggle(emoji);
+          }}
+        />
       </PopoverMenu>
     </div>
   );

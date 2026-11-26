@@ -6,24 +6,24 @@ checks in [DEPLOYMENT.md](../DEPLOYMENT.md).
 
 ## Current state
 
-| Area | State | Owner |
-| --- | --- | --- |
-| Auth, users, rooms | Implemented; group access, rate limiting and room management remain | Victor |
-| Presence and tokens | Implemented; privacy and cross-tab refresh need review | Victor |
-| Messages, decisions, tasks, digest | APIs implemented; further frontend integration remains | Michael / Isaac |
-| Chat list | `GET /rooms` enriched (`display_name`, `display_avatar`, `last_message`, `unread_count`, activity order) and `chat:updated` emitted per member on create/edit/delete | Michael |
-| Notifications | List/seen APIs, room invitations and mentions implemented | Michael |
-| Uploads | Cloudinary upload and server-owned attachment records implemented | Michael |
-| Frontend | Room chat wired; several screens use fixtures/placeholders | Isaac |
-| Deployment | Configuration committed; public deployment not verified here | Victor coordinates |
+| Area                               | State                                                                                                                                                                | Owner              |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| Auth, users, rooms                 | Implemented; group access, rate limiting and room management remain                                                                                                  | Victor             |
+| Presence and tokens                | Implemented; privacy and cross-tab refresh need review                                                                                                               | Victor             |
+| Messages, decisions, tasks, digest | APIs implemented; further frontend integration remains                                                                                                               | Michael / Isaac    |
+| Chat list                          | `GET /rooms` enriched (`display_name`, `display_avatar`, `last_message`, `unread_count`, activity order) and `chat:updated` emitted per member on create/edit/delete | Michael            |
+| Notifications                      | List/seen APIs, room invitations and mentions implemented                                                                                                            | Michael            |
+| Uploads                            | R2 uploads and server-owned attachment records; Cloudinary retained for legacy files                                                                                 | Michael            |
+| Frontend                           | Live room chat and collaboration services; explicit development-preview fixtures are separate from production                                                                                                           | Isaac              |
+| Deployment                         | Configuration committed; public deployment not verified here                                                                                                         | Victor coordinates |
 
 ## Victor's backlog
 
-- **G — Group access:** registration is intentionally open to everyone. Implement
-  public group discovery/joining and private group invitations according to
-  user/admin preferences. Existing room reads require membership even for rooms
-  typed `public`; anonymous reading has not been specified.
-- **Auth rate limiting:** agree the library/store choice before implementation.
+- **G — Group access:** public room discovery and idempotent joining are
+  implemented for signed-in users. Private rooms remain invitation-only, and
+  reading messages still requires membership.
+- **Auth rate limiting:** registration, login, and refresh use shared Redis
+  limits with development/test fallbacks.
 - **F — Room management:** editing, leave/remove/promote/delete and find-or-create
   DMs. Coordinate membership changes with Michael because digest windows and
   authorization depend on membership rows.
@@ -40,11 +40,12 @@ checks in [DEPLOYMENT.md](../DEPLOYMENT.md).
   `task:updated` to room subscribers. Pagination, assignment notifications and
   live updates on the top-level board remain possible follow-up work.
 - **B — Notifications:** recipient-scoped pagination, unread count and mark-seen,
-  with live room-invite/mention delivery. `new_message` fan-out is intentionally
-  deferred pending a product decision about notification volume.
-- **C — Uploads:** allowlisted files stream to Cloudinary and create ownership
-  records. Message creation claims the upload once and reads metadata from the
-  server record. Cloudinary credentials are needed for a real round-trip check.
+  with live room-invite, mention, and `new_message` fan-out, preference-gated push,
+  room/kind grouping, and foreground toast/sound alerts. Live-provider acceptance
+  remains outstanding.
+- **C — Uploads:** allowlisted files stream to R2 and create ownership records.
+  Message creation claims the upload once and reads metadata from the server
+  record. The attachment proxy retains Cloudinary delivery for legacy files.
 - **H — Structured mentions:** IDs are persisted and used by notifications/digest.
   Remove text-matching fallback after Isaac's client sends `mentionedUserIds`.
 - **I — Message mutations:** author edits, author/admin deletion and four allowed
@@ -74,8 +75,8 @@ follows [CLAUDE.md](CLAUDE.md) and remains Isaac's lane.
 
 Run the commands in [CONTRIBUTING.md](../CONTRIBUTING.md). On 2026-10-06, local
 Node 22 checks passed 22 backend regression tests, 104 database/upload checks
-and six client session tests. Four Cloudinary round-trip checks skipped because
-credentials were absent. All 13 migrations applied to fresh PostgreSQL 18.4;
+and six client session tests. Provider-backed R2 round-trip coverage requires
+R2 credentials and reachable PostgreSQL. All 13 migrations applied to fresh PostgreSQL 18.4;
 a second run was a no-op. Database isolation/cleanup and failure on unavailable
 PostgreSQL were verified. The client production build also passed.
 
@@ -89,20 +90,20 @@ provider deployment remain separate staging checks.
 Older code comments refer to Bug 1–15 below. Details and patches are retained in
 Git history; this index preserves their meaning without duplicating old reports.
 
-| Reference | Concern and current follow-up |
-| --- | --- |
-| Bug 1 | Account deletion: email nullability repaired by migration 006 |
-| Bug 2 | Digest windows: per-room `last_seen_at`; frontend seen calls remain |
-| Bug 3 | Room types: public/private accepted |
-| Bug 4 | Room slug: added by 008; populated backfill collision remains |
-| Bug 5 | Decision search: includes tags; keep title/body tsvector identical to migration 007 |
-| Bug 6 | Attachment response shape aligned; `file_type` stores MIME strings |
-| Bug 7 | Deleted message reads/search handled; edit/delete/reaction endpoints implemented |
-| Bug 8 | Attachment-only messages accepted; server-owned uploads claimed once per message |
-| Bug 9 | Regex mention matching improved; structured IDs implemented; legacy client fallback remains |
-| Bug 10 | Migration ledger and session advisory lock added |
-| Bug 11 | Credential validation, token rotation, unique JWT IDs, safe login responses and client refresh added; group access/rate limiting remain |
-| Bug 12 | Env files ignored; exclude credentials from shared archives |
-| Bug 13 | Membership checks, per-user socket counts, SCAN cleanup, error handling and reconnect fixes added; visibility/read receipts remain |
-| Bug 14 | Standard error envelopes, UUID validation and upload/body limits added |
-| Bug 15 | Tuple cursors, deleted-user filtering and profile limits added; directory privacy/member races remain |
+| Reference | Concern and current follow-up                                                                                                           |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Bug 1     | Account deletion: email nullability repaired by migration 006                                                                           |
+| Bug 2     | Digest windows: per-room `last_seen_at`; frontend seen calls remain                                                                     |
+| Bug 3     | Room types: public/private accepted                                                                                                     |
+| Bug 4     | Room slug: added by 008; populated backfill collision remains                                                                           |
+| Bug 5     | Decision search: includes tags; keep title/body tsvector identical to migration 007                                                     |
+| Bug 6     | Attachment response shape aligned; `file_type` stores MIME strings                                                                      |
+| Bug 7     | Deleted message reads/search handled; edit/delete/reaction endpoints implemented                                                        |
+| Bug 8     | Attachment-only messages accepted; server-owned uploads claimed once per message                                                        |
+| Bug 9     | Regex mention matching improved; structured IDs implemented; legacy client fallback remains                                             |
+| Bug 10    | Migration ledger and session advisory lock added                                                                                        |
+| Bug 11    | Credential validation, token rotation, unique JWT IDs, safe login responses and client refresh added; group access/rate limiting remain |
+| Bug 12    | Env files ignored; exclude credentials from shared archives                                                                             |
+| Bug 13    | Membership checks, per-user socket counts, SCAN cleanup, error handling and reconnect fixes added; visibility/read receipts remain      |
+| Bug 14    | Standard error envelopes, UUID validation and upload/body limits added                                                                  |
+| Bug 15    | Tuple cursors, deleted-user filtering and profile limits added; directory privacy/member races remain                                   |

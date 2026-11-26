@@ -7,6 +7,7 @@ export const previewUser = {
   display_name: "Amina Yusuf",
   avatar_url: null,
   bio: "Frontend preview account",
+  created_at: "2025-04-12T09:00:00.000Z",
 };
 
 // Mirrors one row of the enriched `GET /rooms` response (docs/API_CONTRACTS.md,
@@ -20,6 +21,8 @@ export const previewRoom = {
   name: "Product & Engineering",
   slug: "product-eng",
   type: "group",
+  created_at: "2026-10-08T08:00:00.000Z",
+  created_by: "dev-preview-user",
   // Phase 8: rooms carry a description, editable by an admin. Without one here
   // the room-info edit form has nothing to prefill and cannot be seen working
   // offline.
@@ -42,17 +45,38 @@ export const previewRoom = {
     is_deleted: false,
     created_at: "2026-10-08T09:37:00.000Z",
   },
-// `GET /rooms/:roomId` returns members in a richer shape than the chat-list
-// row: role, joined_at and last_seen_at. last_seen_at is the per-member read
-// pointer the delivery ticks are derived from, so without it every own message
-// in bypass mode renders permanently "Sent" and the whole tick feature is
-// unverifiable offline. last_seen_at is deliberately stale for Victor so his
-// messages read as unread and the tick can be seen changing.
+  // `GET /rooms/:roomId` returns members in a richer shape than the chat-list
+  // row: role, joined_at and last_seen_at. last_seen_at is the per-member read
+  // pointer the delivery ticks are derived from, so without it every own message
+  // in bypass mode renders permanently "Sent" and the whole tick feature is
+  // unverifiable offline. last_seen_at is deliberately stale for Victor so his
+  // messages read as unread and the tick can be seen changing.
   members: [
-    { ...previewUser, role: 'admin', last_seen_at: '2026-10-08T09:50:00.000Z' },
-    { id: 'dev-victor', display_name: 'Victor', avatar_url: null, role: 'member', last_seen_at: '2026-08-27T09:00:00.000Z' },
-    { id: 'dev-priya', display_name: 'Priya', avatar_url: null, role: 'member', last_seen_at: '2026-10-08T09:45:00.000Z' },
-    { id: 'dev-daniel', display_name: 'Daniel', avatar_url: null, role: 'member', last_seen_at: '2026-10-08T09:49:00.000Z' },
+    { ...previewUser, role: "admin", last_seen_at: "2026-10-08T09:50:00.000Z" },
+    {
+      id: "dev-victor",
+      display_name: "Victor",
+      avatar_url: null,
+      bio: "Product designer focused on clear, collaborative tools.",
+      account_created_at: "2024-11-03T09:00:00.000Z",
+      role: "member",
+      joined_at: "2026-03-08T09:00:00.000Z",
+      last_seen_at: "2026-08-27T09:00:00.000Z",
+    },
+    {
+      id: "dev-priya",
+      display_name: "Priya",
+      avatar_url: null,
+      role: "member",
+      last_seen_at: "2026-10-08T09:45:00.000Z",
+    },
+    {
+      id: "dev-daniel",
+      display_name: "Daniel",
+      avatar_url: null,
+      role: "member",
+      last_seen_at: "2026-10-08T09:49:00.000Z",
+    },
   ],
 };
 
@@ -85,8 +109,17 @@ export const previewDmRoom = {
     created_at: "2026-10-08T09:52:00.000Z",
   },
   members: [
-    { ...previewUser, role: 'admin', last_seen_at: '2026-10-08T10:00:00.000Z' },
-    { id: 'dev-victor', display_name: 'Victor', avatar_url: null, role: 'member', last_seen_at: '2026-10-08T09:52:00.000Z' },
+    { ...previewUser, role: "admin", last_seen_at: "2026-10-08T10:00:00.000Z" },
+    {
+      id: "dev-victor",
+      display_name: "Victor",
+      avatar_url: null,
+      bio: "Product designer focused on clear, collaborative tools.",
+      account_created_at: "2024-11-03T09:00:00.000Z",
+      role: "member",
+      joined_at: "2026-03-08T09:00:00.000Z",
+      last_seen_at: "2026-10-08T09:52:00.000Z",
+    },
   ],
 };
 
@@ -105,8 +138,8 @@ export const previewMessages = [
     content:
       "After testing both approaches, we'll keep Socket.IO for real-time events and REST for CRUD.",
     reactions: [
-      { emoji: '👍', count: 2, reacted: true },
-      { emoji: '🎉', count: 1, reacted: false },
+      { emoji: "👍", count: 2, reacted: true },
+      { emoji: "🎉", count: 1, reacted: false },
     ],
     mentioned_user_ids: [],
     pins: { room: null, mine: [] },
@@ -158,7 +191,7 @@ export const previewMessages = [
     sender_name: "Priya",
     sender_avatar: null,
     content: "On it—validating the config and will update here by EOD.",
-    reactions: [{ emoji: '✅', count: 1, reacted: false }],
+    reactions: [{ emoji: "✅", count: 1, reacted: false }],
     mentioned_user_ids: [],
     pins: { room: null, mine: [] },
     is_deleted: false,
@@ -198,7 +231,7 @@ export const previewMessages = [
     sender_name: "Amina Yusuf",
     sender_avatar: null,
     content: "Screenshot from the staging deploy:",
-    reactions: [{ emoji: '👍', count: 1, reacted: false }],
+    reactions: [{ emoji: "👍", count: 1, reacted: false }],
     mentioned_user_ids: [],
     pins: { room: null, mine: [] },
     is_deleted: false,
@@ -288,14 +321,16 @@ export const previewMessages = [
  */
 export const previewPinnedMessages = [
   {
-    id: "dev-message-pinned-1",
+    // The pin points to a message that is also present in the preview timeline,
+    // so clicking it exercises the same jump behavior as a server-backed pin.
+    id: "dev-message-1",
     room_id: previewRoom.id,
     sender_id: "dev-user-2",
     sender_name: "Tomas Nowak",
     sender_avatar: null,
     content:
       "We are keeping the 2 hour timeout for the deploy job. If it has not finished by then, that is the signal, not a failure to hide.",
-    reactions: [{ emoji: '👍', count: 2, reacted: true }],
+    reactions: [{ emoji: "👍", count: 2, reacted: true }],
     mentioned_user_ids: [],
     is_deleted: false,
     edited_at: null,
@@ -326,8 +361,12 @@ export const previewDecisions = [
     author_name: "Victor",
     created_at: "2026-08-20T00:00:00.000Z",
     pins: {
-      room: { user_id: previewUser.id, display_name: previewUser.display_name, pinned_at: '2026-10-08T09:00:00.000Z' },
-      mine: ['user', 'room'],
+      room: {
+        user_id: previewUser.id,
+        display_name: previewUser.display_name,
+        pinned_at: "2026-10-08T09:00:00.000Z",
+      },
+      mine: ["user", "room"],
     },
   },
   {
@@ -360,30 +399,82 @@ export const previewDecisions = [
   },
 ];
 
-// Mirrors the digest getRoomDigest assembles from decisions/tasks/messages/attachments
-// (digest.controller.js) and the cross-room variant. Each item carries the room it
-// belongs to — the wire shape is { id, type, title, metadata, room_id, room_name,
-// created_at } — because a cross-room catch-up list whose rows do not name their
-// room is unreadable the moment two rooms have similar traffic.
+// A rule-based digest preview with one example of each important event type.
 export const previewDigestSummary = {
-  headline: "5 meaningful updates",
-  summary: "1 decisions, 1 task changes, 1 mentions, 1 files.",
+  headline: "5 updates worth a look",
+  summary: "1 for you · 2 decision or task updates · 2 shared items",
 };
 
-// `type` only — no label/colour here. That's presentation, not data: the backend will
-// send a type, not display copy, so the type-to-label/colour mapping lives in
-// CatchUpDigestPage.jsx instead. The five below are one of every type getRoomDigest
-// can emit, and `metadata` is copied from the controller's own construction:
-// author_name for a decision, `status · assignee_name` for a task, sender_name for a
-// mention or file, and null for activity — which has no actor to name. The summary
-// string follows the same `${n} …` template the controller builds, so a preview and
-// the real response read the same way.
+// Display labels and colours stay in CatchUpDigestPage.jsx.
 export const previewDigestItems = [
-  { id: "dev-digest-1", type: "decision", title: "Keep Socket.IO focused on real-time events; REST handles CRUD.", metadata: "Victor", room_id: previewRoom.id, room_name: previewRoom.name, created_at: "2026-10-08T09:02:00.000Z" },
-  { id: "dev-digest-2", type: "task", title: "Confirm production upload limits", metadata: "open · Daniel", room_id: previewRoom.id, room_name: previewRoom.name, created_at: "2026-10-08T10:12:00.000Z" },
-  { id: "dev-digest-3", type: "mention", title: "Amina can you confirm deployment readiness for the API gateway changes today?", metadata: "Amina Yusuf", room_id: "dev-room-deployments", room_name: "Deployments", created_at: "2026-10-08T11:22:00.000Z" },
-  { id: "dev-digest-4", type: "file", title: "deployment-checklist-v2.pdf", metadata: "Victor", room_id: "dev-room-deployments", room_name: "Deployments", created_at: "2026-10-08T12:32:00.000Z" },
-  { id: "dev-digest-5", type: "activity", title: "7 new messages", metadata: null, room_id: previewRoom.id, room_name: previewRoom.name, created_at: "2026-10-08T13:42:00.000Z" },
+  {
+    id: "dev-digest-1",
+    event_id: "decision:dev-digest-1",
+    type: "decision",
+    action: "recorded",
+    title: "Keep Socket.IO focused on real-time events; REST handles CRUD.",
+    metadata: "Victor",
+    actor_name: "Victor",
+    priority: 1,
+    room_id: previewRoom.id,
+    room_name: previewRoom.name,
+    created_at: "2026-10-08T09:02:00.000Z",
+  },
+  {
+    id: "dev-digest-2",
+    event_id: "task:create:dev-digest-2",
+    type: "task",
+    action: "created",
+    title: "Confirm production upload limits",
+    metadata: "open · Daniel",
+    actor_name: "Daniel",
+    priority: 1,
+    room_id: previewRoom.id,
+    room_name: previewRoom.name,
+    created_at: "2026-10-08T10:12:00.000Z",
+  },
+  {
+    id: "dev-digest-3",
+    event_id: "mention:dev-digest-3",
+    type: "mention",
+    action: "mentioned",
+    message_id: "dev-digest-3",
+    title:
+      "Amina can you confirm deployment readiness for the API gateway changes today?",
+    metadata: "Amina Yusuf",
+    actor_name: "Amina Yusuf",
+    priority: 0,
+    room_id: "dev-room-deployments",
+    room_name: "Deployments",
+    created_at: "2026-10-08T11:22:00.000Z",
+  },
+  {
+    id: "dev-digest-4",
+    event_id: "file:dev-digest-4",
+    type: "file",
+    action: "shared",
+    message_id: "dev-digest-4",
+    title: "deployment-checklist-v2.pdf",
+    metadata: "Victor",
+    actor_name: "Victor",
+    priority: 2,
+    room_id: "dev-room-deployments",
+    room_name: "Deployments",
+    created_at: "2026-10-08T12:32:00.000Z",
+  },
+  {
+    id: "dev-digest-5",
+    event_id: "pin:dev-digest-5",
+    type: "pin",
+    action: "pinned",
+    message_id: "dev-digest-5",
+    priority: 1,
+    title: "Launch review starts Friday at 10 AM.",
+    actor_name: "Victor",
+    room_id: previewRoom.id,
+    room_name: previewRoom.name,
+    created_at: "2026-10-08T13:42:00.000Z",
+  },
 ];
 
 // Mirrors the `tasks` table. /tasks is cross-room — no roomId required — because
@@ -393,16 +484,108 @@ export const previewDigestItems = [
 // controller returns, same convenience as sender_name on previewMessages —
 // without it a cross-room board cannot say which room a card belongs to.
 export const previewTasks = [
-  { id: "dev-task-1", room_id: previewRoom.id, room_name: previewRoom.name, status: "open", title: "Confirm production upload limits", body: "Staging says 25MB is the ceiling we should document. Check what the marketing copy currently claims before we change the limit.", assignee_id: "dev-priya", assignee_name: "Priya", due_date: "2026-08-22" },
-  { id: "dev-task-2", room_id: previewRoom.id, room_name: previewRoom.name, status: "open", title: "Validate deployment config", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-23" },
-  { id: "dev-task-3", room_id: "dev-room-deployments", room_name: "Deployments", status: "open", title: "Review storage alerts", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-24" },
-  { id: "dev-task-4", room_id: previewRoom.id, room_name: previewRoom.name, status: "in_progress", title: "Draft API rate-limit docs", body: null, assignee_id: previewUser.id, assignee_name: "Amina", due_date: "2026-08-21" },
-  { id: "dev-task-5", room_id: "dev-room-deployments", room_name: "Deployments", status: "in_progress", title: "Wire Socket.IO reconnect handling", assignee_id: "dev-daniel", assignee_name: "Daniel", due_date: "2026-08-25" },
-  { id: "dev-task-6", room_id: previewRoom.id, room_name: previewRoom.name, status: "done", title: "Set up staging environment", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-18" },
-  { id: "dev-task-7", room_id: previewRoom.id, room_name: previewRoom.name, status: "done", title: "Migrate auth middleware to JWT", assignee_id: previewUser.id, assignee_name: "Amina", due_date: "2026-08-19" },
-  { id: "dev-task-8", room_id: "dev-room-deployments", room_name: "Deployments", status: "done", title: "Write onboarding checklist", assignee_id: "dev-priya", assignee_name: "Priya", due_date: "2026-08-19" },
-  { id: "dev-task-9", room_id: previewRoom.id, room_name: previewRoom.name, status: "done", title: "Fix flaky websocket reconnect test", assignee_id: "dev-daniel", assignee_name: "Daniel", due_date: "2026-08-20" },
-  { id: "dev-task-10", room_id: "dev-room-deployments", room_name: "Deployments", status: "done", title: "Ship upload size validation", assignee_id: "dev-victor", assignee_name: "Victor", due_date: "2026-08-20" },
+  {
+    id: "dev-task-1",
+    room_id: previewRoom.id,
+    room_name: previewRoom.name,
+    status: "open",
+    title: "Confirm production upload limits",
+    body: "Staging says 25MB is the ceiling we should document. Check what the marketing copy currently claims before we change the limit.",
+    assignee_id: "dev-priya",
+    assignee_name: "Priya",
+    due_date: "2026-08-22",
+  },
+  {
+    id: "dev-task-2",
+    room_id: previewRoom.id,
+    room_name: previewRoom.name,
+    status: "open",
+    title: "Validate deployment config",
+    assignee_id: "dev-victor",
+    assignee_name: "Victor",
+    due_date: "2026-08-23",
+  },
+  {
+    id: "dev-task-3",
+    room_id: "dev-room-deployments",
+    room_name: "Deployments",
+    status: "open",
+    title: "Review storage alerts",
+    assignee_id: "dev-victor",
+    assignee_name: "Victor",
+    due_date: "2026-08-24",
+  },
+  {
+    id: "dev-task-4",
+    room_id: previewRoom.id,
+    room_name: previewRoom.name,
+    status: "in_progress",
+    title: "Draft API rate-limit docs",
+    body: null,
+    assignee_id: previewUser.id,
+    assignee_name: "Amina",
+    due_date: "2026-08-21",
+  },
+  {
+    id: "dev-task-5",
+    room_id: "dev-room-deployments",
+    room_name: "Deployments",
+    status: "in_progress",
+    title: "Wire Socket.IO reconnect handling",
+    assignee_id: "dev-daniel",
+    assignee_name: "Daniel",
+    due_date: "2026-08-25",
+  },
+  {
+    id: "dev-task-6",
+    room_id: previewRoom.id,
+    room_name: previewRoom.name,
+    status: "done",
+    title: "Set up staging environment",
+    assignee_id: "dev-victor",
+    assignee_name: "Victor",
+    due_date: "2026-08-18",
+  },
+  {
+    id: "dev-task-7",
+    room_id: previewRoom.id,
+    room_name: previewRoom.name,
+    status: "done",
+    title: "Migrate auth middleware to JWT",
+    assignee_id: previewUser.id,
+    assignee_name: "Amina",
+    due_date: "2026-08-19",
+  },
+  {
+    id: "dev-task-8",
+    room_id: "dev-room-deployments",
+    room_name: "Deployments",
+    status: "done",
+    title: "Write onboarding checklist",
+    assignee_id: "dev-priya",
+    assignee_name: "Priya",
+    due_date: "2026-08-19",
+  },
+  {
+    id: "dev-task-9",
+    room_id: previewRoom.id,
+    room_name: previewRoom.name,
+    status: "done",
+    title: "Fix flaky websocket reconnect test",
+    assignee_id: "dev-daniel",
+    assignee_name: "Daniel",
+    due_date: "2026-08-20",
+  },
+  {
+    id: "dev-task-10",
+    room_id: "dev-room-deployments",
+    room_name: "Deployments",
+    status: "done",
+    title: "Ship upload size validation",
+    assignee_id: "dev-victor",
+    assignee_name: "Victor",
+    due_date: "2026-08-20",
+  },
 ];
 
 // Mirrors the PRESENTED notification shape from notification.service.js — not
@@ -416,45 +599,45 @@ export const previewTasks = [
 // string a person should read.
 export const previewNotifications = [
   {
-    id: 'dev-notif-1',
-    type: 'mention',
-    reference_id: 'dev-message-3',
+    id: "dev-notif-1",
+    type: "mention",
+    reference_id: "dev-message-3",
     seen: false,
-    created_at: '2026-10-08T09:44:00.000Z',
+    created_at: "2026-10-08T09:44:00.000Z",
     context: {
       room_id: previewRoom.id,
       room_name: previewRoom.name,
       room_slug: previewRoom.slug,
       actor_name: previewUser.display_name,
       message_preview:
-        '@Priya can you confirm deployment readiness for the API gateway changes today?',
+        "@Priya can you confirm deployment readiness for the API gateway changes today?",
     },
   },
   {
-    id: 'dev-notif-2',
-    type: 'file_uploaded',
-    reference_id: 'dev-message-5',
+    id: "dev-notif-2",
+    type: "file_uploaded",
+    reference_id: "dev-message-5",
     seen: false,
-    created_at: '2026-10-08T09:42:00.000Z',
+    created_at: "2026-10-08T09:42:00.000Z",
     context: {
       room_id: previewRoom.id,
       room_name: previewRoom.name,
       room_slug: previewRoom.slug,
-      actor_name: 'Victor',
+      actor_name: "Victor",
       message_preview: "Here's the Q3 performance report.",
     },
   },
   {
-    id: 'dev-notif-3',
-    type: 'room_invite',
+    id: "dev-notif-3",
+    type: "room_invite",
     reference_id: previewDmRoom.id,
     seen: true,
-    created_at: '2026-10-07T16:10:00.000Z',
+    created_at: "2026-10-07T16:10:00.000Z",
     context: {
       room_id: previewDmRoom.id,
       room_name: previewDmRoom.name,
       room_slug: previewDmRoom.slug,
-      actor_name: 'Victor',
+      actor_name: "Victor",
       // Room-targeted types have no message to preview, so this is null
       // rather than an empty string — the component must handle null.
       message_preview: null,
@@ -472,11 +655,11 @@ export const previewNotifications = [
 // with matching ids — a picker that offered somebody already in the room would be
 // a different bug, and one the fixture should make visible.
 export const previewUsers = [
-  { id: previewRoom.members[1].id, display_name: 'Victor', avatar_url: null },
-  { id: previewRoom.members[2].id, display_name: 'Priya', avatar_url: null },
-  { id: previewRoom.members[3].id, display_name: 'Daniel', avatar_url: null },
-  { id: 'dev-nadia', display_name: 'Nadia Okonkwo', avatar_url: null },
-  { id: 'dev-tomas', display_name: 'Tomás Rivera', avatar_url: null },
+  { id: previewRoom.members[1].id, display_name: "Victor", avatar_url: null },
+  { id: previewRoom.members[2].id, display_name: "Priya", avatar_url: null },
+  { id: previewRoom.members[3].id, display_name: "Daniel", avatar_url: null },
+  { id: "dev-nadia", display_name: "Nadia Okonkwo", avatar_url: null },
+  { id: "dev-tomas", display_name: "Tomás Rivera", avatar_url: null },
 ];
 
 // The room list, as a mutable array rather than the two fixtures inline.
@@ -486,22 +669,95 @@ export const previewUsers = [
 // edits disappear the moment the page refetched, so the screens would look
 // broken in exactly the way dev-preview exists to prevent. Mutating this array
 // is what lets the round trip be seen offline.
-export const previewRooms = [previewRoom, previewDmRoom];
+export const previewLargeRoom = {
+  ...previewRoom,
+  id: "preview-large-room",
+  name: "Large conversation preview",
+  display_name: "Large conversation preview",
+  unread_count: 0,
+  last_seen_sequence: 1200,
+  members: previewRoom.members.map((member) =>
+    member.id === previewUser.id
+      ? { ...member, last_seen_sequence: 1200 }
+      : member,
+  ),
+};
+
+// Generated on demand so normal preview routes do not allocate a large history.
+export function makePreviewLargeMessages() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 2;
+  canvas.height = 2;
+  canvas.getContext("2d").fillRect(0, 0, 2, 2);
+  const thumbnail = canvas.toDataURL("image/jpeg", 0.5);
+  return Array.from({ length: 1200 }, (_, index) => ({
+    id: `perf-${index}`,
+    room_id: previewLargeRoom.id,
+    room_sequence: index + 1,
+    sender_id: index % 2 ? "dev-victor" : previewUser.id,
+    sender_name: index % 2 ? "Victor" : previewUser.display_name,
+    content:
+      index === 300
+        ? "Earlier target in a large conversation"
+        : index === 1199
+          ? "Jump back to the earlier message"
+          : index === 1198
+            ? "A long message ".repeat(500)
+            : `History message ${index}`,
+    reactions: [],
+    pins: { room: null, mine: [] },
+    attachments:
+      index % 24 === 0 || index === 300
+        ? [{
+            id: `perf-image-${index}`,
+            filename: `photo-${index}.jpg`,
+            mime_type: "image/jpeg",
+            size: 700,
+            width: 640,
+            height: 480,
+            url: `r2://preview/photo-${index}.jpg`,
+            preview_url: thumbnail,
+          }]
+        : index % 30 === 0
+          ? [{
+              id: `perf-document-${index}`,
+              filename: `document-${index}.pdf`,
+              mime_type: "application/pdf",
+              size: 12000,
+              url: `r2://preview/document-${index}.pdf`,
+            }]
+          : [],
+    reply_to_id: index === 1199 ? "perf-300" : null,
+    is_deleted: false,
+    created_at: new Date(Date.UTC(2026, 9, 8, 9, index)).toISOString(),
+  }));
+}
+
+export const previewRooms = [previewRoom, previewDmRoom, previewLargeRoom];
 
 // One row of `GET /users/me/preferences`. Shape matches the controller's
 // default answer for an account that has never saved anything: the GET returns
 // these same values without a row existing, so the screen cannot tell "never
 // configured" from "configured to the defaults".
 export const previewPreferences = {
-  activity_level: 'all',
+  activity_level: "all",
   muted: {},
   push_enabled: true,
+  push_preview_enabled: true,
+  in_app_alerts_enabled: true,
   updatedAt: null,
 };
 
 const listeners = new Map();
+let previewSequence = 100;
 export const previewSocket = {
   connected: true,
+  timeout() {
+    return {
+      emitWithAck: (event, payload) =>
+        new Promise((resolve) => this.emit(event, payload, resolve)),
+    };
+  },
   on(event, handler) {
     const handlers = listeners.get(event) || new Set();
     handlers.add(handler);
@@ -510,30 +766,41 @@ export const previewSocket = {
   off(event, handler) {
     listeners.get(event)?.delete(handler);
   },
-  emit(event, payload = {}) {
+  emit(event, payload = {}, acknowledge) {
+    if (["heartbeat", "message-read", "message-delivered"].includes(event)) {
+      acknowledge?.({ ok: true, data: { available: true } });
+      return;
+    }
     // Typing is echoed back as room-typing so the indicator renders offline.
     // `stop-typing` is dropped deliberately: sending clears the sender's typing
     // state, and echoing it would put them straight back on the list.
-    if (event === 'typing') {
+    if (event === "typing") {
       queueMicrotask(() =>
         listeners
-          .get('room-typing')
+          .get("room-typing")
           ?.forEach((handler) =>
-            handler({ roomId: payload.roomId, typingUserIds: [previewUser.id] }),
+            handler({
+              roomId: payload.roomId,
+              typingUserIds: [previewUser.id],
+            }),
           ),
       );
       return;
     }
-    if (event === 'stop-typing') return;
-    if (event !== 'send-message') return;
+    if (event === "stop-typing") return;
+    if (event !== "send-message") return;
 
     const message = {
-      id: `dev-message-${Date.now()}`,
+      id: `dev-message-${payload.clientId || Date.now()}`,
+      client_id: payload.clientId || null,
+      album_id: payload.albumId || null,
+      forwarded: Boolean(payload.forwardSource),
+      room_sequence: ++previewSequence,
       room_id: payload.roomId,
       sender_id: previewUser.id,
       sender_name: previewUser.display_name,
       sender_avatar: null,
-      content: payload.content || '',
+      content: payload.content || "",
       // Carried through so an offline send with an attachment, a reply or a
       // mention still renders the way a real one would. Dropping them here
       // would make bypass mode agree with the wire only for plain text.
@@ -545,10 +812,12 @@ export const previewSocket = {
       edited_at: null,
       created_at: new Date().toISOString(),
     };
+    previewMessages.push(message);
     queueMicrotask(() =>
       listeners
-        .get('receive-message')
+        .get("receive-message")
         ?.forEach((handler) => handler({ message })),
     );
+    acknowledge?.({ ok: true, data: message });
   },
 };

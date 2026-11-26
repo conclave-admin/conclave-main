@@ -10,7 +10,7 @@ Everything below came up while building the frontend against the Penpot file. Gr
 
 The Sidebar component's master width is **248px** (Desktop) and **220px** (Tablet). Workspace Shell uses those correctly.
 
-But Room View's sidebar instances render at **240px** and **210px** — 8px and 10px narrower. They are still *linked* instances, not detached, so Penpot doesn't flag them. Someone resized them on the canvas and the override was never reset.
+But Room View's sidebar instances render at **240px** and **210px** — 8px and 10px narrower. They are still _linked_ instances, not detached, so Penpot doesn't flag them. Someone resized them on the canvas and the override was never reset.
 
 Worth resetting to the master so the screens agree. The code follows the master values.
 
@@ -24,12 +24,12 @@ The mapping turned out to be valuable: the frontend icon set was audited against
 
 Four instances where component placeholder text was never replaced:
 
-| Board | Shows | Should be |
-|---|---|---|
-| Decisions | Button label "Default" | "New decision" |
-| Decisions | Search placeholder "Search rooms" | "Search decisions" |
-| Catch-up Digest | "Today · 13:42 AM" | invalid 12-hour time; used "1:42 PM" |
-| Catch-up Digest | "Today · 12:32 AM" | valid, but reads as midnight mid-morning |
+| Board           | Shows                             | Should be                                |
+| --------------- | --------------------------------- | ---------------------------------------- |
+| Decisions       | Button label "Default"            | "New decision"                           |
+| Decisions       | Search placeholder "Search rooms" | "Search decisions"                       |
+| Catch-up Digest | "Today · 13:42 AM"                | invalid 12-hour time; used "1:42 PM"     |
+| Catch-up Digest | "Today · 12:32 AM"                | valid, but reads as midnight mid-morning |
 
 Also: the Tasks Board repeats the same three task titles across all three columns, and Decisions uses the same `#product-eng` on every card despite the screen's whole point being cross-room. Both read as placeholder duplication rather than intent.
 
@@ -65,11 +65,11 @@ Both screens exist in the design; neither has a nav entry on the Sidebar board. 
 
 A consistent pattern rather than three separate oversights — worth one decision rather than three.
 
-| Action | Mobile board |
-|---|---|
-| "Review updates" (opens the Catch-up Digest screen) | Button not present |
-| "New decision" | Button not present |
-| Catch-up Digest screen | No nav item, and the only route in is a hidden button |
+| Action                                              | Mobile board                                          |
+| --------------------------------------------------- | ----------------------------------------------------- |
+| "Review updates" (opens the Catch-up Digest screen) | Button not present                                    |
+| "New decision"                                      | Button not present                                    |
+| Catch-up Digest screen                              | No nav item, and the only route in is a hidden button |
 
 Each was implemented as drawn (hidden below `md`). But the result is that a mobile user can't create a decision or reach the digest screen at all.
 
