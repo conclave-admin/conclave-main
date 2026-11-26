@@ -16,7 +16,6 @@ import { annotateMessages, daySeparatorLabel } from "@/lib/messageMeta";
 import { groupMediaAlbums, viewerItems } from "../../lib/mediaAlbums";
 import { MediaViewerProvider } from "./MediaViewer";
 import Message from "./Message";
-import TypingIndicator from "./TypingIndicator";
 
 function DaySeparator({ label }) {
   return (
@@ -532,7 +531,8 @@ export default function MessageTimeline({
   ]);
 
   // Images loading, the composer growing and the mobile keyboard opening all
-  // change heights without a message arriving. Stay on the bottom through them.
+  // change heights without a message arriving. Follow the bottom only while
+  // the reader is not actively composing; focused readers may be moving history.
   useEffect(() => {
     const container = scrollContainerRef?.current;
     const content = contentRef.current;
@@ -540,7 +540,14 @@ export default function MessageTimeline({
       return undefined;
 
     const observer = new ResizeObserver(() => {
-      if (stickRef.current) container.scrollTop = container.scrollHeight;
+      // A growing composer and the mobile keyboard both resize this scrollport.
+      // Do not fight a reader who is typing and trying to move through history;
+      // new messages still follow the bottom in the message-change effect.
+      const composerFocused = Boolean(
+        document.activeElement?.closest?.(".message-composer"),
+      );
+      if (stickRef.current && !composerFocused)
+        container.scrollTop = container.scrollHeight;
       syncRange();
     });
     observer.observe(content);
@@ -706,11 +713,6 @@ export default function MessageTimeline({
           />
         )}
 
-        <TypingIndicator
-          recordingUserIds={recordingUserIds}
-          typingUserIds={typingUserIds}
-          members={members}
-        />
         <span className="sr-only" aria-live="polite" aria-atomic="true">
           {annotated.length
             ? `Latest message from ${annotated.at(-1)?.sender_name || "a member"}.`

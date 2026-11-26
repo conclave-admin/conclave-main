@@ -51,8 +51,8 @@ async function allocateSlug(client, name) {
 
 // Find an existing 2-member DM between two users, so repeated calls return
 // the same conversation instead of minting a new one every time.
-async function findExistingDm(userA, userB) {
-  const { rows } = await query(
+async function findExistingDm(userA, userB, db) {
+  const { rows } = await db.query(
     `SELECT r.id
        FROM rooms r
        INNER JOIN room_members a ON a.room_id = r.id AND a.user_id = $1
@@ -120,6 +120,27 @@ const createRoom = asyncHandler(async (req, res) => {
   let requiresRequest = false;
   try {
     await client.query("BEGIN");
+    if (roomType === "dm") {
+      // Serialize both sides opening the same DM. This closes the race where
+      // two simultaneous requests each see no existing conversation and mint
+      // separate request threads for the same pair.
+      await client.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended(
+          LEAST($1::text,$2::text)||':'||GREATEST($1::text,$2::text),51))`,
+        [req.user.id, requested[0]],
+      );
+      const priorDecline = await client.query(
+        `SELECT 1 FROM dm_requests d
+          WHERE d.sender_id=$1 AND d.recipient_id=$2 AND d.status='declined'
+          LIMIT 1`,
+        [req.user.id, requested[0]],
+      );
+      if (priorDecline.rowCount)
+        throw new ApiError(
+          403,
+          "This message request was declined. You cannot send another request.",
+        );
+    }
     // 1. Resolve the invitees before touching rooms. Previously an unknown id
     //    reached the INSERT and came back as a foreign-key error surfaced as a
     //    500; soft-deleted users are rejected here too. display_name is read
@@ -160,7 +181,7 @@ const createRoom = asyncHandler(async (req, res) => {
     // 2. DMs are unique per pair — return the existing room rather than
     //    creating another one.
     if (roomType === "dm") {
-      const existingId = await findExistingDm(req.user.id, requested[0]);
+      const existingId = await findExistingDm(req.user.id, requested[0], client);
       if (existingId) {
         await client.query("COMMIT");
         const { rows } = await query(
@@ -633,7 +654,7 @@ const getRoom = asyncHandler(async (req, res) => {
   const request =
     (
       await query(
-        "SELECT sender_id,recipient_id,status FROM dm_requests WHERE room_id=$1",
+        "SELECT sender_id,recipient_id,status,declined_at FROM dm_requests WHERE room_id=$1",
         [roomId],
       )
     ).rows[0] || null;

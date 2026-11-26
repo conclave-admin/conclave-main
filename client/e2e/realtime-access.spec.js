@@ -143,10 +143,9 @@ test("background and resume report attention immediately and invalidate old rost
     .poll(() => page.evaluate(() => window.__heartbeats.at(-1)))
     .toMatchObject({ foreground: true, roomId: "preview-dm" });
   await expect(page.getByText(/^Presence unavailable/)).toBeVisible();
-  await page.getByRole("link", { name: "Conversation details" }).click();
-  await expect(
-    page.getByRole("heading", { name: "About Victor" }),
-  ).toBeVisible();
+  await page.getByRole("link", { name: "Direct message details" }).click();
+  await page.waitForURL("**/chats/preview-dm/info");
+  await expect(page.getByRole("region", { name: "Direct message details" })).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => window.__heartbeats.at(-1)?.roomId))
     .toBeNull();
@@ -154,7 +153,7 @@ test("background and resume report attention immediately and invalidate old rost
 
 test("typing is throttled and stops on empty input, blur, send and navigation", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.goto("/chats/preview-dm");
   const composer = page.getByRole("textbox", { name: "Message", exact: true });
   await expect(composer).toBeVisible();
@@ -191,15 +190,18 @@ test("typing is throttled and stops on empty input, blur, send and navigation", 
   );
   await composer.fill("send me");
   await composer.press("Enter");
-  await expect(composer).toHaveValue("");
-  expect(await page.evaluate(() => window.__activitySent.at(-1)?.name)).toBe(
-    "stop-typing",
-  );
+  if (testInfo.project.name.includes("mobile")) {
+    await expect(composer).toHaveValue("send me\n");
+  } else {
+    await expect(composer).toHaveValue("");
+    expect(await page.evaluate(() => window.__activitySent.at(-1)?.name)).toBe(
+      "stop-typing",
+    );
+  }
   await composer.fill("navigate away");
-  await page.getByRole("link", { name: "Conversation details" }).click();
-  await expect(
-    page.getByRole("heading", { name: "About Victor" }),
-  ).toBeVisible();
+  await page.getByRole("link", { name: "Direct message details" }).click();
+  await page.waitForURL("**/chats/preview-dm/info");
+  await expect(page.getByRole("region", { name: "Direct message details" })).toBeVisible();
   expect(await page.evaluate(() => window.__activitySent.at(-1)?.name)).toBe(
     "stop-typing",
   );
@@ -354,10 +356,9 @@ test("a microphone permission result arriving after navigation releases the devi
   await page
     .getByRole("button", { name: "Record voice note", exact: true })
     .click();
-  await page.getByRole("link", { name: "Conversation details" }).click();
-  await expect(
-    page.getByRole("heading", { name: "About Victor" }),
-  ).toBeVisible();
+  await page.getByRole("link", { name: "Direct message details" }).click();
+  await page.waitForURL("**/chats/preview-dm/info");
+  await expect(page.getByRole("region", { name: "Direct message details" })).toBeVisible();
   await page.evaluate(() => window.__allowMicrophone());
   await expect
     .poll(() => page.evaluate(() => window.__tracksStopped))

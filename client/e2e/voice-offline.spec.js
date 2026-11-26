@@ -209,6 +209,18 @@ test("originals download quietly and images, documents and audio remain usable o
   page,
   context,
 }, info) => {
+  await page.addInitScript(() => {
+    const connection = new EventTarget();
+    Object.assign(connection, {
+      type: "wifi",
+      effectiveType: "4g",
+      saveData: false,
+    });
+    Object.defineProperty(navigator, "connection", {
+      value: connection,
+      configurable: true,
+    });
+  });
   let originals = 0;
   await page.route("**/attachments/quiet-*", (route) => {
     originals++;

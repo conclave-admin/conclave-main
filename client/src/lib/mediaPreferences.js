@@ -4,12 +4,23 @@ const DEFAULTS = {
   audio: true,
   video: true,
   documents: true,
-  network: "any",
+  // Background transfers can be large and mobile browsers often run on
+  // metered plans. Keep automatic downloads on Wi-Fi/Ethernet by default;
+  // users can opt into cellular data from Settings.
+  network: "unmetered",
+  networkExplicit: false,
   respectSaveData: true,
 };
 export function getMediaPreferences() {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || "{}") };
+    const saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+    const preferences = { ...DEFAULTS, ...saved };
+    // Before Wi-Fi-first became the default, "any" was also the default.
+    // Migrate that legacy implicit value, but preserve an explicit choice
+    // recorded by current versions.
+    if (saved.network === "any" && saved.networkExplicit !== true)
+      preferences.network = DEFAULTS.network;
+    return preferences;
   } catch {
     return DEFAULTS;
   }

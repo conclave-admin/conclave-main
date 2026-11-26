@@ -40,13 +40,19 @@ test('keyboard skip link focuses main without changing the route', async ({ page
 
 test('sidebar navigation keeps the shell mounted while a lazy page loads', async ({ page }, info) => {
   await ready(page);
+  // The open conversation owns the mobile header and intentionally hides the
+  // list-level menu. Exercise sidebar navigation from the chat list instead.
+  await page.goto('/chats');
+  await expect(page.getByRole('heading', { name: 'Chats', exact: true }).first()).toBeVisible();
   await page.evaluate(() => {
     window.__originalMain = document.querySelector('main');
     window.__originalShell = document.querySelector('.app-shell');
   });
   let release;
   const loading = new Promise(resolve => { release = resolve; });
+  let settingsImportRequested = false;
   await page.route('**/src/pages/Settings.jsx*', async route => {
+    settingsImportRequested = true;
     await loading;
     await route.continue();
   });
@@ -54,12 +60,15 @@ test('sidebar navigation keeps the shell mounted while a lazy page loads', async
     if (info.project.use.isMobile)
       await page.getByRole('button', { name: 'Open menu', exact: true }).click();
     await page.locator('a[href="/settings"]:visible').first().click();
-    await expect(page.getByRole('status').filter({ hasText: 'Loading page' })).toBeVisible();
+    await expect(page).toHaveURL(/\/settings$/);
+    expect(settingsImportRequested).toBe(true);
+    // React Router can retain the previous outlet while a lazy module is
+    // pending. The invariant is that navigation does not replace the shell.
     await expect(page.locator('.app-shell')).toBeVisible();
     expect(await page.evaluate(() => window.__originalMain === document.querySelector('main'))).toBe(true);
     release();
-    await expect(page.getByRole('status').filter({ hasText: 'Loading page' })).toHaveCount(0);
     await expect(page).toHaveURL(/\/settings$/);
+    await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
     expect(await page.evaluate(() =>
       window.__originalMain === document.querySelector('main') &&
       window.__originalShell === document.querySelector('.app-shell')

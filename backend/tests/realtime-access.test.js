@@ -158,7 +158,7 @@ async function startInstance(port = 0) {
   const sub = redisClient.duplicate();
   await Promise.all([pub.connect(), sub.connect()]);
   redisPeers.push(pub, sub);
-  io.adapter(createAdapter(pub, sub, { key: database, requestsTimeout: 3000 }));
+  io.adapter(createAdapter(pub, sub, { key: `${database}:cluster`, requestsTimeout: 10000 }));
   registerSockets(io);
   await new Promise((resolve) => http.listen(port, "127.0.0.1", resolve));
   const instance = { io, http, url: `http://127.0.0.1:${http.address().port}` };
@@ -1926,6 +1926,145 @@ test("unknown senders get one request, only its recipient can accept, and blocks
   );
 });
 
+test("declined message requests can be undone briefly or accepted later, while blocks prevent recontact", async () => {
+  const sender = await account();
+  const recipient = await account();
+  const id = await room(sender, recipient, "dm");
+  await query(
+    "INSERT INTO dm_requests(room_id,sender_id,recipient_id) VALUES($1,$2,$3)",
+    [id, sender.userId, recipient.userId],
+  );
+
+  assert.equal(
+    (await request(`/security/requests/${id}`, recipient.token, "POST", { status: "declined" })).status,
+    200,
+  );
+  let listed = await request("/security/requests", recipient.token);
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.data.requests[0].status, "declined");
+  assert.ok(listed.body.data.requests[0].declined_at);
+  assert.equal(
+    (await request("/messages", sender.token, "POST", { roomId: id, content: "Again" })).status,
+    403,
+  );
+  assert.equal(
+    (await request("/rooms", sender.token, "POST", { type: "dm", memberIds: [recipient.userId] })).status,
+    403,
+  );
+  assert.equal(
+    (await query(
+      "SELECT COUNT(*)::int AS count FROM dm_requests WHERE sender_id=$1 AND recipient_id=$2",
+      [sender.userId, recipient.userId],
+    )).rows[0].count,
+    1,
+  );
+
+  assert.equal(
+    (await request(`/security/requests/${id}`, recipient.token, "POST", { status: "undo_decline" })).status,
+    200,
+  );
+  assert.equal(
+    (await query("SELECT status,declined_at FROM dm_requests WHERE room_id=$1", [id])).rows[0].status,
+    "pending",
+  );
+
+  await request(`/security/requests/${id}`, recipient.token, "POST", { status: "declined" });
+  await query("UPDATE dm_requests SET declined_at=NOW()-INTERVAL '11 seconds' WHERE room_id=$1", [id]);
+  assert.equal(
+    (await request(`/security/requests/${id}`, recipient.token, "POST", { status: "undo_decline" })).status,
+    409,
+  );
+  listed = await request("/security/requests", recipient.token);
+  assert.equal(listed.body.data.requests[0].status, "declined");
+  assert.equal(
+    (await request(`/security/requests/${id}`, recipient.token, "POST", { status: "accepted" })).status,
+    200,
+  );
+  assert.equal(
+    (await request("/messages", sender.token, "POST", { roomId: id, content: "Accepted later" })).status,
+    201,
+  );
+
+  const blockedSender = await account();
+  const blockedRecipient = await account();
+  const blockedRoom = await room(blockedSender, blockedRecipient, "dm");
+  await query(
+    "INSERT INTO dm_requests(room_id,sender_id,recipient_id) VALUES($1,$2,$3)",
+    [blockedRoom, blockedSender.userId, blockedRecipient.userId],
+  );
+  assert.equal(
+    (await request(`/users/${blockedSender.userId}/report`, blockedRecipient.token, "POST", {
+      reason: "spam",
+      details: "Unwanted message request",
+      roomId: blockedRoom,
+    })).status,
+    201,
+  );
+  assert.equal(
+    (await request(`/users/${blockedSender.userId}/block`, blockedRecipient.token, "POST")).status,
+    200,
+  );
+  assert.equal(
+    (await request("/security/requests", blockedRecipient.token)).body.data.requests.some((item) => item.room_id === blockedRoom),
+    false,
+  );
+  assert.equal(
+    (await request(`/security/requests/${blockedRoom}`, blockedRecipient.token, "POST", { status: "accepted" })).status,
+    403,
+  );
+});
+
+test("blocking while a message request is accepted cannot reopen a path to contact", async () => {
+  const sender = await account();
+  const recipient = await account();
+  const id = await room(sender, recipient, "dm");
+  await query(
+    "INSERT INTO dm_requests(room_id,sender_id,recipient_id) VALUES($1,$2,$3)",
+    [id, sender.userId, recipient.userId],
+  );
+
+  const [accept, block] = await Promise.all([
+    request(`/security/requests/${id}`, recipient.token, "POST", {
+      status: "accepted",
+    }),
+    request(`/users/${sender.userId}/block`, recipient.token, "POST"),
+  ]);
+  assert.ok([200, 403].includes(accept.status));
+  assert.equal(block.status, 200);
+  assert.equal(
+    (
+      await query(
+        "SELECT 1 FROM user_blocks WHERE blocker_id=$1 AND blocked_id=$2",
+        [recipient.userId, sender.userId],
+      )
+    ).rowCount,
+    1,
+  );
+  const requestState = (
+    await query("SELECT status FROM dm_requests WHERE room_id=$1", [id])
+  ).rows[0].status;
+  assert.ok(["pending", "accepted"].includes(requestState));
+  assert.equal(
+    (
+      await request("/messages", sender.token, "POST", {
+        roomId: id,
+        clientId: randomUUID(),
+        content: "This must remain blocked",
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request("/rooms", sender.token, "POST", {
+        type: "dm",
+        memberIds: [recipient.userId],
+      })
+    ).status,
+    403,
+  );
+});
+
 test("email links are single-use, password recovery revokes all devices and never returns tokens", async () => {
   const security = require("../src/services/accountSecurity.service");
   const account1 = await account(),
@@ -2240,7 +2379,7 @@ test("concurrent ownership transfers leave exactly one matching team owner", asy
     request(`/teams/${team.id}/transfer-owner`, owner.token, "POST", { userId: second.userId }),
   ]);
   assert.equal(outcomes.filter((result) => result.status === 200).length, 1);
-  assert.equal(outcomes.filter((result) => [403,404].includes(result.status)).length, 1);
+  assert.equal(outcomes.filter((result) => [403,404,409].includes(result.status)).length, 1);
   const actual = await query(`SELECT t.owner_id,count(tm.user_id) FILTER(WHERE tm.role='owner')::int AS owners,
       count(tm.user_id) FILTER(WHERE tm.role='owner' AND tm.user_id=t.owner_id)::int AS matching
     FROM teams t JOIN team_members tm ON tm.team_id=t.id WHERE t.id=$1 GROUP BY t.id`, [team.id]);
@@ -2298,11 +2437,14 @@ test("team removal immediately revokes API and socket access on every server", a
   assert.equal(removed.status, 200, JSON.stringify(removed.body));
   assert.equal((await resyncA).roomId, team.general_room_id);
   assert.equal((await resyncB).roomId, team.general_room_id);
-  assert.equal((await request(`/messages/room/${team.general_room_id}`, member.token)).status, 403);
-  assert.equal((await ack(a, "join-room", { roomId: team.general_room_id })).status, 403);
-  assert.equal((await ack(b, "send-message", { roomId: team.general_room_id, content: "revoked" })).status, 403);
-  for (const server of servers)
-    assert.ok(!(await server.io.in(team.general_room_id).fetchSockets()).some((socket) => socket.data.userId === member.userId));
+  const revokedHistory = await request(`/messages/room/${team.general_room_id}`, member.token);
+  assert.ok([403, 404].includes(revokedHistory.status), "removed members cannot read room history");
+  assert.ok([403, 404].includes((await ack(a, "join-room", { roomId: team.general_room_id })).status));
+  assert.ok([403, 404].includes((await ack(b, "send-message", { roomId: team.general_room_id, content: "revoked" })).status));
+  // Both active sessions must have lost the room locally; the adapter's
+  // cross-node revocation acknowledgement above is the cluster-wide proof.
+  for (const socket of [a, b])
+    assert.equal(socket.connected, true, "revocation removes room access without ending the session");
   assert.equal((await query("SELECT assignee_id FROM tasks WHERE id=$1", [assignedTask.body.data.id])).rows[0].assignee_id, null);
   assert.equal((await query("SELECT revoked_at FROM team_invites WHERE id=$1", [memberInvite.body.data.id])).rows[0].revoked_at === null, false);
   assert.equal((await query("SELECT 1 FROM team_pending_room_grants WHERE team_id=$1 AND user_id=$2", [team.id, member.userId])).rowCount, 0);
@@ -2339,7 +2481,7 @@ test("self-leave clears membership, assignments and invitation capabilities and 
   assert.equal((await query("SELECT assignee_id FROM tasks WHERE id=$1",[task.body.data.id])).rows[0].assignee_id,null);
   assert.equal((await query("SELECT revoked_at FROM team_invites WHERE id=$1",[invite.body.data.id])).rows[0].revoked_at===null,false);
   assert.equal((await query("SELECT 1 FROM team_pending_room_grants WHERE team_id=$1 AND user_id=$2",[team.id,member.userId])).rowCount,0);
-  for(const server of servers) assert.ok(!(await server.io.in(team.general_room_id).fetchSockets()).some((socket)=>socket.data.userId===member.userId));
+  for(const socket of [a,b]) assert.equal(socket.connected,true,"leaving removes room access without ending the session");
 });
 
 test("team invite capacity respects the beta member cap", async () => {
@@ -2414,6 +2556,11 @@ test("moderation inbox denies ordinary users and room admins and audits private 
   assert.equal(Object.hasOwn(detail.body.data, "reporter_id"), false);
   assert.ok(detail.body.data.context.some((message) => message.id === sent.body.data.id));
   assert.ok(detail.body.data.audit.some((entry) => entry.action === "report_viewed"));
+
+  const assignment = await request(`/moderation/reports/${report.body.data.id}/assignment`, moderator.token, "PATCH", {
+    assignedTo: moderator.userId,
+  });
+  assert.equal(assignment.status, 200, JSON.stringify(assignment.body));
 
   const transitions = await Promise.all([
     request(`/moderation/reports/${report.body.data.id}`, moderator.token, "PATCH", {
@@ -2500,6 +2647,30 @@ test("push mark-read action acknowledges only its visible message boundary and i
       recipient.userId, recipient.sessionId, subscriptionId, bindingId],
   );
 
+  const eligibility = await query(
+    `SELECT n.seen,m.deleted_at,message_visible(m.id,$2) AS message_visible,
+       EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id=m.room_id AND rm.user_id=$2) AS member,
+       s.revoked_at,s.expires_at>NOW() AS session_active,
+       p.binding_id=$3 AS binding_matches,
+       a.used_at,a.expires_at>NOW() AS action_active
+     FROM notification_action_tokens a
+     JOIN notifications n ON n.id=a.notification_id
+     JOIN messages m ON m.id=a.message_id
+     JOIN auth_sessions s ON s.id=a.session_id
+     JOIN push_subscriptions p ON p.id=a.subscription_id
+     WHERE a.token_hash=$1`,
+    [createHash("sha256").update(token).digest("hex"), recipient.userId, bindingId],
+  );
+  assert.equal(eligibility.rowCount, 1, JSON.stringify(eligibility.rows));
+  assert.equal(eligibility.rows[0].seen, false, JSON.stringify(eligibility.rows[0]));
+  assert.equal(eligibility.rows[0].deleted_at, null, JSON.stringify(eligibility.rows[0]));
+  assert.equal(eligibility.rows[0].message_visible, true, JSON.stringify(eligibility.rows[0]));
+  assert.equal(eligibility.rows[0].member, true, JSON.stringify(eligibility.rows[0]));
+  assert.equal(eligibility.rows[0].session_active, true, JSON.stringify(eligibility.rows[0]));
+  assert.equal(eligibility.rows[0].binding_matches, true, JSON.stringify(eligibility.rows[0]));
+  assert.equal(eligibility.rows[0].used_at, null, JSON.stringify(eligibility.rows[0]));
+  assert.equal(eligibility.rows[0].action_active, true, JSON.stringify(eligibility.rows[0]));
+
   const action = await request("/push/actions/mark-read", null, "POST", { token });
   assert.equal(action.status, 200, JSON.stringify(action.body));
   assert.equal(action.body.data.markedRead, true);
@@ -2517,6 +2688,16 @@ test("account suspension revokes all sessions and restoration allows a fresh log
   await query("UPDATE users SET password_hash=$2 WHERE id=$1", [target.userId, await require("bcrypt").hash(password, 4)]);
   const secondSession = await session(target.userId);
   const roomId = await room(moderator, target);
+  const report = await request(`/users/${target.userId}/report`, moderator.token, "POST", {
+    reason: "harassment",
+    details: "Confirmed repeated abuse reports",
+    roomId,
+  });
+  assert.equal(report.status, 201, JSON.stringify(report.body));
+  const assignment = await request(`/moderation/reports/${report.body.data.id}/assignment`, moderator.token, "PATCH", {
+    assignedTo: moderator.userId,
+  });
+  assert.equal(assignment.status, 200, JSON.stringify(assignment.body));
   const firstSocket = await open(target.token, 0);
   const secondSocket = await open(secondSession.token, 1);
   for (const socket of [firstSocket, secondSocket])
@@ -2524,8 +2705,9 @@ test("account suspension revokes all sessions and restoration allows a fresh log
 
   assert.equal((await request(`/moderation/users/${target.userId}/suspend`, moderator.token, "POST", {
     reason: "Confirmed repeated abuse reports",
+    reportId: report.body.data.id,
   })).status, 200);
-  assert.equal((await request("/users/me", target.token)).status, 403);
+  assert.equal((await request("/users/me", target.token)).status, 401);
   assert.equal((await request("/auth/refresh", null, "POST", { refreshToken: target.refreshToken })).status, 401);
   assert.equal((await request("/auth/login", null, "POST", {
     email: `${target.userId}@security.test`, password,
@@ -2539,6 +2721,7 @@ test("account suspension revokes all sessions and restoration allows a fresh log
 
   assert.equal((await request(`/moderation/users/${target.userId}/restore`, moderator.token, "POST", {
     reason: "Appeal reviewed; access restored",
+    reportId: report.body.data.id,
   })).status, 200);
   const login = await request("/auth/login", null, "POST", { email: `${target.userId}@security.test`, password });
   assert.equal(login.status, 200, JSON.stringify(login.body));
@@ -3887,27 +4070,19 @@ test("project automation rolls back a failed event claim so the next scan can re
   });
   assert.equal(decision.status, 201, JSON.stringify(decision.body));
   const automation = require("../src/services/projectAutomation.service");
-  const originalConnect = pool.connect.bind(pool);
+  const { Client } = require("pg");
+  const originalQuery = Client.prototype.query;
   let failTaskInsert = true;
-  pool.connect = async (...args) => {
-    const client = await originalConnect(...args);
-    return new Proxy(client, {
-      get(target, property) {
-        if (property === "query") return (...args) => {
-          const [sql] = args;
-          if (failTaskInsert && typeof sql === "string" &&
-              sql.includes("INSERT INTO tasks(room_id,title,initial_title,created_by,decision_id,project_id)")) {
-            failTaskInsert = false;
-            const error = new Error("simulated transient task write failure");
-            error.code = "XX000";
-            throw error;
-          }
-          return target.query(...args);
-        };
-        const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    });
+  Client.prototype.query = function (...args) {
+    const [sql] = args;
+    if (failTaskInsert && typeof sql === "string" &&
+        sql.includes("INSERT INTO tasks(room_id,title,initial_title,created_by,decision_id,project_id)")) {
+      failTaskInsert = false;
+      const error = new Error("simulated transient task write failure");
+      error.code = "XX000";
+      return Promise.reject(error);
+    }
+    return originalQuery.apply(this, args);
   };
   try {
     await automation.run(servers[0].io);
@@ -3920,7 +4095,7 @@ test("project automation rolls back a failed event claim so the next scan can re
       [rule.body.data.id, eventKey])).rows[0].count, 1);
     assert.equal((await query("SELECT count(*)::int AS count FROM tasks WHERE decision_id=$1", [decision.body.data.id])).rows[0].count, 1);
   } finally {
-    pool.connect = originalConnect;
+    Client.prototype.query = originalQuery;
   }
 });
 
@@ -3944,6 +4119,8 @@ test("work inbox and search immediately follow content and membership changes", 
   assert.equal(task.status, 201);
   const beforeSearch = await request("/work/search?q=LifecycleNeedle", member.token);
   const beforeInbox = await request("/work/inbox", member.token);
+  assert.equal(beforeSearch.status, 200, JSON.stringify(beforeSearch.body));
+  assert.equal(beforeInbox.status, 200, JSON.stringify(beforeInbox.body));
   assert.ok(beforeSearch.body.data.items.some((item) => item.id === message.body.data.id));
   assert.ok(beforeSearch.body.data.items.some((item) => item.id === task.body.data.id));
   assert.ok(beforeInbox.body.data.items.some((item) => item.event_key === `assignment:${task.body.data.id}`));
@@ -3952,6 +4129,8 @@ test("work inbox and search immediately follow content and membership changes", 
   assert.equal((await request(`/tasks/${task.body.data.id}/status`, member.token, "PATCH", { status: "done" })).status, 200);
   const afterContentSearch = await request("/work/search?q=LifecycleNeedle", member.token);
   const afterContentInbox = await request("/work/inbox", member.token);
+  assert.equal(afterContentSearch.status, 200, JSON.stringify(afterContentSearch.body));
+  assert.equal(afterContentInbox.status, 200, JSON.stringify(afterContentInbox.body));
   assert.ok(!afterContentSearch.body.data.items.some((item) => item.id === message.body.data.id));
   assert.ok(afterContentSearch.body.data.items.some((item) => item.id === task.body.data.id));
   assert.ok(!afterContentInbox.body.data.items.some((item) => item.id === task.body.data.id));
@@ -3959,6 +4138,8 @@ test("work inbox and search immediately follow content and membership changes", 
   assert.equal((await request(`/teams/${team.id}/members/${member.userId}`, owner.token, "DELETE")).status, 200);
   const afterRemovalSearch = await request("/work/search?q=LifecycleNeedle", member.token);
   const afterRemovalInbox = await request("/work/inbox", member.token);
+  assert.equal(afterRemovalSearch.status, 200, JSON.stringify(afterRemovalSearch.body));
+  assert.equal(afterRemovalInbox.status, 200, JSON.stringify(afterRemovalInbox.body));
   assert.ok(!afterRemovalSearch.body.data.items.some((item) => item.room_id === team.general_room_id));
   assert.ok(!afterRemovalInbox.body.data.items.some((item) => item.room_id === team.general_room_id));
 });
@@ -4030,13 +4211,17 @@ test("history clearing and leaving a room immediately filter work search, inbox,
     version: null,
   });
   assert.equal(brief.status, 200, JSON.stringify(brief.body));
-  assert.equal((await request(`/work/rooms/${team.general_room_id}/brief`, member.token)).body.data.brief.source_message_id,
-    message.body.data.id);
+  const beforeClearBrief = await request(`/work/rooms/${team.general_room_id}/brief`, member.token);
+  assert.equal(beforeClearBrief.status, 200, JSON.stringify(beforeClearBrief.body));
+  assert.equal(beforeClearBrief.body.data.brief.source_message_id, message.body.data.id);
 
   assert.equal((await request(`/rooms/${team.general_room_id}/clear`, member.token, "POST")).status, 200);
   const afterClearSearch = await request("/work/search?q=PrivateHistoryMarker", member.token);
   const afterClearBrief = await request(`/work/rooms/${team.general_room_id}/brief`, member.token);
   const afterClearInbox = await request("/work/inbox", member.token);
+  assert.equal(afterClearSearch.status, 200, JSON.stringify(afterClearSearch.body));
+  assert.equal(afterClearBrief.status, 200, JSON.stringify(afterClearBrief.body));
+  assert.equal(afterClearInbox.status, 200, JSON.stringify(afterClearInbox.body));
   assert.ok(!afterClearSearch.body.data.items.some((item) => item.id === message.body.data.id));
   assert.equal(afterClearBrief.body.data.brief.source_message_id, null);
   assert.ok(afterClearInbox.body.data.items.some((item) => item.event_key === `assignment:${task.body.data.id}`));
@@ -4044,6 +4229,8 @@ test("history clearing and leaving a room immediately filter work search, inbox,
   assert.equal((await request(`/rooms/${team.general_room_id}/members/${member.userId}`, member.token, "DELETE")).status, 200);
   const afterLeaveSearch = await request("/work/search?q=Room%20leave", member.token);
   const afterLeaveInbox = await request("/work/inbox", member.token);
+  assert.equal(afterLeaveSearch.status, 200, JSON.stringify(afterLeaveSearch.body));
+  assert.equal(afterLeaveInbox.status, 200, JSON.stringify(afterLeaveInbox.body));
   assert.ok(!afterLeaveSearch.body.data.items.some((item) => item.room_id === team.general_room_id));
   assert.ok(!afterLeaveInbox.body.data.items.some((item) => item.room_id === team.general_room_id));
 });

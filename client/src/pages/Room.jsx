@@ -11,6 +11,7 @@ import { isDevAuthBypass } from "../config/devPreview";
 import MessageInfoDialog from "../components/chat/MessageInfoDialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Link,
   useNavigate,
   useOutletContext,
   useParams,
@@ -21,6 +22,7 @@ import FlagAsTaskDialog from "../components/chat/FlagAsTaskDialog";
 import CreatePollDialog from "../components/chat/CreatePollDialog";
 import MessageComposer from "../components/chat/MessageComposer";
 import MessageTimeline from "../components/chat/MessageTimeline";
+import TypingIndicator from "../components/chat/TypingIndicator";
 import PinnedItemsPanel from "../components/chat/PinnedItemsPanel";
 import PromoteToDecisionDialog from "../components/chat/PromoteToDecisionDialog";
 import RoomHeader from "../components/chat/RoomHeader";
@@ -71,12 +73,18 @@ export default function Room() {
   const [browserOnline, setBrowserOnline] = useState(
     () => typeof navigator === "undefined" || navigator.onLine !== false,
   );
+  const [requestNow, setRequestNow] = useState(Date.now());
   const {
     room,
     isLoading: roomLoading,
     error: roomError,
     reload: reloadRoom,
   } = useRoom(roomId);
+  useEffect(() => {
+    if (room?.message_request?.status !== "declined") return undefined;
+    const timer = window.setInterval(() => setRequestNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [room?.message_request?.status, room?.message_request?.declined_at]);
   const [messageInfo, setMessageInfo] = useState(null);
   const [threadCounts, setThreadCounts] = useState({});
   const [threadCountsRevision, setThreadCountsRevision] = useState(0);
@@ -649,9 +657,40 @@ export default function Room() {
           </p>
         </div>
       ) : room?.message_request?.status === "declined" ? (
-        <p className="row-start-3 border-t border-line p-4 text-body text-muted">
-          This message request was declined.
-        </p>
+        <div className="row-start-3 border-t border-line bg-surface p-4">
+          <p role="status" className="text-body text-muted">
+            {room.message_request.recipient_id === viewerId
+              ? "This request was declined. The sender cannot message you again unless you accept it."
+              : "This request was declined. You cannot send another message request."}
+          </p>
+          {room.message_request.recipient_id === viewerId && room.message_request.declined_at &&
+          requestNow - new Date(room.message_request.declined_at).getTime() < 10_000 ? (
+            <Button
+              variant="secondary"
+              className="mt-3"
+              onClick={async () => {
+                try {
+                  await respondToRequest(roomId, "undo_decline");
+                  await reloadRoom();
+                  toast({ title: "Decline undone", tone: "success" });
+                } catch (e) {
+                  toast({
+                    title: "Could not undo decline",
+                    description: e.response?.data?.message || e.message,
+                    tone: "error",
+                  });
+                  await reloadRoom();
+                }
+              }}
+            >
+              Undo decline
+            </Button>
+          ) : room.message_request.recipient_id === viewerId ? (
+            <Link className="mt-3 inline-flex min-h-10 items-center text-label text-brand hover:underline" to="/message-requests">
+              Review declined requests
+            </Link>
+          ) : null}
+        </div>
       ) : room?.message_request?.status === "pending" &&
         (room.message_request.recipient_id === viewerId ||
           messages.some((m) => m.sender_id === viewerId && !m._optimistic)) ? (
@@ -688,6 +727,11 @@ export default function Room() {
         </div>
       ) : (
         <div className="chat-composer row-start-3">
+          <TypingIndicator
+            recordingUserIds={recordingUserIds}
+            typingUserIds={typingUserIds}
+            members={members}
+          />
           {room.member_can_send === false && room.my_role !== "admin" && (
             <p role="status" className="px-4 text-body text-muted">
               Only admins can send messages in this room.

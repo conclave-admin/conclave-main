@@ -46,14 +46,16 @@ export default function RoomHeader({ room, isConnected }) {
 
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <Link
-        to={`/chats/${room.id}/events`}
-        aria-label="Room events"
-        title="Room events"
-        className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-muted hover:bg-canvas"
-      >
-        <IconCalendar className="h-5 w-5" aria-hidden="true" />
-      </Link>
+      {!isDm && (
+        <Link
+          to={`/chats/${room.id}/events`}
+          aria-label="Room events"
+          title="Room events"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-muted hover:bg-canvas"
+        >
+          <IconCalendar className="h-5 w-5" aria-hidden="true" />
+        </Link>
+      )}
       <Link
         to="/chats"
         aria-label="Back to chats"
@@ -126,7 +128,7 @@ export default function RoomHeader({ room, isConnected }) {
       />
       <Link
         to={`/chats/${room.id}/info`}
-        aria-label={isDm ? "Conversation details" : "Room information"}
+        aria-label={isDm ? "Direct message details" : "Room information"}
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-canvas hover:text-ink"
       >
         <IconInfo className="h-5 w-5" aria-hidden="true" />

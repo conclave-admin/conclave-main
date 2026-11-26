@@ -133,7 +133,16 @@ router.get(
     ok(res, {
       requests: (
         await query(
-          `SELECT d.*,u.display_name AS sender_name,u.avatar_url AS sender_avatar FROM dm_requests d JOIN users u ON u.id=d.sender_id WHERE recipient_id=$1 AND status='pending' ORDER BY created_at DESC LIMIT 100`,
+          `SELECT d.*,u.display_name AS sender_name,u.avatar_url AS sender_avatar
+             FROM dm_requests d JOIN users u ON u.id=d.sender_id
+            WHERE d.recipient_id=$1 AND d.status IN ('pending','declined')
+              AND u.deleted_at IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM user_blocks b
+                 WHERE (b.blocker_id=d.recipient_id AND b.blocked_id=d.sender_id)
+                    OR (b.blocker_id=d.sender_id AND b.blocked_id=d.recipient_id)
+              )
+            ORDER BY (d.status='pending') DESC, d.updated_at DESC LIMIT 100`,
           [req.user.id],
         )
       ).rows,
@@ -145,9 +154,8 @@ router.post(
   wrap(async (req, res) => {
     if (
       !UUID.test(req.params.roomId) ||
-      !["accepted", "declined"].includes(req.body?.status)
-    )
-      throw new ApiError(400, "Choose accept or decline");
+      !["accepted", "declined", "undo_decline"].includes(req.body?.status)
+    ) throw new ApiError(400, "Choose accept, decline, or undo decline");
     const db = await pool.connect();
     let row;
     try {
@@ -155,13 +163,54 @@ router.post(
       await db.query("SELECT id FROM rooms WHERE id=$1 FOR UPDATE", [
         req.params.roomId,
       ]);
-      row = (
-        await db.query(
-          "UPDATE dm_requests SET status=$3,updated_at=NOW() WHERE room_id=$1 AND recipient_id=$2 AND status='pending' RETURNING *",
-          [req.params.roomId, req.user.id, req.body.status],
-        )
-      ).rows[0];
-      if (!row) throw new ApiError(404, "Message request not found");
+      const request = (await db.query(
+        "SELECT * FROM dm_requests WHERE room_id=$1 AND recipient_id=$2 FOR UPDATE",
+        [req.params.roomId, req.user.id],
+      )).rows[0];
+      if (!request) throw new ApiError(404, "Message request not found");
+
+      await db.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended(
+          LEAST($1::text,$2::text)||':'||GREATEST($1::text,$2::text),51))`,
+        [request.recipient_id, request.sender_id],
+      );
+
+      const blocked = await db.query(
+        `SELECT 1 FROM user_blocks
+          WHERE (blocker_id=$1 AND blocked_id=$2)
+             OR (blocker_id=$2 AND blocked_id=$1) LIMIT 1`,
+        [request.recipient_id, request.sender_id],
+      );
+      if (blocked.rowCount && req.body.status !== "declined")
+        throw new ApiError(403, "Unblock this person before accepting the request");
+
+      if (req.body.status === "declined") {
+        if (request.status !== "pending")
+          throw new ApiError(409, "This message request is no longer pending");
+        row = (await db.query(
+          `UPDATE dm_requests SET status='declined',declined_at=NOW(),updated_at=NOW()
+            WHERE room_id=$1 RETURNING *`,
+          [req.params.roomId],
+        )).rows[0];
+      } else if (req.body.status === "undo_decline") {
+        if (request.status !== "declined")
+          throw new ApiError(409, "There is no decline to undo");
+        row = (await db.query(
+          `UPDATE dm_requests SET status='pending',declined_at=NULL,updated_at=NOW()
+            WHERE room_id=$1 AND declined_at >= NOW()-INTERVAL '10 seconds'
+            RETURNING *`,
+          [req.params.roomId],
+        )).rows[0];
+        if (!row) throw new ApiError(409, "The undo period has ended");
+      } else {
+        if (!["pending", "declined"].includes(request.status))
+          throw new ApiError(409, "This message request is no longer available");
+        row = (await db.query(
+          `UPDATE dm_requests SET status='accepted',declined_at=NULL,updated_at=NOW()
+            WHERE room_id=$1 RETURNING *`,
+          [req.params.roomId],
+        )).rows[0];
+      }
       await db.query("COMMIT");
     } catch (error) {
       await db.query("ROLLBACK");

@@ -518,6 +518,15 @@ const unavailable = (roomId) => ({
   checkedAt: Date.now(),
 });
 async function getRoomPresence(roomId, db = { query }) {
+  // Do not let a read implicitly reconnect Redis and report an empty or
+  // half-restored snapshot as authoritative while the adapter is unavailable.
+  // The socket's ready event asks connected clients to resync once it returns.
+  if (
+    process.env.SOCKET_REDIS_ADAPTER === "true" &&
+    redisClient &&
+    !isRedisReady()
+  )
+    return unavailable(roomId);
   try {
     const members = await db.query(
       "SELECT user_id FROM room_members WHERE room_id = $1",

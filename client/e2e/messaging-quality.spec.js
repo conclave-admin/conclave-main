@@ -122,15 +122,15 @@ test("a direct message reads as a one-to-one conversation, not a room", async ({
   await expect(page.getByRole("heading", { name: "Victor" })).toBeVisible();
   await expect(page.getByText("2 members")).toHaveCount(0);
   await expect(
-    page.getByRole("link", { name: "Conversation details" }),
+    page.getByRole("link", { name: "Direct message details" }),
   ).toBeVisible();
   await page.goto("/chats/preview-dm/info");
   await expect(
-    page.getByRole("heading", { name: "Conversation with Victor" }),
+    page.getByRole("heading", { name: "Victor", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Direct message", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "About Victor" }),
+    page.getByRole("heading", { name: "About" }),
   ).toBeVisible();
   await expect(
     page.getByText("Product designer focused on clear, collaborative tools."),
@@ -174,7 +174,7 @@ test("room information describes the room and its members", async ({
   ).toBeVisible();
 });
 
-test("profile shows a public-facing preview and account overview", async ({
+test("profile provides account editing and deletion controls", async ({
   page,
 }, testInfo) => {
   test.skip(
@@ -188,13 +188,13 @@ test("profile shows a public-facing preview and account overview", async ({
     page.getByRole("heading", { name: "Your profile", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("region", { name: "Profile preview" }),
-  ).toContainText("Amina Yusuf");
+    page.getByRole("textbox", { name: "Display name" }),
+  ).toHaveValue("Amina Yusuf");
   await expect(
-    page.getByText("amina@conclave.local", { exact: true }).first(),
-  ).toBeVisible();
+    page.getByRole("textbox", { name: "Email address" }),
+  ).toHaveValue("amina@conclave.local");
   await expect(
-    page.getByRole("heading", { name: "Edit your profile" }),
+    page.getByRole("heading", { name: "Profile details" }),
   ).toBeVisible();
   await expect(
     page.getByRole("textbox", { name: "Email address" }),
@@ -312,7 +312,7 @@ test("pinned and replied-to messages scroll into view and glow briefly", async (
     "uses the authenticated app fixture",
   );
   await page.goto("/chats/preview-room");
-  await page.getByRole("button", { name: /Pinned message/ }).click();
+  await page.getByText("Pinned items", { exact: true }).click();
   await page
     .locator("#pinned-messages-list")
     .getByRole("button", { name: /We are keeping the 2 hour timeout/ })

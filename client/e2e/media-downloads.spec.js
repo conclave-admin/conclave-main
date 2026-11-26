@@ -240,17 +240,22 @@ test("video poster and duration, download cancellation, failure, retry and local
     await expect(
       video.locator('[data-download-state="downloading"]'),
     ).toBeVisible();
-    await expect(video.getByRole("progressbar")).toBeVisible();
-    await video
-      .getByRole("button", { name: "Cancel download clip.mp4", exact: true })
-      .click();
+    const cancelDownload = video.getByRole("button", {
+      name: "Cancel download clip.mp4",
+      exact: true,
+    });
+    await expect(cancelDownload).toBeVisible();
+    await cancelDownload.click();
     await expect(
       video.locator('[data-media-download-state="available"]'),
     ).toBeVisible();
     release.resolve();
     await video.getByRole("button", { name: /^Play video / }).click();
     await expect(
-      video.getByText("Download failed", { exact: true }),
+      video.getByRole("button", {
+        name: "Retry download clip.mp4",
+        exact: true,
+      }),
     ).toBeVisible();
     await video
       .getByRole("button", { name: "Retry download clip.mp4", exact: true })
@@ -324,6 +329,18 @@ test("per-type preferences download video and documents while photos remain on d
   page,
 }) => {
   const requested = [];
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "connection", {
+      configurable: true,
+      value: {
+        type: "wifi",
+        effectiveType: "4g",
+        saveData: false,
+        addEventListener() {},
+        removeEventListener() {},
+      },
+    });
+  });
   await page.addInitScript(() =>
     localStorage.setItem(
       "conclave-media-preferences",

@@ -47,6 +47,33 @@ test.beforeEach(async ({}, info) =>
   ),
 );
 
+test("Wi-Fi-first default migrates legacy settings and keeps mobile-data opt-in", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("conclave-media-preferences"))
+      localStorage.setItem(
+        "conclave-media-preferences",
+        JSON.stringify({ network: "any", images: false }),
+      );
+  });
+  await page.goto("/settings");
+  const network = page.getByLabel("Network for automatic downloads");
+  await expect(network).toHaveValue("unmetered");
+  await network.selectOption("any");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem("conclave-media-preferences"))
+            .networkExplicit,
+      ),
+    )
+    .toBe(true);
+  await page.reload();
+  await expect(network).toHaveValue("any");
+});
+
 test("forwarding media queues offline and sends references without an upload", async ({
   page,
   context,

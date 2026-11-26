@@ -284,7 +284,6 @@ async function markNotificationReadAction(token, io) {
     throw new ApiError(404, "Notification action is no longer available");
   const db = await pool.connect();
   let action;
-  let markedCount = 0;
   try {
     await db.query("BEGIN");
     action = (await db.query(
@@ -308,7 +307,11 @@ async function markNotificationReadAction(token, io) {
 
     // The receipt service repeats the room membership check and advances the
     // read pointer only through the specific message represented by this push.
-    await require("./messageReceipt.service").acknowledge({
+    // Acknowledging the receipt also marks the corresponding visible
+    // notifications as seen in the same receipt transaction. Keep that as the
+    // single source of truth instead of trying to update the now-seen rows a
+    // second time below.
+    const receipt = await require("./messageReceipt.service").acknowledge({
       roomId: action.room_id,
       userId: action.user_id,
       messageId: action.message_id,
@@ -316,17 +319,8 @@ async function markNotificationReadAction(token, io) {
       read: true,
       io,
     });
-    const marked = await db.query(
-      `UPDATE notifications n SET seen=TRUE FROM messages m
-       WHERE n.recipient_id=$1 AND n.seen=FALSE
-         AND n.type IN ('mention','new_message','file_uploaded','reminder')
-         AND m.id=n.reference_id AND m.room_id=$2 AND m.room_sequence<=$3
-         AND m.deleted_at IS NULL AND message_visible(m.id,$1) AND ${policy.visibleSql("n")}
-       RETURNING n.id`,
-      [action.user_id, action.room_id, action.room_sequence],
-    );
-    if (!marked.rowCount) throw new ApiError(404, "Notification action is no longer available");
-    markedCount = marked.rowCount;
+    if (!receipt.notificationsUpdated)
+      throw new ApiError(404, "Notification action is no longer available");
     await db.query("UPDATE notification_action_tokens SET used_at=NOW() WHERE token_hash=$1", [digest(token)]);
     await db.query("COMMIT");
   } catch (error) {
@@ -335,7 +329,6 @@ async function markNotificationReadAction(token, io) {
   } finally {
     db.release();
   }
-  require("./notification.service").emitNotificationsSeen(io, action.user_id, markedCount);
   return { markedRead: true };
 }
 

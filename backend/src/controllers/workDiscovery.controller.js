@@ -84,6 +84,7 @@ const search = asyncHandler(async (req, res) => {
       WHERE u.deleted_at IS NULL AND position(lower($2) in lower(u.display_name))>0
       AND EXISTS(SELECT 1 FROM room_members a JOIN room_members b ON b.room_id=a.room_id
         WHERE a.user_id=$1 AND b.user_id=u.id AND ($3::uuid IS NULL OR a.room_id=$3))
+      AND ($4::uuid IS NULL OR u.id=$4)
       AND ($5::date IS NULL OR u.created_at >= $5::date) AND ($6::date IS NULL OR u.created_at < $6::date+1)
       ORDER BY (position(lower($2) in lower(u.display_name))>0) DESC,u.created_at DESC LIMIT $7::int`, params));
   const results = await Promise.all(searches);
