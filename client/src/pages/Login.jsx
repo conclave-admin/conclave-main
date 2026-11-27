@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import AuthLayout from "@/components/layout/AuthLayout";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
+import PasswordInput from "@/components/ui/PasswordInput";
 import { useAuth } from "@/contexts/AuthContext";
 import { isOperatorHost } from "@/config/operatorHost";
 
@@ -57,7 +58,7 @@ export default function Login() {
           value={form.email}
           onChange={(event) => setForm({ ...form, email: event.target.value })}
         />
-        <Input
+        <PasswordInput
           id="password"
           label="Password"
           type="password"

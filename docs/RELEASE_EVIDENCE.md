@@ -16,6 +16,37 @@ The minimum invite-only release gate is tracked in
 
 ## Local evidence
 
+
+### Account controls and notification setup — 27 November 2026
+
+- Branch: `fix/account-notification-polish`, based on `cac4d4b`.
+- Added accessible show/hide controls to login and signup passwords. Signup
+  rejects mismatched confirmation before registration, focuses the confirmation
+  input, and keeps confirmation out of the API payload.
+- Added an opaque, theme-aware surface behind the empty-conversation text and
+  actions. Reviewed desktop dark-theme and narrow-screen signup screenshots.
+- Repaired push setup after an initial configuration outage, overlapping setup
+  requests, restricted preference storage, and rejected permission prompts.
+  Browser opt-out choices survive storage restrictions for the current tab and
+  synchronize across tabs when storage is available.
+- Added HTTPS and iPhone/iPad Home Screen guidance and a retry path when server
+  push configuration is unavailable. Each device still requires its own grant.
+  Apple's platform requirements:
+  https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/
+- Node 22.23.4: client unit tests **119 passed**, backend unit tests **61 passed**;
+  production client build passed (existing bundle-size advisory remains).
+- Complete desktop/mobile recovery suite: **74 passed**, including 14 new
+  account/notification checks; included in CI.
+  The notification setup tests use a mocked push transport; they do not prove
+  delivery through FCM, Mozilla, or Apple.
+- Live installed-PWA delivery remains pending: confirm the affected operating
+  system and browser, device permission/Focus settings, and foreground,
+  background and closed-app delivery with a real subscription. No production
+  provider settings or deployment were changed.
+- Hosted CI results belong to the PR/run for this branch; local checks alone
+  must not be reported as successful hosted CI.
+
+
 ### CI failure repair — 26 November 2026
 
 - Investigated the supplied hosted logs from 11:41 UTC. The pull-request backend

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import AuthLayout from "@/components/layout/AuthLayout";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
+import PasswordInput from "@/components/ui/PasswordInput";
 import { useAuth } from "@/contexts/AuthContext";
 import { isDevAuthBypass } from "@/config/devPreview";
 
@@ -22,11 +23,19 @@ export default function Register() {
     password: "",
     website: "",
   });
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [confirmationError, setConfirmationError] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function submit(event) {
     event.preventDefault();
+    if (form.password !== confirmPassword) {
+      setConfirmationError("Passwords do not match.");
+      document.getElementById("confirmPassword")?.focus();
+      return;
+    }
+    setConfirmationError("");
     setSubmitting(true);
     setError("");
     try {
@@ -93,7 +102,7 @@ export default function Register() {
           value={form.email}
           onChange={(event) => setForm({ ...form, email: event.target.value })}
         />
-        <Input
+        <PasswordInput
           id="password"
           label="Password"
           type="password"
@@ -104,6 +113,19 @@ export default function Register() {
           onChange={(event) =>
             setForm({ ...form, password: event.target.value })
           }
+        />
+
+        <PasswordInput
+          id="confirmPassword"
+          label="Confirm password"
+          autoComplete="new-password"
+          required
+          value={confirmPassword}
+          error={confirmationError}
+          onChange={(event) => {
+            setConfirmPassword(event.target.value);
+            setConfirmationError("");
+          }}
         />
 
         {error && (
