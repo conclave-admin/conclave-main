@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useAuth } from "./AuthContext";
 import { useSyncReconciler } from "./SyncContext";
 import { api } from "../lib/api";
+import { pushSupportHint } from "../lib/pushCapabilities";
 import {
   pushSupport,
   configureBrowserPush,
@@ -11,15 +12,20 @@ const Context = createContext(null);
 export function PushProvider({ children }) {
   const { user, sessionId } = useAuth();
   const [status, setStatus] = useState("loading");
-  const [config, setConfig] = useState(null);
+  const optedOut = useRef(new Map());
   const [error, setError] = useState("");
   const generation = useRef(0);
   const refreshRef = useRef(null);
   useEffect(() => {
     const version = ++generation.current;
     let busy = false;
+    let rerun = false;
     const refresh = async () => {
-      if (busy) return;
+      if (version !== generation.current) return;
+      if (busy) {
+        rerun = true;
+        return;
+      }
       busy = true;
       try {
         if (!pushSupport()) {
@@ -39,14 +45,18 @@ export function PushProvider({ children }) {
         const response = (await api.get("/push/config", { timeout: 5000 })).data
           .data;
         if (version !== generation.current) return;
-        setConfig(response);
+        setError("");
         if (!response.configured) {
           setStatus("unconfigured");
           return;
         }
-        if (
-          localStorage.getItem(`conclave.push-optout.${user.id}`) === "true"
-        ) {
+        let disabled = optedOut.current.get(user.id);
+        if (disabled === undefined) {
+          try {
+            disabled = localStorage.getItem(`conclave.push-optout.${user.id}`) === "true";
+          } catch { /* Browser storage can be restricted. */ }
+        }
+        if (disabled) {
           setStatus("disabled");
           return;
         }
@@ -73,6 +83,10 @@ export function PushProvider({ children }) {
         }
       } finally {
         busy = false;
+        if (rerun && version === generation.current) {
+          rerun = false;
+          return refresh();
+        }
       }
     };
     refreshRef.current = refresh;
@@ -83,12 +97,20 @@ export function PushProvider({ children }) {
     const message = (event) => {
       if (event.data?.type === "PUSH_SUBSCRIPTION_CHANGED") refresh();
     };
+    const storage = (event) => {
+      if (event.key === null || event.key === `conclave.push-optout.${user?.id}`) {
+        optedOut.current.delete(user?.id);
+        refresh();
+      }
+    };
+    window.addEventListener("storage", storage);
     window.addEventListener("online", refresh);
     window.addEventListener("focus", focus);
     document.addEventListener("visibilitychange", focus);
     navigator.serviceWorker?.addEventListener("message", message);
     return () => {
       generation.current++;
+      window.removeEventListener("storage", storage);
       window.removeEventListener("online", refresh);
       window.removeEventListener("focus", focus);
       document.removeEventListener("visibilitychange", focus);
@@ -103,19 +125,29 @@ export function PushProvider({ children }) {
     [user?.id],
   );
   const enable = async () => {
-    if (!config?.configured || !pushSupport()) return;
-    // Called directly from the button gesture; never prompt during startup.
+    if (!user?.id || !pushSupport()) return;
+    const version = generation.current;
+    setError("");
+    setStatus("loading");
+    // Permission must be requested from the tap, before any network request.
     try {
-      localStorage.removeItem(`conclave.push-optout.${user.id}`);
-    } catch {}
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") {
-      setStatus(permission === "denied" ? "denied" : "disabled");
-      return;
+      const permission = await Notification.requestPermission();
+      if (version !== generation.current) return;
+      if (permission !== "granted") {
+        setStatus(permission === "denied" ? "denied" : "disabled");
+        return;
+      }
+      optedOut.current.set(user.id, false);
+      try { localStorage.removeItem(`conclave.push-optout.${user.id}`); } catch {}
+      await refreshRef.current?.();
+    } catch {
+      if (version !== generation.current) return;
+      setError("Could not enable notifications. Check this browser's permissions and retry.");
+      setStatus("error");
     }
-    await refreshRef.current?.();
   };
   const disable = async () => {
+    optedOut.current.set(user.id, true);
     try {
       localStorage.setItem(`conclave.push-optout.${user.id}`, "true");
     } catch {}
@@ -126,6 +158,7 @@ export function PushProvider({ children }) {
     <Context.Provider
       value={{
         status,
+        supportHint: pushSupportHint(),
         error,
         enable,
         disable,

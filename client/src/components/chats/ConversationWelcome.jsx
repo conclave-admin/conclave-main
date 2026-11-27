@@ -3,7 +3,7 @@ import Logo from "../landing/Logo";
 export default function ConversationWelcome() {
   return (
     <div className="conversation-canvas flex h-full items-center justify-center px-8">
-      <div className="w-full max-w-md text-center">
+      <div className="w-full max-w-md rounded-3xl border border-line bg-surface p-6 text-center shadow-sm sm:p-8">
         <div className="mx-auto mb-8 flex h-24 w-24 items-center justify-center rounded-[28px] border border-line bg-surface shadow-sm">
           <Logo withWordmark={false} className="scale-150" />
         </div>

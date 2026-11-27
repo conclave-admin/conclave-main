@@ -301,13 +301,14 @@ export default function Settings() {
                 denied:
                   "Notifications are blocked in browser settings. Allow them there, then retry.",
                 unsupported:
-                  "Background notifications are not supported in this browser or context.",
+                  push?.supportHint || "Background notifications are not supported in this browser or context.",
                 unconfigured:
                   "Background notifications are not configured on the server.",
                 error: "Background notifications need attention.",
               }[push?.status || "unsupported"]
             }
           </p>
+          <p className="text-metadata text-muted">Enable notifications on each device you use. Your device’s notification settings and Focus mode also apply.</p>
           {push?.error && (
             <p role="alert" className="text-metadata text-error">
               {push.error}
@@ -332,7 +333,7 @@ export default function Settings() {
                 Disable in this browser
               </button>
             )}
-            {["denied", "error"].includes(push?.status) && (
+            {["denied", "error", "unconfigured"].includes(push?.status) && (
               <button
                 type="button"
                 onClick={push.retry}
